@@ -5,10 +5,10 @@ from datetime import UTC, datetime, timedelta
 import numpy as np
 import pytest
 
-from aeolus.data.availability import LatencyOracle
-from aeolus.data.besttrack import Fix, TrackQuality
-from aeolus.data.sources import Flavor
-from aeolus.inference.cycle import (
+from anemoi.data.availability import LatencyOracle
+from anemoi.data.besttrack import Fix, TrackQuality
+from anemoi.data.sources import Flavor
+from anemoi.inference.cycle import (
     CycleError,
     DeterministicForecast,
     assert_operational_flavor,
@@ -17,8 +17,8 @@ from aeolus.inference.cycle import (
     fusion_weights,
     run_cycle,
 )
-from aeolus.inference.postprocess import EnsembleMember
-from aeolus.inference.scheduler import plan_cycle
+from anemoi.inference.postprocess import EnsembleMember
+from anemoi.inference.scheduler import plan_cycle
 
 T = datetime(2026, 8, 6, 6, tzinfo=UTC)
 LEADS = (12, 24, 36, 48, 72, 96, 120)
@@ -91,7 +91,7 @@ def test_diffusion_crash_falls_back_to_a_climatological_ensemble():
     plan = plan_cycle(T, LatencyOracle())
     out = run_cycle(plan, make_fix(), deterministic_fn, crashing)
     assert out.products.ensemble_size == 20
-    assert any(f.startswith("meridian_fallback") for f in out.flags)
+    assert any(f.startswith("spread_fallback") for f in out.flags)
     assert out.degraded
 
 

@@ -4,7 +4,7 @@ Scope v2.1 §5.7. Why promoting a single model is not a safe operation.
 
 ## The dependency
 
-MERIDIAN's diffusion model and the fusion consensus layer do not train on raw
+Anemoi-Spread's diffusion model and the fusion consensus layer do not train on raw
 data. They train on **latents extracted from specific Group 1 checkpoints**
 (LSTM, CNN, Transformer, GNN, PINN).
 

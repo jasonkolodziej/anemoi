@@ -2,8 +2,8 @@
 
 from datetime import UTC, date, datetime
 
-from aeolus.tracking.tags import ExecutionMode, Trigger
-from aeolus.training.triggers import (
+from anemoi.tracking.tags import ExecutionMode, Trigger
+from anemoi.training.triggers import (
     Reason,
     RetrainJob,
     SeasonState,

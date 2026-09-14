@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import numpy as np
 import pytest
 
-from aeolus.data.besttrack import (
+from anemoi.data.besttrack import (
     Fix,
     Track,
     TrackQuality,
@@ -15,7 +15,7 @@ from aeolus.data.besttrack import (
     emulate_working_track,
     recalibrate_from_pairs,
 )
-from aeolus.geo import haversine_nm
+from anemoi.geo import haversine_nm
 
 T = datetime(2026, 8, 6, 6, tzinfo=UTC)
 

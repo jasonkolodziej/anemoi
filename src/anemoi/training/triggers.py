@@ -3,7 +3,7 @@
 Scope v2.1 §5.5, with the §5.7 dependency correction. v2's drift trigger said
 "retrain the affected model only", which is wrong for any Group 1 model: the
 diffusion and fusion models are trained on latents extracted from Group 1
-checkpoints, so retraining an LSTM in isolation leaves MERIDIAN conditioned on
+checkpoints, so retraining an LSTM in isolation leaves Anemoi-Spread conditioned on
 representations that no longer exist. :func:`expand_jobs` applies the cascade so
 the invalidation is automatic rather than remembered.
 """

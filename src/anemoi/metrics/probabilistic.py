@@ -1,4 +1,4 @@
-"""MERIDIAN ensemble verification.
+"""Anemoi-Spread ensemble verification.
 
 Scope v2.1 §7.3. CRPS, Brier score, spread-skill and rank histograms. The
 spread-skill ratio is the one to watch: §10 flags underdispersion as the
@@ -87,7 +87,7 @@ def spread_skill(members: np.ndarray, observations: np.ndarray) -> SpreadSkill:
 
     This requires an observation, so it is a **post-hoc verification tool only**.
     It cannot gate a product at forecast time -- see
-    :func:`aeolus.inference.postprocess.build_cone` for the real-time proxy used
+    :func:`anemoi.inference.postprocess.build_cone` for the real-time proxy used
     there instead.
     """
     members = np.asarray(members, dtype=float)
@@ -110,7 +110,7 @@ def rank_histogram(members: np.ndarray, observations: np.ndarray) -> np.ndarray:
     Read it with Hamill (2001, doi:10.1175/1520-0493(2001)129<0550:IORHFV>2.0.CO;2)
     in hand: a U shape does **not** uniquely indicate underdispersion. Observation
     error and conditional biases produce the same signature. Since underdispersion
-    is the failure mode MERIDIAN is most likely to exhibit, the temptation to read
+    is the failure mode Anemoi-Spread is most likely to exhibit, the temptation to read
     every U as confirmation is exactly the error to avoid -- pair it with the
     spread-skill ratio and with per-regime stratification before concluding.
     """

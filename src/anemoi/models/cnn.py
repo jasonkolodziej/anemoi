@@ -1,7 +1,7 @@
 """CNN / U-Net satellite feature extractor.
 
 Scope v2.1 §3.4. Encoder front-end over GOES imagery stacks; its latent feeds
-the transformer and GNN backbones and, via the latent extractor, MERIDIAN.
+the transformer and GNN backbones and, via the latent extractor, Anemoi-Spread.
 """
 
 from __future__ import annotations

@@ -4,7 +4,7 @@ Scope v2.1 §6.2. What changed from v2, and the arithmetic behind the numbers.
 
 ## The v2 problem
 
-v2's schedule had AEOLUS products ready at t+0:45, consuming the GFS cycle named
+v2's schedule had Anemoi-Core products ready at t+0:45, consuming the GFS cycle named
 t. GFS 0.25 degree publishes roughly 3.5-4 hours after its cycle time. At
 t+0:45 that data does not exist. The schedule was not tight — it was impossible.
 
@@ -55,7 +55,7 @@ them is retuned. Change a stage budget and the timeout follows.
 
 When the cycle starts late enough that the standard profile would breach the
 margin, `plan_cycle` switches to `REDUCED_BUDGETS` and sets `load_shed`. The
-saving is almost entirely MERIDIAN: roughly 10 ensemble members instead of
+saving is almost entirely Anemoi-Spread: roughly 10 ensemble members instead of
 20-50.
 
 That is a real loss of tail resolution. It is a smaller loss than delivering
@@ -70,7 +70,7 @@ documents the trade explicitly rather than leaving it implied.
 | Working fix late past timeout | Extrapolate from the last two fixes | `vitals=estimated` |
 | t-6 NWP missing | Fall back to t-12 | `nwp_stale=12h` |
 | All NWP missing | Abandon; LSTM + climatology mode | `CycleAbandoned` |
-| Diffusion crash | Climatological-spread ensemble | `meridian_fallback:*` |
+| Diffusion crash | Climatological-spread ensemble | `spread_fallback:*` |
 | Optional feed missing | Continue | `missing:<source>` |
 | Opportunistic feed missing | Continue, no flag | — |
 | Late start | Reduced ensemble | `load_shed` |

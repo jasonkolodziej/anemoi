@@ -2,7 +2,7 @@
 
 import pytest
 
-from aeolus.training.orchestrator import (
+from anemoi.training.orchestrator import (
     Mode,
     OrchestrationError,
     RunOutcome,

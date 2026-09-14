@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from aeolus.inference.postprocess import (
+from anemoi.inference.postprocess import (
     EnsembleMember,
     build_cone,
     build_products,

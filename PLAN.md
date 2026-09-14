@@ -68,7 +68,7 @@ the same protocol.
 
 **Degradation is always flagged, never silent.** Every fallback path appends to
 `CycleOutput.flags` and surfaces in the dissemination payload: `vitals=estimated`,
-`nwp_stale=12h`, `meridian_fallback:RuntimeError`. A forecaster who cannot tell
+`nwp_stale=12h`, `spread_fallback:RuntimeError`. A forecaster who cannot tell
 a full-ensemble cycle from a climatological-fallback cycle will eventually treat
 both the same way, and the second is much weaker.
 
@@ -125,7 +125,7 @@ helps, but the honest mitigation is aggressive augmentation, storm-relative
 coordinates, and being ready to conclude the transformer is not the right
 capacity for this dataset. Worth measuring before committing GPU-months.
 
-**Ensemble dispersion at recurvature.** MERIDIAN conditioned on AEOLUS latents
+**Ensemble dispersion at recurvature.** Anemoi-Spread conditioned on Anemoi-Core latents
 will tend to underdisperse precisely where the distribution is bimodal.
 `build_diffusion(extra_conditioning_dim=...)` exists so raw fields or GEFS/EPS
 perturbations can be added to the conditioning vector. The rank histogram and

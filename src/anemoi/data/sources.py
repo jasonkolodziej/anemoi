@@ -154,7 +154,7 @@ REGISTRY: dict[str, DataSource] = {
             max_latency=6 * _H,
             fmt="GRIB2",
             retention="rolling 1yr",
-            notes="MERIDIAN conditioning; t-6 members valid at t.",
+            notes="Anemoi-Spread conditioning; t-6 members valid at t.",
         ),
     )
 }

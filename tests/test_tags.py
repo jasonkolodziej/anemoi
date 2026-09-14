@@ -2,8 +2,8 @@
 
 import pytest
 
-from aeolus.data.sources import Flavor
-from aeolus.tracking.tags import (
+from anemoi.data.sources import Flavor
+from anemoi.tracking.tags import (
     REQUIRED_TAGS,
     ExecutionMode,
     RunTags,

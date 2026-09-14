@@ -120,7 +120,7 @@ that travels with the code.
   *ICML*, PMLR **202**, 32211–32252.
   [arXiv:2303.01469](https://arxiv.org/abs/2303.01469)
 
-  The alternative to load shedding if the MERIDIAN step budget binds.
+  The alternative to load shedding if the Anemoi-Spread step budget binds.
 
 - **Raissi, M., P. Perdikaris, and G. E. Karniadakis, 2019:** *J. Comput. Phys.*,
   **378**, 686–707. [doi:10.1016/j.jcp.2018.10.045](https://doi.org/10.1016/j.jcp.2018.10.045)

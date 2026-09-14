@@ -1,6 +1,6 @@
-"""MERIDIAN: conditional diffusion ensemble generator.
+"""Anemoi-Spread: conditional diffusion ensemble generator.
 
-Scope v2.1 §3.5. Denoises a track/intensity trajectory conditioned on AEOLUS
+Scope v2.1 §3.5. Denoises a track/intensity trajectory conditioned on Anemoi-Core
 latents to produce 20-50 structurally diverse ensemble members.
 
 A caveat worth keeping in the code rather than only in the review: conditioning
@@ -8,7 +8,7 @@ purely on the deterministic latent anchors the ensemble to the deterministic
 guess and tends toward underdispersion, exactly when it matters most (bimodal
 recurvature). ``extra_conditioning_dim`` exists so raw environmental fields or
 GEFS/EPS perturbations can be concatenated to the conditioning vector, and
-:func:`aeolus.metrics.probabilistic.spread_skill` is the check on whether that
+:func:`anemoi.metrics.probabilistic.spread_skill` is the check on whether that
 was enough.
 """
 
@@ -96,7 +96,7 @@ def build_diffusion(
             """Ancestral sampling of ``n_members`` trajectories.
 
             ``conditioning`` is (1, cond_dim) or (n_members, cond_dim); a single
-            row is broadcast so every member shares the AEOLUS guess and differs
+            row is broadcast so every member shares the Anemoi-Core guess and differs
             only through the noise path.
             """
             if conditioning.shape[0] == 1:

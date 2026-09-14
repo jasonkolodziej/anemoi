@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from aeolus.data.availability import (
+from anemoi.data.availability import (
     LatencyOracle,
     earliest_ready_time,
     resolve_cycle_inputs,

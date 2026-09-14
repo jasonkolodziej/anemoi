@@ -2,8 +2,8 @@
 
 import pytest
 
-from aeolus.data import sources
-from aeolus.data.sources import OperationalUseError, Role
+from anemoi.data import sources
+from anemoi.data.sources import OperationalUseError, Role
 
 
 def test_era5_is_pretrain_only():

@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
-from aeolus.monitoring.skew import SkewMonitor, SkewSample, audit_due
+from anemoi.monitoring.skew import SkewMonitor, SkewSample, audit_due
 
 T = datetime(2026, 8, 6, 6, tzinfo=UTC)
 

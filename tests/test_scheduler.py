@@ -4,8 +4,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from aeolus.data.availability import LatencyOracle
-from aeolus.inference.scheduler import (
+from anemoi.data.availability import LatencyOracle
+from anemoi.inference.scheduler import (
     ADVISORY_MARGIN,
     CycleAbandoned,
     DEFAULT_BUDGETS,
@@ -27,14 +27,14 @@ def test_cycle_starts_when_vitals_land_not_at_synoptic_time():
 
 
 def test_v2_delivery_claim_is_not_reproduced():
-    """v2 promised AEOLUS output at t+0:45. Nothing can deliver that."""
+    """v2 promised Anemoi-Core output at t+0:45. Nothing can deliver that."""
     plan = plan_cycle(T, LatencyOracle())
-    assert plan.aeolus_ready_target > T + timedelta(minutes=45)
+    assert plan.core_ready_target > T + timedelta(minutes=45)
 
 
 def test_products_land_before_the_advisory_with_margin():
     plan = plan_cycle(T, LatencyOracle())
-    assert plan.meridian_ready_target < plan.advisory_deadline
+    assert plan.spread_ready_target < plan.advisory_deadline
     assert plan.margin_target >= ADVISORY_MARGIN
 
 
@@ -99,9 +99,9 @@ def test_stage_order_matches_the_scope_table():
     assert plan.stages[-1].stage is Stage.POSTPROCESS
 
 
-def test_aeolus_is_ready_before_meridian():
+def test_core_is_ready_before_spread():
     plan = plan_cycle(T, LatencyOracle())
-    assert plan.aeolus_ready_target < plan.meridian_ready_target
+    assert plan.core_ready_target < plan.spread_ready_target
 
 
 def test_stages_are_contiguous():

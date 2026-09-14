@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from aeolus.time_utils import (
+from anemoi.time_utils import (
     NWPUnavailableError,
     advisory_time,
     cycle_label,

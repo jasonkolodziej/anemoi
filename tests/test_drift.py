@@ -3,9 +3,9 @@
 import numpy as np
 import pytest
 
-from aeolus.data.features import FEATURE_NAMES
-from aeolus.data.sources import Flavor
-from aeolus.monitoring.drift import (
+from anemoi.data.features import FEATURE_NAMES
+from anemoi.data.sources import Flavor
+from anemoi.monitoring.drift import (
     DriftError,
     ReferenceDistribution,
     ValidationLossMonitor,

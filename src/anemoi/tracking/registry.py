@@ -4,7 +4,7 @@ Scope v2.1 §7.1 and §10.1. MLflow is the intended backend; when it is absent o
 unreachable the registry degrades to a local JSON store and syncs later, which
 is the §10.1 "MLflow server down" mitigation made real rather than aspirational.
 
-Beyond plain versioning this module implements **model-set pinning**. MERIDIAN's
+Beyond plain versioning this module implements **model-set pinning**. Anemoi-Spread's
 diffusion model and the fusion model are trained on latents extracted from
 specific Group 1 checkpoints. Promoting a new LSTM on its own therefore does not
 produce a better system -- it produces a diffusion model conditioned on latents
@@ -219,7 +219,7 @@ class ModelRegistry:
         Every model in :data:`ALL_MODELS` must be present, all members must be
         operational-flavor, and every derived model's ``latent_signature`` must
         match the signature computed from the pinned Group 1 versions. This is
-        what stops a single-model retrain from silently invalidating MERIDIAN.
+        what stops a single-model retrain from silently invalidating Anemoi-Spread.
         """
         missing = [m for m in ALL_MODELS if m not in members]
         if missing:

@@ -2,8 +2,8 @@
 
 import pytest
 
-from aeolus.data.sources import Flavor
-from aeolus.tracking.registry import (
+from anemoi.data.sources import Flavor
+from anemoi.tracking.registry import (
     ALL_MODELS,
     GROUP1_MODELS,
     ModelRegistry,

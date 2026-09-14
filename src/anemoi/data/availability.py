@@ -134,7 +134,7 @@ def resolve_cycle_inputs(
     """Determine the input set for forecast cycle ``t`` as of wall-clock ``as_of``.
 
     The NWP selection deliberately searches only cycles at or before ``t-6``
-    (see :func:`aeolus.time_utils.select_nwp_cycle`), and additionally requires
+    (see :func:`anemoi.time_utils.select_nwp_cycle`), and additionally requires
     that the chosen cycle has *published* by ``as_of`` -- a cycle that exists in
     the archive but has not yet been transferred is not usable.
     """

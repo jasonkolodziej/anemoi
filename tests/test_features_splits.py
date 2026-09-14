@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import numpy as np
 import pytest
 
-from aeolus.data.features import (
+from anemoi.data.features import (
     FEATURE_NAMES,
     FlavorMismatchError,
     Normalizer,
@@ -13,15 +13,15 @@ from aeolus.data.features import (
     compute_environment_features,
     deep_layer_shear,
 )
-from aeolus.data.sources import Flavor
-from aeolus.data.splits import (
+from anemoi.data.sources import Flavor
+from anemoi.data.splits import (
     LeakageError,
     Split,
     assert_no_leakage,
     assign_splits,
     filter_tracks,
 )
-from aeolus.data.synthetic import generate_archive, generate_fields, paired_fields
+from anemoi.data.synthetic import generate_archive, generate_fields, paired_fields
 
 T = datetime(2026, 8, 6, 6, tzinfo=UTC)
 

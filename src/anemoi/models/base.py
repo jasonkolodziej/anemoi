@@ -1,6 +1,6 @@
 """Shared plumbing for the torch-backed model implementations.
 
-Torch is an optional dependency (``pip install aeolus-meridian[torch]``). The
+Torch is an optional dependency (``pip install anemoi[torch]``). The
 operational layers -- scheduling, availability, curriculum, promotion, metrics --
 carry the v2.1 policy and must remain importable and testable without it, so the
 import is deferred and failure is a clear message rather than a stack trace at

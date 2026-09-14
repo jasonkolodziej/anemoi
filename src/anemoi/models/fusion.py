@@ -1,7 +1,7 @@
 """Consensus fusion layer.
 
 Scope v2.1 §6.1. Learns to weight the deterministic models' predictions into the
-AEOLUS best guess, conditioned on the synoptic situation -- a GNN that is strong
+Anemoi-Core best guess, conditioned on the synoptic situation -- a GNN that is strong
 on inner-core intensification and a transformer that is strong on steering
 should not receive the same weight in every regime.
 
@@ -26,7 +26,7 @@ def build_fusion(
 
     Returns ``(module, spec)``. Weights are per-model and per-lead-time, softmax
     normalised, with a floor so a model is never fully zeroed on a short noisy
-    validation record (see :func:`aeolus.inference.cycle.fusion_weights` for the
+    validation record (see :func:`anemoi.inference.cycle.fusion_weights` for the
     same reasoning in the non-learned path).
     """
     torch = require_torch()

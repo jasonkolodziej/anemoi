@@ -284,7 +284,7 @@ def assert_input_safe(fixes: tuple[Fix, ...] | list[Fix]) -> None:
     """Guard: refuse FINAL-quality fixes on the model-input path.
 
     Called by the Stage B dataset builder and by the inference cycle. Together
-    with :func:`aeolus.data.sources.assert_not_operational` this makes the
+    with :func:`anemoi.data.sources.assert_not_operational` this makes the
     train/serve policy a runtime invariant rather than a convention.
     """
     bad = [f for f in fixes if not f.is_model_input_safe]

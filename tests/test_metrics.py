@@ -3,15 +3,15 @@
 import numpy as np
 import pytest
 
-from aeolus.geo import haversine_nm
-from aeolus.metrics.probabilistic import (
+from anemoi.geo import haversine_nm
+from anemoi.metrics.probabilistic import (
     brier_score,
     crps_ensemble,
     rank_histogram,
     reliability,
     spread_skill,
 )
-from aeolus.metrics.track import (
+from anemoi.metrics.track import (
     ForecastPoint,
     VerificationPair,
     aggregate_by_storm,

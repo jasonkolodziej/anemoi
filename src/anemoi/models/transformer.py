@@ -4,7 +4,7 @@ Scope v2.1 §3.2. Global context and long-range steering over gridded fields.
 
 The v2.1-critical detail is not in the architecture but in what it is fed: this
 model is pretrained on ERA5 (Stage A) and fine-tuned on GDAS analyses (Stage B),
-and only the Stage B weights are registrable. See :mod:`aeolus.training.curriculum`.
+and only the Stage B weights are registrable. See :mod:`anemoi.training.curriculum`.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ def build_transformer(
     """Patch-embedding transformer over storm-centred atmospheric fields.
 
     Returns ``(module, spec)``. A learned CLS token carries the pooled state; it
-    is the latent handed to MERIDIAN, so it must summarise the synoptic regime
+    is the latent handed to Anemoi-Spread, so it must summarise the synoptic regime
     rather than any single grid point.
     """
     torch = require_torch()

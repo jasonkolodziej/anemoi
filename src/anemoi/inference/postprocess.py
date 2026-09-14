@@ -1,4 +1,4 @@
-"""Post-processing of the MERIDIAN ensemble into forecast products.
+"""Post-processing of the Anemoi-Spread ensemble into forecast products.
 
 Scope v2.1 §6.1. Cone of uncertainty, intensity PDF, landfall probability and
 the rapid-intensification flag.
@@ -6,7 +6,7 @@ the rapid-intensification flag.
 Note on the cone: NHC's official cone is built from *historical* official-forecast
 error percentiles, not from the current ensemble spread. A cone drawn from a
 model's own spread is only honest if that spread is calibrated, which is exactly
-what :func:`aeolus.metrics.probabilistic.spread_skill` measures. This module
+what :func:`anemoi.metrics.probabilistic.spread_skill` measures. This module
 therefore computes both and refuses to emit an ensemble-derived cone when the
 ensemble is underdispersed -- falling back to the climatological radii instead.
 """

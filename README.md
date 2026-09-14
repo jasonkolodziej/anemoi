@@ -1,13 +1,31 @@
-# AEOLUS / MERIDIAN
+# Anemoi
 
-Reference implementation of the AEOLUS deterministic hurricane forecast engine
-and the MERIDIAN diffusion ensemble generator, built to **Project Scope v2.1**.
+> **Many winds. One forecast.**
 
-AEOLUS fuses six model families (LSTM, CNN, Transformer, GNN, PINN, plus a
-learned consensus layer) into a single deterministic track and intensity
-forecast. MERIDIAN conditions a diffusion model on AEOLUS latents to generate a
+Reference implementation of the **Anemoi** hurricane forecast platform, built to
+**Project Scope v2.1**.
+
+Six model architectures each read the storm differently. **Anemoi-Core** fuses
+five of them into a single deterministic track and intensity forecast;
+**Anemoi-Spread** conditions a diffusion model on Core's latents to generate a
 structurally diverse ensemble, from which the cone, intensity PDF, landfall
 probability and rapid-intensification flag are derived.
+
+Each architecture carries the name of a Greek wind god. The name — not the
+architecture — is what appears in MLflow experiments, run tags, status badges
+and API paths; `anemoi.branding` is the single place the two are mapped.
+
+| God | Direction | Architecture | Module | Role |
+|-----|-----------|--------------|--------|------|
+| **Boreas** | N | LSTM / GRU | Anemoi-Core | Fast baseline; warm-starts every cycle |
+| **Notus** | S | Transformer | Anemoi-Core | Global steering from gridded fields |
+| **Eurus** | E | GNN | Anemoi-Core | Inner-core mesh; rapid intensification |
+| **Zephyrus** | W | CNN / ViT | Anemoi-Core | Satellite feature extraction |
+| **Kaikias** | NE | PINN / Neural ODE | Anemoi-Core | Physics constraints |
+| **Skiron** | NW | Diffusion | Anemoi-Spread | Ensemble generation |
+
+**Anemoi-Fusion** is the consensus weighting layer that blends the five Core
+models by rolling validation skill.
 
 ---
 
@@ -19,20 +37,20 @@ uv sync --extra torch        # add the model implementations
 uv sync --extra all          # everything, including pytest and ruff
 
 uv run pytest                # torch-marked tests skip automatically without torch
-uv run aeolus schedule 2026-08-06
+uv run anemoi schedule 2026-08-06
 ```
 
 Four things worth running first:
 
 ```bash
-uv run aeolus schedule 2026-08-06     # the real cycle timeline for a day
-uv run aeolus schedule 2026-08-06 --worst-case
-uv run aeolus sources                 # which feeds may be read in production
-uv run aeolus cycle 20260806_06Z      # one demo cycle, JSON payload out
-uv run aeolus splits                  # storm-wise split summary
+uv run anemoi schedule 2026-08-06     # the real cycle timeline for a day
+uv run anemoi schedule 2026-08-06 --worst-case
+uv run anemoi sources                 # which feeds may be read in production
+uv run anemoi cycle 20260806_06Z      # one demo cycle, JSON payload out
+uv run anemoi splits                  # storm-wise split summary
 ```
 
-`aeolus schedule` is the fastest way to see what v2.1 changed. It prints cycle
+`anemoi schedule` is the fastest way to see what v2.1 changed. It prints cycle
 start gated on the working fix, the six stage budgets, and the worst-case
 margin against the advisory deadline.
 
@@ -47,7 +65,7 @@ monitoring, and verification metrics. That logic is where v2.1's corrections
 live, and it is fully covered by the test suite.
 
 **It is not** connected to real data. HURDAT2, ERA5, GDAS/GFS and GOES are not
-available offline, so `aeolus.data.synthetic` generates archives with the same
+available offline, so `anemoi.data.synthetic` generates archives with the same
 shape and statistics — including a deliberate ERA5-vs-GDAS offset, without which
 the skew machinery would have nothing to detect. The ingestion layer is the
 first thing to replace; the interfaces it must satisfy are `GriddedFields`,
@@ -61,7 +79,7 @@ but they are untrained. Nothing here has forecast skill.
 ## Package layout
 
 ```
-src/aeolus/
+src/anemoi/
 ├── time_utils.py         synoptic arithmetic; the t-6 NWP selection rule
 ├── geo.py                great-circle distance, bearings, cross/along-track
 ├── cli.py                schedule / sources / cycle / splits

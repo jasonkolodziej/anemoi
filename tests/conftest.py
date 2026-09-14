@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from aeolus.data.availability import LatencyOracle
-from aeolus.models.base import torch_available
+from anemoi.data.availability import LatencyOracle
+from anemoi.models.base import torch_available
 
 TARGET = datetime(2026, 8, 6, 6, tzinfo=UTC)
 

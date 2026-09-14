@@ -4,9 +4,9 @@ from datetime import date
 
 import pytest
 
-from aeolus.data.sources import Flavor
-from aeolus.training.curriculum import Curriculum, CurriculumRun, StageResult
-from aeolus.training.promotion import (
+from anemoi.data.sources import Flavor
+from anemoi.training.curriculum import Curriculum, CurriculumRun, StageResult
+from anemoi.training.promotion import (
     MetricSet,
     PromotionError,
     TestSetBudget,

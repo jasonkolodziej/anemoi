@@ -4,7 +4,7 @@ Scope v2.1 §6.1 and §10.1. The cycle is written around its failure modes,
 because a hurricane forecast that arrives late or not at all is a worse outcome
 than a degraded one that arrives on time:
 
-* diffusion crash -> AEOLUS deterministic plus a climatological spread ensemble
+* diffusion crash -> Anemoi-Core deterministic plus a climatological spread ensemble
 * stale NWP      -> run on t-12 with a staleness flag on the payload
 * late vitals    -> extrapolated fix, flagged ``vitals=estimated``
 
@@ -36,7 +36,7 @@ class CycleError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class DeterministicForecast:
-    """AEOLUS output: one track and intensity series."""
+    """Anemoi-Core output: one track and intensity series."""
 
     target_time: datetime
     lead_hours: tuple[int, ...]
@@ -105,7 +105,7 @@ def climatological_ensemble(
     n_members: int = 20,
     seed: int = 0,
 ) -> list[EnsembleMember]:
-    """Fallback ensemble when MERIDIAN is unavailable (§10.1).
+    """Fallback ensemble when Anemoi-Spread is unavailable (§10.1).
 
     Members are drawn around the deterministic track using the climatological
     cone radii, so the resulting spread is honest about being climatology rather
@@ -189,8 +189,8 @@ def run_cycle(
         members = ensemble_fn(deterministic)
         if not members:
             raise CycleError("ensemble generator returned no members")
-    except Exception as exc:  # noqa: BLE001 - any MERIDIAN failure degrades, never blocks
-        flags.append(f"meridian_fallback:{type(exc).__name__}")
+    except Exception as exc:  # noqa: BLE001 - any Anemoi-Spread failure degrades, never blocks
+        flags.append(f"spread_fallback:{type(exc).__name__}")
         members = climatological_ensemble(deterministic, seed=ensemble_seed)
 
     products = build_products(
@@ -201,7 +201,7 @@ def run_cycle(
         deterministic=deterministic,
         products=products,
         flags=tuple(flags),
-        completed_at=now or plan.meridian_ready_target,
+        completed_at=now or plan.spread_ready_target,
     )
 
 

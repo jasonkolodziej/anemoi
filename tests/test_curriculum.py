@@ -2,8 +2,8 @@
 
 import pytest
 
-from aeolus.data.sources import Flavor
-from aeolus.training.curriculum import (
+from anemoi.data.sources import Flavor
+from anemoi.training.curriculum import (
     Curriculum,
     CurriculumError,
     CurriculumRun,

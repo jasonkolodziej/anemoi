@@ -59,7 +59,7 @@ DEFAULT_BUDGETS: tuple[StageBudget, ...] = (
 
 #: Load-shedding profile. Used when the standard profile would not clear the
 #: advisory -- typically after a late working fix. The saving comes almost
-#: entirely from MERIDIAN: a 10-member ensemble instead of 20-50. A smaller
+#: entirely from Anemoi-Spread: a 10-member ensemble instead of 20-50. A smaller
 #: ensemble is a real loss of tail resolution, but it is a smaller loss than
 #: delivering nothing before the advisory goes out.
 REDUCED_BUDGETS: tuple[StageBudget, ...] = (
@@ -125,19 +125,19 @@ class CyclePlan:
         return cycle_label(self.target_time)
 
     @property
-    def aeolus_ready_target(self) -> datetime:
+    def core_ready_target(self) -> datetime:
         return self._stage(Stage.FUSION).end_target
 
     @property
-    def aeolus_ready_max(self) -> datetime:
+    def core_ready_max(self) -> datetime:
         return self._stage(Stage.FUSION).end_max
 
     @property
-    def meridian_ready_target(self) -> datetime:
+    def spread_ready_target(self) -> datetime:
         return self.stages[-1].end_target
 
     @property
-    def meridian_ready_max(self) -> datetime:
+    def spread_ready_max(self) -> datetime:
         return self.stages[-1].end_max
 
     @property
@@ -146,11 +146,11 @@ class CyclePlan:
 
     @property
     def margin_target(self) -> timedelta:
-        return self.advisory_deadline - self.meridian_ready_target
+        return self.advisory_deadline - self.spread_ready_target
 
     @property
     def margin_max(self) -> timedelta:
-        return self.advisory_deadline - self.meridian_ready_max
+        return self.advisory_deadline - self.spread_ready_max
 
     @property
     def meets_advisory_deadline(self) -> bool:

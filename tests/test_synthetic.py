@@ -4,9 +4,9 @@ from datetime import UTC, datetime
 
 import numpy as np
 
-from aeolus.data.besttrack import TrackQuality
-from aeolus.data.sources import Flavor
-from aeolus.data.synthetic import generate_archive, generate_fields, generate_season
+from anemoi.data.besttrack import TrackQuality
+from anemoi.data.sources import Flavor
+from anemoi.data.synthetic import generate_archive, generate_fields, generate_season
 
 T = datetime(2026, 8, 6, 6, tzinfo=UTC)
 

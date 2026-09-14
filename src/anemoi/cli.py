@@ -1,6 +1,6 @@
 """Command-line interface.
 
-``aeolus schedule`` is the one to reach for first: it prints the real cycle
+``anemoi schedule`` is the one to reach for first: it prints the real cycle
 timeline for a given day, which is the fastest way to see the v2.1 timing change
 against v2's assumed t+0:45 delivery.
 """
@@ -104,8 +104,8 @@ def cmd_splits(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="aeolus", description=__doc__)
-    parser.add_argument("--version", action="version", version=f"aeolus {__version__}")
+    parser = argparse.ArgumentParser(prog="anemoi", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"anemoi {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("schedule", help="print the cycle timeline for a day")

@@ -4,7 +4,7 @@ Scope v2.1 §3.1. The fast model: it runs every cycle, warm-starts the ensemble
 and provides the low-latency first guess (30 s target, §6.2.2).
 
 Inputs are storm-history sequences built from *working*-quality fixes -- see
-:mod:`aeolus.data.besttrack` for why that distinction is load-bearing.
+:mod:`anemoi.data.besttrack` for why that distinction is load-bearing.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ def build_lstm(
             )
 
         def encode(self, x):
-            """Return the latent used by MERIDIAN and the fusion model (§5.7)."""
+            """Return the latent used by Anemoi-Spread and the fusion model (§5.7)."""
             out, _ = self.rnn(x)
             return self.norm(out[:, -1, :])
 
