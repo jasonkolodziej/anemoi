@@ -117,12 +117,9 @@ def cmd_ablation(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_era5_cache(args: argparse.Namespace) -> int:
-    """Concurrently fetch and locally cache real ERA5 GriddedFields for one
-    data.splits split, from a real HURDAT2 file. Needs the gridded extra
-    (uv sync --extra gridded). See docs/train_infrastructure.md.
-    """
-    from .data.era5_cache import run_fetch_cache
+def _cmd_gridded_cache(args: argparse.Namespace, run_fetch_cache) -> int:
+    """Shared body for cmd_era5_cache/cmd_gdas_cache -- same split-selection,
+    reporting and exit-code behaviour, different underlying fetch pipeline."""
     from .data.hurdat2 import parse_hurdat2_file
     from .data.splits import Split, assign_splits, filter_tracks
 
@@ -147,6 +144,28 @@ def cmd_era5_cache(args: argparse.Namespace) -> int:
     for task, error in report.failures[:20]:
         print(f"  FAILED {task.storm_id} {task.valid_time}: {error}")
     return 1 if report.n_failed else 0
+
+
+def cmd_era5_cache(args: argparse.Namespace) -> int:
+    """Concurrently fetch and locally cache real ERA5 GriddedFields for one
+    data.splits split, from a real HURDAT2 file. Needs the gridded extra
+    (uv sync --extra gridded). See docs/train_infrastructure.md.
+    """
+    from .data.era5_cache import run_fetch_cache
+
+    return _cmd_gridded_cache(args, run_fetch_cache)
+
+
+def cmd_gdas_cache(args: argparse.Namespace) -> int:
+    """Concurrently fetch and locally cache real GDAS GriddedFields for one
+    data.splits split, from a real HURDAT2 file (Stage B analog of
+    cmd_era5_cache). Needs the gridded extra's eccodes -- which, unlike
+    xarray for ERA5, has a real broken-native-library failure mode on some
+    machines; see real_gridded.require_gdas_deps's docstring.
+    """
+    from .data.gdas_cache import run_fetch_cache
+
+    return _cmd_gridded_cache(args, run_fetch_cache)
 
 
 def cmd_splits(args: argparse.Namespace) -> int:
@@ -202,15 +221,24 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=20260806)
     p.set_defaults(func=cmd_ablation)
 
+    def _add_gridded_cache_args(p: argparse.ArgumentParser, *, default_max_workers: int) -> None:
+        p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
+        p.add_argument(
+            "--cache-dir", dest="cache_dir", required=True, help="local dir to cache into"
+        )
+        p.add_argument("--split", default="train", choices=["train", "val", "test", "operational"])
+        p.add_argument("--box-deg", dest="box_deg", type=float, default=10.0)
+        p.add_argument("--max-workers", dest="max_workers", type=int, default=default_max_workers)
+        p.add_argument("--force", action="store_true", help="refetch even if already cached")
+        p.add_argument("--progress-every", dest="progress_every", type=int, default=50)
+
     p = sub.add_parser("era5-cache", help="fetch+cache real ERA5 fields for a data.splits split")
-    p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
-    p.add_argument("--cache-dir", dest="cache_dir", required=True, help="local dir to cache into")
-    p.add_argument("--split", default="train", choices=["train", "val", "test", "operational"])
-    p.add_argument("--box-deg", dest="box_deg", type=float, default=10.0)
-    p.add_argument("--max-workers", dest="max_workers", type=int, default=8)
-    p.add_argument("--force", action="store_true", help="refetch even if already cached")
-    p.add_argument("--progress-every", dest="progress_every", type=int, default=50)
+    _add_gridded_cache_args(p, default_max_workers=8)
     p.set_defaults(func=cmd_era5_cache)
+
+    p = sub.add_parser("gdas-cache", help="fetch+cache real GDAS fields for a data.splits split")
+    _add_gridded_cache_args(p, default_max_workers=4)
+    p.set_defaults(func=cmd_gdas_cache)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

@@ -92,27 +92,33 @@ modest improvement than pure network-latency co-location would suggest --
 a good chunk of the ~13s cost is ARCO-ERA5 chunk decompression, which
 doesn't change with location.
 
-## Real ERA5 fetch/cache (#22 Stage A)
+## Real ERA5/GDAS fetch/cache (#22 Stage A/B)
 
-`data.era5_cache` (`anemoi era5-cache` CLI) fetches concurrently and caches
-to local disk -- see its module docstring for why, and the resumability
-design (`skip_existing=True` by default). At ~16,474 train-split fixes and
-a modest 6.7-9s/sample even from this VM, that's still tens of hours
-sequential; concurrency is what makes it practical. Run as a background
-`tmux` session so it survives SSH disconnects (a Spot preemption kills it
-regardless -- re-running the same command resumes from whatever's already
-cached):
+`data.era5_cache` / `data.gdas_cache` (`anemoi era5-cache` / `anemoi
+gdas-cache` CLIs, both thin wrappers over the shared `data.gridded_cache`
+engine) fetch concurrently and cache to local disk -- see their module
+docstrings for why, and the resumability design (`skip_existing=True` by
+default). At ~16,474 train-split fixes and a modest 6.7-9s/sample even from
+this VM, that's still tens of hours sequential; concurrency is what makes it
+practical.
+
+Run these via `slurm/` (job scripts, `#SBATCH`-headered so they're also
+directly `sbatch`-submittable on a real cluster later; `slurm/run_local.sh`
+is the local stand-in for `sbatch` on this single-VM environment, launching
+a job in a detached `tmux` session so it survives SSH disconnects) -- see
+`slurm/README.md`:
 
 ```bash
-tmux new-session -d -s era5fetch \
-  'source $HOME/.local/bin/env && cd anemoi && \
-   uv run anemoi era5-cache --hurdat2 <path-to-hurdat2-file> \
-     --cache-dir ~/era5_cache --split train --max-workers 8 \
-     2>&1 | tee -a era5_fetch.log'
+# on the VM, once:
+curl -o ~/hurdat2-atl.txt https://www.nhc.noaa.gov/data/hurdat/hurdat2-atl-1851-2023-042624.txt
 
-tmux attach -t era5fetch   # reattach to watch progress
-tmux ls                    # confirm it's running after disconnecting
+slurm/run_local.sh slurm/era5_cache.sbatch train
+slurm/run_local.sh slurm/gdas_cache.sbatch train
+
+tmux ls                            # confirm both are running
+tmux attach -t era5-cache-<id>     # watch one (Ctrl+B, D to detach)
 ```
 
-The HURDAT2 archive file itself isn't in the repo (6.7MB, not committed) --
-fetch it directly on the VM: `curl -O https://www.nhc.noaa.gov/data/hurdat/hurdat2-atl-1851-2023-042624.txt`.
+A Spot preemption kills whichever job is running regardless of how it was
+launched -- re-running the same `slurm/run_local.sh` command resumes from
+whatever's already cached.

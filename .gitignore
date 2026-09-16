@@ -181,3 +181,9 @@ cython_debug/
 .cursorindexingignore
 
 **/.DS_Store
+
+# slurm/run_local.sh job output (logs/<job-name>-<id>.log); real cached data
+# (era5_cache/, gdas_cache/) similarly never belongs in the repo
+logs/
+era5_cache/
+gdas_cache/

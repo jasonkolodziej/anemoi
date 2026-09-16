@@ -164,6 +164,32 @@ def test_open_era5_reuses_a_passed_in_store_instead_of_reopening():
     assert result == "selected"
 
 
+@NEEDS_ECCODES
+def test_fetch_gdas_grib2_fields_uses_a_passed_in_session_not_the_module():
+    """gdas_cache shares one requests.Session across many concurrent samples
+    to reuse the connection pool (~8 requests/sample to the same host) --
+    fetch_gdas_grib2_fields must call .get() on the session it was given,
+    not the plain requests module. Fails fast on the first (.idx) request
+    via a distinctive exception so this doesn't need real network access or
+    a real GRIB2 payload for eccodes to parse."""
+
+    class Sentinel(Exception):
+        pass
+
+    class FakeSession:
+        def __init__(self):
+            self.get_calls = 0
+
+        def get(self, *args, **kwargs):
+            self.get_calls += 1
+            raise Sentinel("session.get was called")
+
+    session = FakeSession()
+    with pytest.raises(Sentinel):
+        fetch_gdas_grib2_fields(T, session=session)
+    assert session.get_calls == 1
+
+
 # --- GDAS .idx parsing ---------------------------------------------------------
 
 
