@@ -7,6 +7,9 @@ import pytest
 from anemoi.data.sources import Flavor
 from anemoi.training.curriculum import Curriculum, CurriculumRun, StageResult
 from anemoi.training.promotion import (
+    DEFAULT_THRESHOLDS,
+    INTENSITY_THRESHOLDS,
+    TRACK_THRESHOLDS,
     MetricSet,
     PromotionError,
     TestSetBudget,
@@ -107,6 +110,30 @@ def test_beat_rate_threshold_is_higher_is_better():
     th = Threshold("nhc_consensus_beat_rate_48h", 0.5, lower_is_better=False)
     assert th.passes(0.55)
     assert not th.passes(0.45)
+
+
+def test_track_and_intensity_thresholds_are_separate_tables():
+    """PLAN.md/Roadmap: intensity skill improves far more slowly than track
+    skill, so the two should not share a re-derivation schedule or a table."""
+    track_metrics = {th.metric for th in TRACK_THRESHOLDS}
+    intensity_metrics = {th.metric for th in INTENSITY_THRESHOLDS}
+    assert track_metrics.isdisjoint(intensity_metrics)
+    assert all("track" in m or "beat_rate" in m for m in track_metrics)
+    assert all("intensity" in m for m in intensity_metrics)
+
+
+def test_default_thresholds_is_the_union_of_both_tables():
+    assert set(DEFAULT_THRESHOLDS) == set(TRACK_THRESHOLDS) | set(INTENSITY_THRESHOLDS)
+
+
+def test_track_48h_threshold_is_rebaselined_against_the_gpra_record():
+    """45.4 nm (2024) / 53.4 nm (2025) realized, 51.0 nm 2026 GPRA target --
+    https://www.nhc.noaa.gov/verification/pdfs/GPRA_history.pdf. The old 90.0
+    nm backstop admitted a system roughly twice as bad as that baseline."""
+    (track_48h,) = (th for th in TRACK_THRESHOLDS if th.metric == "track_error_48h_nm")
+    assert track_48h.limit == pytest.approx(70.0)
+    assert track_48h.limit < 90.0
+    assert track_48h.limit > 53.4  # still a backstop, not parity with NHC
 
 
 # --- test-set budget -------------------------------------------------------

@@ -132,11 +132,17 @@ perturbations can be added to the conditioning vector. The rank histogram and
 spread-skill ratio in verification are how you find out whether that was enough,
 and both should be tracked per-lead from the first backtest.
 
-**Absolute skill targets.** The Appendix B numbers (<75 nm at 48h and similar)
-may already trail current NHC performance. The beat-rate gates carry the real
-claim because they measure against a live baseline; the absolute thresholds
-should be re-baselined against the current verification report before anyone
-treats them as a bar.
+**Absolute skill targets — 48h track re-baselined, others still open.**
+`training.promotion.TRACK_THRESHOLDS`'s `track_error_48h_nm` moved from 90.0
+to 70.0 nm, grounded in NHC's GPRA performance-measures table (45.4 n mi
+realized 2024, 53.4 n mi 2025, 51.0 n mi 2026 target) rather than the
+scope-era placeholder. The beat-rate gates remain the real claim because they
+measure against a live baseline; this absolute number is a backstop, not a
+claim of parity with NHC. `track_error_72h_nm`, `track_error_120h_nm`, and
+both intensity thresholds are **not** re-baselined — the GPRA table only
+publishes the 48h figure, and extrapolating a lead-time curve from one
+verified point would be fabricating precision. Pull the full lead-time
+breakdown from the spring Verification Report before touching those.
 
 **Noise-emulator recalibration is a prerequisite, not a refinement.** Emanuel and
 Zhang (2016) find intensity error growth over the first few days is dominated by
@@ -159,12 +165,13 @@ feature computation. Neither is the full treatment: a dedicated higher-resolutio
 inner-core product (satellite; see the productionization table) and real
 two-way atmosphere-ocean coupling both remain further, larger work.
 
-**Track and intensity thresholds should not share a table.** Intensity skill has
-improved far more slowly than track skill, so a beat rate on intensity is a claim
-about a near-static baseline close to an intrinsic predictability limit. The
-absolute limits in `DEFAULT_THRESHOLDS` also need re-deriving outright: NHC's
-official 48 h Atlantic track error was 45.4 n mi in 2024 and 53.4 n mi in 2025,
-against a 90 nm production threshold.
+**Track and intensity thresholds should not share a table — done.** Intensity
+skill has improved far more slowly than track skill, so a beat rate on
+intensity is a claim about a near-static baseline close to an intrinsic
+predictability limit. `training.promotion` now exposes `TRACK_THRESHOLDS` and
+`INTENSITY_THRESHOLDS` as separate tuples (`DEFAULT_THRESHOLDS` is their
+union, so `evaluate_promotion`'s default is unchanged), so each can be
+re-derived on its own schedule instead of one shared table.
 
 **Consistency distillation beats load shedding if the diffusion budget binds.**
 Song et al. (2023): one-step generation by design, multistep still available,
@@ -186,7 +193,7 @@ path in production.
 | `test_availability.py` | Publication timing; outages; opportunistic feeds |
 | `test_scheduler.py` | Cycle timeline; vitals gating; load shedding; deadlines |
 | `test_curriculum.py` | Stage A/B ordering; flavor rules; deployability |
-| `test_promotion.py` | Validation-only gates; manual gate; test-set budget |
+| `test_promotion.py` | Validation-only gates; manual gate; test-set budget; track/intensity threshold split |
 | `test_registry.py` | Versioning; model-set pinning; rollback; MLflow degradation |
 | `test_triggers.py` | Trigger conditions; cascade; nightly-latent suppression |
 | `test_orchestrator.py` | Wave schedules; dependency handling; failure isolation |
