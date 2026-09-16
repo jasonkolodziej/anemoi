@@ -106,9 +106,44 @@ src/anemoi/
 ├── monitoring/
 │   ├── skew.py           ERA5T paired-input audit
 │   └── drift.py          feature and validation-loss drift
-└── metrics/
-    ├── track.py          track/intensity verification, beat rate, DM test
-    └── probabilistic.py  CRPS, Brier, spread-skill, rank histogram
+├── metrics/
+│   ├── track.py          track/intensity verification, beat rate, DM test
+│   └── probabilistic.py  CRPS, Brier, spread-skill, rank histogram
+└── api/                  Anemoi-API: FastAPI developer interface (uv sync --extra api)
+    ├── main.py           app factory, CORS, exception handlers
+    ├── schemas.py         Pydantic models; CyclePayload mirrors payload() exactly
+    ├── demo_state.py      synthetic storms + seeded registry/drift/skew (swap first)
+    ├── stream.py          WS /v1/storms/{id}/stream
+    └── routers/           meta, schedule, storms, registry, monitoring, retraining
+```
+
+---
+
+## Anemoi-API
+
+[#anemoi-api](#anemoi-api)
+
+A FastAPI service over the operational logic above — the developer interface
+named in the branding brief's product module table (§2.3) but not built until
+now. It disseminates what `anemoi.inference` already computes over HTTP
+instead of stdout; it adds no data source and no forecast skill.
+
+```
+uv sync --extra api
+uv run python -m anemoi.api --reload     # http://127.0.0.1:8000/docs
+```
+
+`GET /v1/storms`, `POST /v1/storms/{id}/cycles`, `GET /v1/schedule`,
+`GET /v1/models` (the six wind gods, for a console's design tokens),
+`GET /v1/monitoring/drift`, `GET /v1/retraining/triggers` — endpoint
+reference on the wiki's [API](https://github.com/jasonkolodziej/anemoi/wiki/API)
+page, design policy in [`docs/api.md`](docs/api.md). Storms are synthetic
+(`anemoi.data.synthetic`, same generator the test suite uses) until real
+ingestion is wired; see `docs/api.md`'s "What production replaces" for
+exactly what to swap.
+
+```
+uv run pytest -m api      # smoke tests; skip automatically without the api extra
 ```
 
 ---

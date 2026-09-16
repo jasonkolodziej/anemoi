@@ -1,0 +1,250 @@
+"""Pydantic v2 response/request models for Anemoi-API v1.
+
+Field names in :class:`CyclePayload` intentionally mirror
+``CycleOutput.payload()`` (the wire shape documented on the wiki's
+Inference Cycle page) exactly, so the API's ``/cycles/{cycle}`` response is
+byte-for-byte the same JSON a consumer already reading dissemination output
+would recognise. Everything else here is additive.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class WindGodOut(BaseModel):
+    slug: str
+    name: str
+    direction: str
+    color: str
+    architecture: str
+    module: str
+    persona: str
+
+
+class ModelCatalog(BaseModel):
+    gods: list[WindGodOut]
+    fusion_color: str
+    structural_colors: dict[str, str]
+
+
+class SourceOut(BaseModel):
+    key: str
+    provider: str
+    role: str
+    is_operational: bool
+    typical_latency_minutes: float
+    max_latency_minutes: float
+    fmt: str
+    retention: str
+    notes: str = ""
+
+
+class StageOut(BaseModel):
+    stage: str
+    start: datetime
+    end_target: datetime
+    end_max: datetime
+
+
+class CyclePlanOut(BaseModel):
+    """A planned (not yet run) cycle -- what ``anemoi schedule`` prints."""
+
+    label: str
+    target_time: datetime
+    cycle_start: datetime
+    advisory_deadline: datetime
+    core_ready_target: datetime
+    spread_ready_target: datetime
+    spread_ready_max: datetime
+    margin_target_minutes: float
+    margin_max_minutes: float
+    meets_advisory_deadline: bool
+    vitals_estimated: bool
+    load_shed: bool
+    degraded: bool
+    stages: list[StageOut]
+
+
+class ScheduleOut(BaseModel):
+    date: str
+    worst_case: bool
+    plans: list[CyclePlanOut]
+
+
+class ConeSegmentOut(BaseModel):
+    lead_hours: int
+    lat: float
+    lon: float
+    radius_nm: float
+    basis: str = Field(description="'ensemble' or 'climatology'")
+
+
+class CyclePayload(BaseModel):
+    """Exact shape of ``CycleOutput.payload()`` -- the dissemination JSON."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    cycle: str
+    issued_at: datetime
+    advisory_deadline: datetime
+    nwp_cycle_lag_hours: int
+    vitals: str
+    ensemble_size: int
+    rapid_intensification: bool
+    ri_probability: float
+    cone: list[ConeSegmentOut]
+    flags: list[str]
+
+
+class IntensityPercentiles(BaseModel):
+    lead_hours: int
+    p10: float
+    p25: float
+    p50: float
+    p75: float
+    p90: float
+
+
+class TrackPointOut(BaseModel):
+    lead_hours: int
+    lat: float
+    lon: float
+    wind_kt: float
+
+
+class CycleProducts(BaseModel):
+    """Extended products payload -- the parts of ``ForecastProducts`` that
+    ``CycleOutput.payload()`` does not disseminate (§6.1 full product suite).
+    Proposed v1 addition; see docs/api.md ("The payload is a contract, not a
+    convenience") and the wiki's API page for the full shape.
+    """
+
+    deterministic_track: list[TrackPointOut]
+    contributors: dict[str, float]
+    intensity_pdf: list[IntensityPercentiles]
+    landfall_probability: float | None
+    notes: list[str]
+    degraded: bool
+
+
+class CycleResult(BaseModel):
+    storm_id: str
+    payload: CyclePayload
+    products: CycleProducts
+    on_time: bool
+
+
+class FixOut(BaseModel):
+    valid_time: datetime
+    lat: float
+    lon: float
+    max_wind_kt: float
+    min_pressure_mb: float
+    quality: str
+
+
+class StormSummary(BaseModel):
+    storm_id: str
+    season: int
+    active: bool
+    latest_fix: FixOut
+    peak_wind_kt: float
+    last_cycle: str | None = None
+
+
+class StormDetail(StormSummary):
+    history: list[FixOut]
+    cycles: list[str]
+
+
+class RunCycleRequest(BaseModel):
+    cycle: str = Field(description="Cycle label, e.g. '20260806_06Z'")
+    lat: float | None = Field(default=None, description="Override fix latitude")
+    lon: float | None = Field(default=None, description="Override fix longitude")
+    wind_kt: float | None = Field(default=None, description="Override fix max wind (kt)")
+    members: int = Field(default=20, ge=1, le=100)
+    worst_case: bool = False
+    coastline_lat: float | None = None
+    coastline_lon: float | None = None
+
+
+class ModelVersionOut(BaseModel):
+    name: str
+    version: int
+    stage: str
+    run_id: str
+    metrics: dict[str, float]
+    created_at: datetime
+
+
+class RegistryEntry(BaseModel):
+    model: str
+    latest: ModelVersionOut | None
+    production: ModelVersionOut | None
+    versions: list[ModelVersionOut]
+
+
+class ActivePin(BaseModel):
+    label: str
+    latent_signature: str
+    members: dict[str, int]
+
+
+class FeatureDriftOut(BaseModel):
+    name: str
+    standardized_shift: float
+    variance_ratio: float
+    drifted: bool
+
+
+class DriftReportOut(BaseModel):
+    """``DriftReport`` plus the API-level context (model, flavor, when) it
+    does not itself carry -- drift is reported per model on request, not
+    stored on the dataclass."""
+
+    model: str
+    flavor: str
+    generated_at: datetime
+    features: list[FeatureDriftOut]
+    n_live: int
+    alert: bool
+    summary: str
+
+
+class SkewReportOut(BaseModel):
+    lead_hours: int
+    n: int
+    window_start: datetime
+    window_end: datetime
+    mean_track_delta_nm: float
+    mean_abs_intensity_delta_kt: float
+    intensity_bias_kt: float
+    alert: bool
+    reasons: list[str]
+
+
+class RetrainJobOut(BaseModel):
+    model: str
+    reason: str
+    mode: str
+    cascaded: bool
+    note: str
+    trigger_tag: str
+
+
+class DegradedFlagRef(BaseModel):
+    """One entry in the documented flag vocabulary (see docs/api.md)."""
+
+    pattern: str
+    meaning: str
+    severity: str
+
+
+class HealthOut(BaseModel):
+    status: str
+    api_version: str
+    anemoi_version: str
+    torch_available: bool

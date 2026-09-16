@@ -15,8 +15,12 @@ torch = ["torch>=2.2"]
 # MLflow tracking. The tracking layer degrades to a local JSON store when
 # MLflow is absent (see anemoi.tracking.registry), per Scope v2.1 §10.1.
 tracking = ["mlflow>=2.12"]
-dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.5"]
-all = ["anemoi[torch,tracking,dev]"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.5", "httpx2>=2.0"]
+# Anemoi-API: the HTTP developer interface over the reference implementation.
+# Needs only the core deps (numpy/pyyaml) underneath -- no torch required to
+# serve the demo/schedule/registry/monitoring routes.
+api = ["fastapi>=0.115", "uvicorn[standard]>=0.32"]
+all = ["anemoi[torch,tracking,dev,api]"]
 
 [project.scripts]
 anemoi = "anemoi.cli:main"
@@ -34,6 +38,7 @@ pythonpath = ["src"]
 markers = [
     "torch: requires the optional torch extra (skipped automatically if absent)",
     "slow: long-running training-shaped tests",
+    "api: requires the optional api extra, fastapi (skipped automatically if absent)",
 ]
 filterwarnings = ["error::DeprecationWarning"]
 
