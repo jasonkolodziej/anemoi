@@ -80,23 +80,40 @@ REGISTRY: dict[str, DataSource] = {
         ),
         DataSource(
             key="gdas_gfs",
-            provider="NOAA NOMADS",
+            provider="NOAA NOMADS (live cycle feed); AWS Open Data (bulk archival mirror)",
             role=Role.OPERATIONAL,
             typical_latency=int(3.5 * 60) * _M,
             max_latency=4 * _H,
             fmt="GRIB2",
             retention="2015-present archived; rolling 2yr hot",
-            notes="Operational gridded input; cycle t consumes the t-6 cycle.",
+            notes=(
+                "Operational gridded input; cycle t consumes the t-6 cycle. "
+                "No public pre-converted Zarr exists for GDAS/GFS pressure "
+                "levels (verified -- dynamical.org's GFS Icechunk stores are "
+                "surface/near-surface only), so GRIB2 remains the most "
+                "performant format available for this source. "
+                "data.real_gridded.fetch_gdas_grib2_fields() reads it via "
+                "per-message byte-range fetch against the AWS Open Data "
+                "mirror (anonymous, no NOMADS access-window constraint) "
+                "rather than downloading the full ~450 MB file."
+            ),
         ),
         DataSource(
             key="era5",
-            provider="Copernicus CDS",
+            provider="Google ARCO-ERA5 (Zarr, anonymous GCS); Copernicus CDS (origin, GRIB/NetCDF)",
             role=Role.PRETRAIN_ONLY,
             typical_latency=5 * _D,
             max_latency=90 * _D,
-            fmt="GRIB / NetCDF",
+            fmt="Zarr",
             retention="rolling 10yr + permanent storm-relative extracts",
-            notes="Stage A pretraining and the ERA5T skew audit only.",
+            notes=(
+                "Stage A pretraining and the ERA5T skew audit only. "
+                "data.real_gridded.open_era5() reads the pre-converted, "
+                "analysis-ready ARCO-ERA5 Zarr store directly -- anonymous, "
+                "no CDS account, no rate limit -- rather than requesting "
+                "GRIB/NetCDF through CDS, which is the most performant path "
+                "for this source now that it exists."
+            ),
         ),
         DataSource(
             key="goes",
