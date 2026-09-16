@@ -195,3 +195,49 @@ SYNC_ARCHIVE=1 slurm/run_local.sh slurm/gdas_cache.sbatch train
 uv run anemoi gdas-cache --hurdat2 ~/hurdat2-atl.txt --cache-dir ~/gdas_cache \
   --split train --sync-archive
 ```
+
+## Real Stage A/B training run: LSTM (#22)
+
+`training.real_run.run_lstm_curriculum` (`anemoi train --model lstm`,
+`slurm/train_lstm.sbatch`) runs a real Stage A -> Stage B curriculum for the
+LSTM baseline against a real HURDAT2 file. It's the first of the five Group
+1 models with a real runner -- and deliberately the first one attempted,
+because `models.lstm.build_lstm`'s input is storm-history sequences, not
+gridded imagery: this model never reads ERA5/GDAS pixels, so it needs no
+gridded-field cache to train for real, only real tracks. CNN (imagery),
+Transformer (gridded fields), GNN (graph construction) and PINN (environment
+vector) each need their own real data-loading design against the cached
+`GriddedFields` this doc's earlier sections built -- not yet started.
+
+What it actually does, end to end:
+
+- Builds real multi-lead-time samples (`DEFAULT_LEADS`, 12-120h) from
+  working-quality input / final-quality labels, generalising
+  `training.capacity_ablation`'s proven single-6h-step pattern -- a lead
+  beyond a storm's real track length is masked out of the loss, not
+  synthesised or dropped as a whole sample.
+- Stage A trains on `data.splits.DEFAULT_BOUNDARIES`' train/val seasons
+  (1980-2019 / 2020-2022); Stage B fine-tunes the same model (frozen
+  encoder, `.head` only) on `STAGE_B_BOUNDARIES`' seasons (2021-2022 /
+  2023) -- the real-GDAS-aware split this doc's earlier section added.
+- Every stage's checkpoint uploads to R2 via `CheckpointStore` (the same
+  bucket `--sync-archive` uses, under `checkpoints/lstm/<stage>/...`) --
+  never left local-only, so a Spot preemption mid-run doesn't lose it.
+- Registers the trained model in `tracking.registry.ModelRegistry` (a local
+  JSON store, `--registry-root`, default `~/.anemoi/registry`) and runs
+  `training.promotion.evaluate_promotion` against the previous registered
+  version, if any.
+
+```bash
+# on the VM, once (if not already fetched by the ingest jobs above):
+curl -o ~/hurdat2-atl.txt https://www.nhc.noaa.gov/data/hurdat/hurdat2-atl-1851-2023-042624.txt
+
+slurm/run_local.sh slurm/train_lstm.sbatch
+tmux attach -t train-lstm-<id>
+```
+
+Needs `torch` and `storage` extras (`uv sync --all-extras` already covers
+both) and real `S3_ARTIFACT_*` credentials -- unlike the two ingest jobs,
+this one always uploads (no local-only fallback), since a multi-hour GPU
+run losing its result to a preemption is a real cost this project already
+built `CheckpointStore` to avoid.
