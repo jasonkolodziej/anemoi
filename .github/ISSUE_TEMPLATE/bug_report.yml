@@ -3,7 +3,7 @@ description: Report a reproducible bug or regression
 title: "fix: "
 labels:
   - bug
-assignees: ''
+assignees: []
 body:
   - type: markdown
     attributes:

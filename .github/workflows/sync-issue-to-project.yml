@@ -19,16 +19,15 @@ jobs:
       - name: Add issue to project and sync fields
         uses: actions/github-script@v7
         env:
-          GH_TOKEN: ${{ secrets.PROJECT_PAT || github.token }}
           PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
         with:
           github-token: ${{ secrets.PROJECT_PAT || github.token }}
           script: |
-            const projectNumber = parseInt(process.env.PROJECT_NUMBER);
-            if (!projectNumber) {
+            const projectNumber = parseInt(process.env.PROJECT_NUMBER, 10);
+            if (!Number.isFinite(projectNumber)) {
               core.warning(
-                'PROJECT_NUMBER repository variable is not set. ' +
-                'Set it to the numeric ID of your GitHub Project board to enable auto-sync. ' +
+                'PROJECT_NUMBER repository variable is not set or is not a number. ' +
+                'Set it to the GitHub Project number (as shown in the project URL) to enable auto-sync. ' +
                 'See .github/workflows/sync-issue-to-project.yml for details.'
               );
               return;
@@ -111,6 +110,7 @@ jobs:
             const fieldMap = {
               'Source Plan':        parseField('Source Plan'),
               'Area':               parseField('Parent Plan Section'),
+              'Acceptance Criteria': parseField('Acceptance Criteria'),
               'Risks / Unknowns':   parseField('Risks / Unknowns'),
               'Deliverables':       parseField('Deliverables'),
             };
