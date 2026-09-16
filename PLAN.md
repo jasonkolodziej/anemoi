@@ -100,7 +100,7 @@ the affected model only" impossible to do accidentally.
 | Component | Status | To productionise |
 |---|---|---|
 | Storm archive | Parser done (`data.hurdat2.parse_hurdat2`), not wired as the default source | Point the CLI/API/demo at a real HURDAT2 file |
-| Working track | Emulated from final | Ingest real a-deck/b-deck/TC-Vitals; run `recalibrate_from_pairs` |
+| Working track | Parsers done (`data.atcf.parse_bdeck`, `parse_tcvitals`); `pair_by_valid_time` + `recalibrate_from_pairs` demonstrated on parsed data | Point at a real archive; recalibrate Stage B's noise defaults from it |
 | Gridded fields | Synthetic, dual-flavor | GRIB2 readers for GDAS/GFS and ERA5 into `GriddedFields` |
 | Satellite | Not implemented | GOES-18/19 storm-relative crops into the CNN channel stack |
 | Potential intensity | SST/OHC/shear regression | Full Emanuel (1995) from thermodynamic soundings |
@@ -176,6 +176,7 @@ path in production.
 | `test_sources.py` | Role assignment; operational guard |
 | `test_besttrack.py` | Working/final separation; emulator statistics; recalibration |
 | `test_hurdat2.py` | HURDAT2 parsing; synoptic-hour filtering; missing-field handling |
+| `test_atcf.py` | b-deck/TC-Vitals parsing; unit conversion; working/final pairing + recalibration |
 | `test_availability.py` | Publication timing; outages; opportunistic feeds |
 | `test_scheduler.py` | Cycle timeline; vitals gating; load shedding; deadlines |
 | `test_curriculum.py` | Stage A/B ordering; flavor rules; deployability |
