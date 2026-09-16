@@ -64,35 +64,58 @@ class Threshold:
         return f"{self.metric}={value:.3f} {op} {self.limit:.3f} [{verdict}]"
 
 
-#: Appendix B production thresholds.
-#:
-#: The absolute track/intensity numbers do not survive contact with the NHC
-#: verification record and must be re-derived before anyone treats them as a
-#: bar. Official 48 h Atlantic track error was 45.4 n mi in 2024 (a record at
-#: every lead time) and 53.4 n mi in 2025; NOAA's own GPRA target for 2026 is
-#: 51.0 n mi. Against a 45-55 nm baseline, the 90 nm production threshold below
-#: would admit a system roughly twice as bad as the incumbent.
-#: See https://www.nhc.noaa.gov/verification/
-#:
-#: The beat-rate gate is therefore not a supplement to the absolute limits -- it
-#: is the only thing standing between this table and that outcome, because it is
-#: measured against the live baseline rather than a number written down in 2026.
-#:
-#: Track and intensity should not share this table's structure either. Intensity
-#: skill has improved far more slowly than track skill (Emanuel and Zhang 2016,
+#: Appendix B production thresholds, split into separate track and intensity
+#: tables rather than one shared structure. Intensity skill has improved far
+#: more slowly than track skill (Emanuel and Zhang 2016,
 #: doi:10.1175/JAS-D-16-0100.1; DeMaria et al. 2014,
-#: doi:10.1175/BAMS-D-12-00240.1), so a beat rate on intensity is a claim about
-#: a nearly static baseline near an intrinsic predictability limit, while the
-#: same number on track is a claim about a rapidly improving one. They are not
-#: equivalent achievements and the intensity limits deserve their own derivation.
-DEFAULT_THRESHOLDS: tuple[Threshold, ...] = (
-    Threshold("track_error_48h_nm", 90.0),
+#: doi:10.1175/BAMS-D-12-00240.1), so a beat rate or absolute limit on
+#: intensity is a claim about a nearly static baseline near an intrinsic
+#: predictability limit, while the same kind of number on track is a claim
+#: about a rapidly improving one. They are not equivalent achievements, they
+#: should not be re-derived on the same schedule, and keeping them in separate
+#: tables is what makes re-deriving one without touching the other possible.
+#:
+#: The beat-rate gate is the real claim in both tables -- it is measured
+#: against the live baseline, not a number written down once and trusted
+#: forever. The absolute limits below are a backstop against a badly broken
+#: candidate, not a claim of parity with an operational center that has
+#: decades of consensus guidance behind it.
+#: See https://www.nhc.noaa.gov/verification/
+
+#: NHC's official GPRA performance-measures table
+#: (https://www.nhc.noaa.gov/verification/pdfs/GPRA_history.pdf) is the
+#: current verification source for the 48 h numbers below: realized 48 h
+#: Atlantic track error was 45.4 n mi in 2024 and 53.4 n mi in 2025 (NOAA's
+#: own 2026 GPRA target: 51.0 n mi); realized 48 h intensity error was 11.4 kt
+#: in 2024 and 13.7 kt in 2025 (2026 target: 10.0 kt) -- 2025 intensity error
+#: was elevated by an unusually difficult season (NHC's 2025 verification
+#: preview: storms "about 50% harder to predict than average"), not a skill
+#: regression.
+#:
+#: track_error_48h_nm re-baselined: 90.0 -> 70.0, roughly 1.4x the 2026 GPRA
+#: target rather than roughly 1.8x -- enough backstop margin not to gate a
+#: competitive candidate on a bad case, not so loose it admits a system
+#: roughly twice as bad as the incumbent, which is what 90.0 nm did.
+#: intensity_error_48h_kt is left unchanged: 15.0 kt already sits close to
+#: (just above) the worse of the two realized years above, unlike the track
+#: number it was never the badly-miscalibrated one.
+#:
+#: track_error_72h_nm / track_error_120h_nm / intensity_error_72h_kt remain
+#: unrederived -- the GPRA table only publishes the 48 h figure, and no other
+#: lead time here has a verified current-season source behind it yet. Do not
+#: extrapolate a lead-time curve from a single verified point; pull the
+#: lead-time breakdown from the full spring Verification Report instead.
+TRACK_THRESHOLDS: tuple[Threshold, ...] = (
+    Threshold("track_error_48h_nm", 70.0),
     Threshold("track_error_72h_nm", 150.0),
     Threshold("track_error_120h_nm", 250.0),
-    Threshold("intensity_error_48h_kt", 15.0),
-    Threshold("intensity_error_72h_kt", 20.0),
     Threshold("nhc_consensus_beat_rate_48h", 0.50, lower_is_better=False),
 )
+INTENSITY_THRESHOLDS: tuple[Threshold, ...] = (
+    Threshold("intensity_error_48h_kt", 15.0),
+    Threshold("intensity_error_72h_kt", 20.0),
+)
+DEFAULT_THRESHOLDS: tuple[Threshold, ...] = TRACK_THRESHOLDS + INTENSITY_THRESHOLDS
 
 
 @dataclass(frozen=True, slots=True)
