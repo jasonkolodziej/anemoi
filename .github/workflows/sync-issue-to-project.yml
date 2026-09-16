@@ -1,0 +1,175 @@
+name: Sync Issue Fields to Project Board
+
+# Fires when an issue is opened or edited so the project board fields
+# stay in sync with the traceability section of the issue body.
+on:
+  issues:
+    types: [opened, edited]
+
+jobs:
+  sync:
+    name: Sync to project board
+    runs-on: ubuntu-latest
+
+    permissions:
+      issues: read
+      repository-projects: write
+
+    steps:
+      - name: Add issue to project and sync fields
+        uses: actions/github-script@v7
+        env:
+          GH_TOKEN: ${{ secrets.PROJECT_PAT || github.token }}
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+        with:
+          github-token: ${{ secrets.PROJECT_PAT || github.token }}
+          script: |
+            const projectNumber = parseInt(process.env.PROJECT_NUMBER);
+            if (!projectNumber) {
+              core.warning(
+                'PROJECT_NUMBER repository variable is not set. ' +
+                'Set it to the numeric ID of your GitHub Project board to enable auto-sync. ' +
+                'See .github/workflows/sync-issue-to-project.yml for details.'
+              );
+              return;
+            }
+
+            const owner = context.repo.owner;
+            const issueNodeId = context.payload.issue.node_id;
+            const body = context.payload.issue.body || '';
+
+            // ----------------------------------------------------------------
+            // 1. Look up the project by owner + number
+            // ----------------------------------------------------------------
+            const projectQuery = await github.graphql(`
+              query($login: String!, $number: Int!) {
+                user(login: $login) {
+                  projectV2(number: $number) {
+                    id
+                    fields(first: 50) {
+                      nodes {
+                        ... on ProjectV2Field {
+                          id
+                          name
+                          dataType
+                        }
+                        ... on ProjectV2SingleSelectField {
+                          id
+                          name
+                          dataType
+                          options { id name }
+                        }
+                        ... on ProjectV2IterationField {
+                          id
+                          name
+                          dataType
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `, { login: owner, number: projectNumber });
+
+            const project = projectQuery.user?.projectV2;
+            if (!project) {
+              core.warning(`Project #${projectNumber} not found for user ${owner}.`);
+              return;
+            }
+
+            const projectId = project.id;
+            const fields = project.fields.nodes;
+
+            // ----------------------------------------------------------------
+            // 2. Add issue to project (idempotent)
+            // ----------------------------------------------------------------
+            const addResult = await github.graphql(`
+              mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+                  item { id }
+                }
+              }
+            `, { projectId, contentId: issueNodeId });
+
+            const itemId = addResult.addProjectV2ItemById.item.id;
+            core.info(`Project item ID: ${itemId}`);
+
+            // ----------------------------------------------------------------
+            // 3. Parse traceability fields from the issue body
+            //    Matches the YAML form field IDs used in the issue templates.
+            // ----------------------------------------------------------------
+            function parseField(label) {
+              // Match "### Label\n\nValue" (GitHub issue form rendered format)
+              const re = new RegExp(
+                `###\\s+${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\n+([\\s\\S]*?)(?=\\n###|$)`,
+                'i'
+              );
+              const m = body.match(re);
+              return m ? m[1].trim() : null;
+            }
+
+            const fieldMap = {
+              'Source Plan':        parseField('Source Plan'),
+              'Area':               parseField('Parent Plan Section'),
+              'Risks / Unknowns':   parseField('Risks / Unknowns'),
+              'Deliverables':       parseField('Deliverables'),
+            };
+
+            // ----------------------------------------------------------------
+            // 4. For each mapped field, find the project field and update it
+            // ----------------------------------------------------------------
+            for (const [fieldName, value] of Object.entries(fieldMap)) {
+              if (!value || value === '_No response_') continue;
+
+              const field = fields.find(
+                f => f.name.toLowerCase() === fieldName.toLowerCase()
+              );
+              if (!field) {
+                core.info(`Project field "${fieldName}" not found — skipping.`);
+                continue;
+              }
+
+              let mutation;
+              let variables;
+
+              if (field.dataType === 'TEXT' || field.dataType === 'SINGLE_LINE_TEXT') {
+                mutation = `
+                  mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: String!) {
+                    updateProjectV2ItemFieldValue(input: {
+                      projectId: $projectId
+                      itemId: $itemId
+                      fieldId: $fieldId
+                      value: { text: $value }
+                    }) { projectV2Item { id } }
+                  }
+                `;
+                variables = { projectId, itemId, fieldId: field.id, value };
+              } else if (field.dataType === 'SINGLE_SELECT') {
+                const option = field.options?.find(
+                  o => o.name.toLowerCase() === value.toLowerCase()
+                );
+                if (!option) {
+                  core.info(`No matching option "${value}" for field "${fieldName}" — skipping.`);
+                  continue;
+                }
+                mutation = `
+                  mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                    updateProjectV2ItemFieldValue(input: {
+                      projectId: $projectId
+                      itemId: $itemId
+                      fieldId: $fieldId
+                      value: { singleSelectOptionId: $optionId }
+                    }) { projectV2Item { id } }
+                  }
+                `;
+                variables = { projectId, itemId, fieldId: field.id, optionId: option.id };
+              } else {
+                core.info(`Field "${fieldName}" has unsupported type ${field.dataType} — skipping.`);
+                continue;
+              }
+
+              await github.graphql(mutation, variables);
+              core.info(`Set "${fieldName}" to: ${value}`);
+            }
+
+            core.info('Sync complete.');
