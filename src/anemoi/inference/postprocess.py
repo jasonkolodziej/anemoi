@@ -20,13 +20,18 @@ import numpy as np
 from ..geo import haversine_nm
 from ..metrics.probabilistic import ensemble_percentiles
 
-#: NHC-style 2/3-probability circle radii (nm) by lead time.
+#: NHC-style 2/3-probability circle radii (nm) by lead time, current-season
+#: Atlantic basin values (https://www.nhc.noaa.gov/aboutcone.shtml).
 #:
 #: NHC sizes each circle so that two-thirds of official forecast errors over the
-#: previous five years fall within it, and re-derives the table annually
-#: (https://www.nhc.noaa.gov/aboutcone.shtml). The values below are placeholders
-#: close to the published 2023 Atlantic radii; replace with the current season's
-#: table rather than assuming these stay reasonable.
+#: previous five years fall within it, and re-derives the table annually --
+#: these are the 2026 radii (based on 2021-2025 error statistics; NHC's page
+#: also lists 60h, which this module's ``products.lead_hours`` does not use).
+#: Documented alongside the same values in ``configs/inference.yaml`` under
+#: ``ensemble.climatological_cone_nm``; there is no config loader yet (see
+#: Roadmap "Config loader"), so the two must be kept in sync by hand like every
+#: other module constant here. Re-baseline this table every season rather than
+#: assuming it stays reasonable.
 #:
 #: Note for the 2026 season NHC is trialling a cone built from **ellipses** rather
 #: than circles, separating the along-track (speed) and cross-track (directional)
@@ -34,13 +39,13 @@ from ..metrics.probabilistic import ensemble_percentiles
 #: already computes, so an elliptical ConeSegment -- semi-major, semi-minor and
 #: orientation in place of a single radius -- is a natural extension here.
 CLIMATOLOGICAL_CONE_NM: dict[int, float] = {
-    12: 26.0,
-    24: 41.0,
-    36: 55.0,
-    48: 70.0,
-    72: 102.0,
-    96: 151.0,
-    120: 198.0,
+    12: 25.0,
+    24: 39.0,
+    36: 49.0,
+    48: 62.0,
+    72: 95.0,
+    96: 134.0,
+    120: 200.0,
 }
 
 #: Rapid intensification: >=30 kt increase in 24 h.
