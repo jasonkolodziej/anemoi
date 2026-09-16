@@ -196,32 +196,30 @@ uv run anemoi gdas-cache --hurdat2 ~/hurdat2-atl.txt --cache-dir ~/gdas_cache \
   --split train --sync-archive
 ```
 
-## Real Stage A/B training run: LSTM (#22)
+## Real Stage A/B training runs: all five Group 1 models (#22)
 
-`training.real_run.run_lstm_curriculum` (`anemoi train --model lstm`,
-`slurm/train_lstm.sbatch`) runs a real Stage A -> Stage B curriculum for the
-LSTM baseline against a real HURDAT2 file. It's the first of the five Group
-1 models with a real runner -- and deliberately the first one attempted,
-because `models.lstm.build_lstm`'s input is storm-history sequences, not
-gridded imagery: this model never reads ERA5/GDAS pixels, so it needs no
-gridded-field cache to train for real, only real tracks. PINN (environment
-vector + a base model's candidate track to correct) needs its own real
-data-loading design against the cached `GriddedFields` this doc's earlier
-sections built -- not yet started.
+Every Group 1 model now has a real Stage A -> Stage B runner against real
+data -- `anemoi train --model {lstm,cnn,transformer,gnn,pinn}`, each with
+its own `slurm/train_<model>.sbatch`.
 
-CNN, Transformer and GNN have real runners too
-(`training.real_run_cnn.run_cnn_curriculum` / `real_run_transformer.
-run_transformer_curriculum` / `real_run_gnn.run_gnn_curriculum`, `anemoi
-train --model cnn|transformer|gnn`, `slurm/train_cnn.sbatch` /
-`train_transformer.sbatch` / `train_gnn.sbatch`): real GOES imagery and
-real station/buoy networks aren't fetched yet (PLAN.md's Satellite row;
-`ndbc`/`dropsonde`/`microwave` aren't fetched for real either), but all
-three architectures just need *some* multi-channel spatial input, so they
-read the real cached `GriddedFields` (all 10 fields) instead of waiting on
-those. Reads from `--era5-cache-dir`/`--gdas-cache-dir` (the same dirs
-`era5-cache`/`gdas-cache` fetch into); a fix with no cached file yet is
-skipped, not an error, so all three train on however much is cached at the
-moment invoked and improve as the ingest jobs fill in more.
+`training.real_run.run_lstm_curriculum` (`--model lstm`,
+`slurm/train_lstm.sbatch`) was the first, and deliberately so:
+`models.lstm.build_lstm`'s input is storm-history sequences, not gridded
+imagery, so it needs no gridded-field cache to train for real, only real
+tracks.
+
+CNN, Transformer and GNN (`training.real_run_cnn` / `real_run_transformer`
+/ `real_run_gnn`, `--model cnn|transformer|gnn`, `slurm/train_cnn.sbatch` /
+`train_transformer.sbatch` / `train_gnn.sbatch`) came next: real GOES
+imagery and real station/buoy networks aren't fetched yet (PLAN.md's
+Satellite row; `ndbc`/`dropsonde`/`microwave` aren't fetched for real
+either), but all three architectures just need *some* multi-channel
+spatial input, so they read the real cached `GriddedFields` (all 10
+fields) instead of waiting on those. Reads from
+`--era5-cache-dir`/`--gdas-cache-dir` (the same dirs `era5-cache`/
+`gdas-cache` fetch into); a fix with no cached file yet is skipped, not an
+error, so all three train on however much is cached at the moment invoked
+and improve as the ingest jobs fill in more.
 
 - Transformer needs an exact grid size (its patch embedding is not
   resolution-agnostic like CNN's global-average-pool encoder is) -- the
@@ -235,6 +233,19 @@ moment invoked and improve as the ingest jobs fill in more.
   again matching the default exactly). Samples are batched the standard
   block-diagonal way (`real_run_gnn.batch_graph`) rather than one graph at
   a time.
+
+PINN (`training.real_run_pinn`, `--model pinn`, `slurm/train_pinn.sbatch`)
+came last because it's architecturally different from the other four --
+`models.pinn.build_pinn`'s own docstring frames it as a residual corrector
+*applied on top of a candidate forecast*, not a predictor from raw input.
+This runner supplies that candidate by training a small internal LSTM
+each run (self-contained, not dependent on a specific external checkpoint
+existing), plus a real environment vector
+(`data.features.compute_environment_features`) from the same cached
+`GriddedFields`. `models.pinn.physics_residuals` is folded into the
+training loss, but only over the 12/24/36/48h leads -- the uniformly
+12h-spaced prefix of `DEFAULT_LEADS` its constant-`dt_hours` assumption is
+actually valid for (the 48-120h gaps are 24h, not 12h).
 
 What it actually does, end to end:
 
@@ -262,11 +273,12 @@ curl -o ~/hurdat2-atl.txt https://www.nhc.noaa.gov/data/hurdat/hurdat2-atl-1851-
 slurm/run_local.sh slurm/train_lstm.sbatch
 tmux attach -t train-lstm-<id>
 
-# CNN / Transformer / GNN -- benefit from era5_cache/gdas_cache having
-# fetched data first, but work with whatever's cached so far:
+# CNN / Transformer / GNN / PINN -- benefit from era5_cache/gdas_cache
+# having fetched data first, but work with whatever's cached so far:
 slurm/run_local.sh slurm/train_cnn.sbatch
 slurm/run_local.sh slurm/train_transformer.sbatch
 slurm/run_local.sh slurm/train_gnn.sbatch
+slurm/run_local.sh slurm/train_pinn.sbatch
 ```
 
 Needs `torch` and `storage` extras (`uv sync --all-extras` already covers
