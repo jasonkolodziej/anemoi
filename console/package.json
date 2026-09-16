@@ -1,0 +1,33 @@
+{
+  "name": "anemoi-console",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "readme": "console/README.md",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "prepare": "svelte-kit sync || echo ''",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.70.3",
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "svelte": "^5.57.0",
+    "svelte-check": "^4.7.6",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.0"
+  },
+  "dependencies": {
+    "bits-ui": "^1.8.0",
+    "clsx": "^2.1.1",
+    "@lucide/svelte": "^1.46.0",
+    "tailwind-merge": "^2.6.1",
+    "tailwind-variants": "^0.3.1"
+  }
+}
