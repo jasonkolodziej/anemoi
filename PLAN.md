@@ -56,6 +56,7 @@ shedding), `inference/cycle` (execution, degraded modes),
 `metrics/track`, `metrics/probabilistic`.
 
 **Layer 7 — models.** Seven PyTorch builders, all returning `(module, spec)`.
+`training/device` picks MPS/CUDA/CPU for local (non-cloud) runs.
 
 ---
 
@@ -125,7 +126,11 @@ Citations for everything below are in `docs/references.md`.
 For a 6-layer transformer and a diffusion model that is thin. Stage A on ERA5
 helps, but the honest mitigation is aggressive augmentation, storm-relative
 coordinates, and being ready to conclude the transformer is not the right
-capacity for this dataset. Worth measuring before committing GPU-months.
+capacity for this dataset. Worth measuring before committing GPU-months --
+and the measurement itself doesn't need those GPU-months: the transformer
+builder is ~4.8M parameters (`build_transformer()` defaults), small enough
+that the capacity/learning-curve ablation runs on a local machine (Apple
+Silicon MPS via `training.device.get_device()`) rather than rented compute.
 
 **Ensemble dispersion at recurvature.** Anemoi-Spread conditioned on Anemoi-Core latents
 will tend to underdisperse precisely where the distribution is bimodal.
@@ -211,3 +216,4 @@ path in production.
 | `test_satellite.py` | Synthetic GOES crop shape/channels; intensity-dependent structure; CNN integration |
 | `test_real_gridded.py` | ERA5/GDAS unit conversion and cropping (synthetic-schema); real endpoints behind `ANEMOI_RUN_NETWORK_TESTS=1` |
 | `test_models.py` | Architecture shapes and latent contracts (needs torch) |
+| `test_device.py` | MPS/CUDA/CPU selection priority; torch.compile skip on MPS (needs torch) |

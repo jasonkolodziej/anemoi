@@ -1,5 +1,5 @@
-"""Training layer: curriculum, orchestration, triggers, promotion gates."""
+"""Training layer: curriculum, orchestration, triggers, promotion gates, device selection."""
 
-from . import curriculum, orchestrator, promotion, triggers
+from . import curriculum, device, orchestrator, promotion, triggers
 
-__all__ = ["curriculum", "orchestrator", "promotion", "triggers"]
+__all__ = ["curriculum", "device", "orchestrator", "promotion", "triggers"]
