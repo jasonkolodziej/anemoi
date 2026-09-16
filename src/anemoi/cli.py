@@ -223,13 +223,15 @@ def cmd_train(args: argparse.Namespace) -> int:
     stage's checkpoint is uploaded durably, not just left on local disk.
 
     'lstm' needs no gridded-field cache (its input is storm-history
-    sequences, not pixels). 'cnn'/'transformer'/'gnn' read real cached
-    GriddedFields from --era5-cache-dir/--gdas-cache-dir
+    sequences, not pixels). 'cnn'/'transformer'/'gnn'/'pinn' read real
+    cached GriddedFields from --era5-cache-dir/--gdas-cache-dir
     (data.era5_cache/data.gdas_cache's own --cache-dir) -- cnn/transformer
     as a channel stack, gnn as a lattice-graph mesh built from the same
-    grid -- see training.real_run_cnn/real_run_transformer/real_run_gnn's
+    grid, pinn as a real environment-feature vector plus a candidate track
+    from an internally-trained LSTM to correct -- see
+    training.real_run_cnn/real_run_transformer/real_run_gnn/real_run_pinn's
     module docstrings for why (and, for transformer, the real-crop-size
-    trim). pinn has no real runner yet.
+    trim; for pinn, the candidate-generator design).
     """
     from .data.hurdat2 import parse_hurdat2_file
     from .data.sources import Flavor
@@ -273,6 +275,16 @@ def cmd_train(args: argparse.Namespace) -> int:
             print("gnn needs --era5-cache-dir and --gdas-cache-dir")
             return 1
         run, val_metrics = run_gnn_curriculum(
+            tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
+            seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
+        )
+    elif args.model == "pinn":
+        from .training.real_run_pinn import run_pinn_curriculum
+
+        if not args.era5_cache_dir or not args.gdas_cache_dir:
+            print("pinn needs --era5-cache-dir and --gdas-cache-dir")
+            return 1
+        run, val_metrics = run_pinn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
         )
@@ -394,18 +406,20 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_gdas_cache)
 
     p = sub.add_parser("train", help="run a real Stage A/B curriculum (#22)")
-    p.add_argument("--model", default="lstm", choices=["lstm", "cnn", "transformer", "gnn"])
+    p.add_argument("--model", default="lstm", choices=["lstm", "cnn", "transformer", "gnn", "pinn"])
     p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
     p.add_argument("--seed", type=int, default=20260806)
     p.add_argument("--n-augment", dest="n_augment", type=int, default=3)
-    p.add_argument("--hidden-dim", dest="hidden_dim", type=int, default=128, help="lstm/gnn only")
+    p.add_argument(
+        "--hidden-dim", dest="hidden_dim", type=int, default=128, help="lstm/gnn/pinn only",
+    )
     p.add_argument(
         "--era5-cache-dir", dest="era5_cache_dir", default=None,
-        help="cnn/transformer/gnn only: data.era5_cache's --cache-dir",
+        help="cnn/transformer/gnn/pinn only: data.era5_cache's --cache-dir",
     )
     p.add_argument(
         "--gdas-cache-dir", dest="gdas_cache_dir", default=None,
-        help="cnn/transformer/gnn only: data.gdas_cache's --cache-dir",
+        help="cnn/transformer/gnn/pinn only: data.gdas_cache's --cache-dir",
     )
     p.add_argument(
         "--registry-root", dest="registry_root",
