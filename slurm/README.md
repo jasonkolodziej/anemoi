@@ -45,10 +45,12 @@ needing checkpoint/restart logic in the launcher itself.
 |---|---|---|
 | `era5_cache.sbatch` | Fetch+cache real ERA5 (`data.era5_cache`) for one `data.splits` split | `gridded` extra (xarray/zarr/gcsfs) |
 | `gdas_cache.sbatch` | Fetch+cache real GDAS (`data.gdas_cache`), the Stage B analog | `gridded` extra, plus `sudo apt-get install libeccodes0` -- `pip install eccodes` alone is bindings only, not the compiled library (docs/train_infrastructure.md) |
+| `train_lstm.sbatch` | Real Stage A -> Stage B curriculum for the LSTM baseline (`training.real_run`, #22) -- a GPU job, unlike the two ingest jobs above | `torch` + `storage` extras, real R2 credentials (`S3_ARTIFACT_*` in `.env`) -- every stage's checkpoint uploads durably |
 
-Both take the split name as their one positional arg (default `train`), and
-read `HURDAT2_PATH` / `CACHE_DIR` / `MAX_WORKERS` from the environment if you
-want to override their defaults without editing the script. Set
+The two cache scripts take the split name as their one positional arg
+(default `train`), and read `HURDAT2_PATH` / `CACHE_DIR` / `MAX_WORKERS`
+from the environment if you want to override their defaults without editing
+the script. Set
 `SYNC_ARCHIVE=1` to also upload newly-cached files to the durable R2 archive
 (`.env`'s `S3_ARTIFACT_*`, same bucket `tracking.checkpoint_store` uses) --
 see docs/train_infrastructure.md's "Durable archive" section for why this
