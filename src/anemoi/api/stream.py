@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from . import convert
-from .deps import get_state
+from .deps import get_state, require_api_key
 
-router = APIRouter(tags=["stream"])
+router = APIRouter(tags=["stream"], dependencies=[Depends(require_api_key)])
 
 POLL_INTERVAL_SECONDS = 2.0
 
