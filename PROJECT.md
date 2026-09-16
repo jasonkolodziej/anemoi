@@ -1,4 +1,4 @@
-# Github Project board
+# GitHub Project board
 
 ## Recommended relationship model
 

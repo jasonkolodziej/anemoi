@@ -32,7 +32,7 @@ What actually happened. Include error messages, stack traces, or screenshots whe
 
 ## Traceability
 
-- Source plan: [PLAN.md](../..//PLAN.md)
+- Source plan: [PLAN.md](../../PLAN.md)
 - Parent plan section: [e.g. "Layer 2 — data contracts"]
 - Related project item: [link to project board item]
 - Acceptance criteria:

@@ -1,5 +1,5 @@
 ---
-applyTo: "PLAN.md, PROJECT.md, .github/**, **/*.md"
+applyTo: "**/*.md"
 description: "Enforces plan-to-project-to-issue traceability for work tracked in this repository."
 ---
 

@@ -21,7 +21,7 @@ Describe any alternative solutions or features you've considered.
 
 ## Traceability
 
-- Source plan: [PLAN.md](../..//PLAN.md)
+- Source plan: [PLAN.md](../../PLAN.md)
 - Parent plan section: [e.g. "Layer 3 — training policy"]
 - Related project item: [link to project board item]
 - Acceptance criteria:
