@@ -281,6 +281,28 @@ slurm/run_local.sh slurm/train_gnn.sbatch
 slurm/run_local.sh slurm/train_pinn.sbatch
 ```
 
+## Running all five as one schedule (`training.orchestrator`)
+
+`training.orchestrator.run_schedule`'s injected `runner` is wired to all
+five real per-model runners above
+(`training.real_orchestrator.RealOrchestratorRunner`, `anemoi
+train-schedule`, `slurm/train_schedule.sbatch`) -- one job/log instead of
+launching each `train_<model>.sbatch` by hand, with the same real
+checkpoint upload, registry registration and promotion evaluation per
+model. `orchestrator.build_schedule` always appends `latents`/`diffusion`/
+`fusion` waves too (Anemoi-Spread diffusion and the fusion consensus have
+no real runner yet); those report a clean "not implemented yet" failure
+rather than silently no-op'ing, and `run_schedule`'s own dependency
+semantics (§10.1: one model's failure only skips *its* dependents)
+correctly skip whatever depended on them -- every Group 1 model still
+trains for real regardless.
+
+```bash
+slurm/run_local.sh slurm/train_schedule.sbatch sequential
+# or: slurm/run_local.sh slurm/train_schedule.sbatch parallel
+tmux attach -t train-schedule-<id>
+```
+
 Needs `torch` and `storage` extras (`uv sync --all-extras` already covers
 both) and real `S3_ARTIFACT_*` credentials -- unlike the two ingest jobs,
 this one always uploads (no local-only fallback), since a multi-hour GPU
