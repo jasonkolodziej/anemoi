@@ -44,7 +44,7 @@ needing checkpoint/restart logic in the launcher itself.
 | Script | What | Needs |
 |---|---|---|
 | `era5_cache.sbatch` | Fetch+cache real ERA5 (`data.era5_cache`) for one `data.splits` split | `gridded` extra (xarray/zarr/gcsfs) |
-| `gdas_cache.sbatch` | Fetch+cache real GDAS (`data.gdas_cache`), the Stage B analog | `gridded` extra's `eccodes` (see its docstring for a real broken-native-library failure mode) |
+| `gdas_cache.sbatch` | Fetch+cache real GDAS (`data.gdas_cache`), the Stage B analog | `gridded` extra, plus `sudo apt-get install libeccodes0` -- `pip install eccodes` alone is bindings only, not the compiled library (docs/train_infrastructure.md) |
 
 Both take the split name as their one positional arg (default `train`), and
 read `HURDAT2_PATH` / `CACHE_DIR` / `MAX_WORKERS` from the environment if you

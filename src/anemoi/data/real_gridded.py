@@ -18,10 +18,17 @@ actually publicly available for each, not a design preference:
   the full ~450 MB file -- the most performant path available for *this*
   source, even though it is a different format from ERA5's.
 
-Optional extra: ``uv sync --extra gridded``. All pure-Python wheels
-(``eccodes``/``eccodeslib`` ship prebuilt binaries for common platforms) --
-no system ``eccodes`` install (e.g. ``brew install eccodes``) required,
-unlike a typical ``cfgrib`` setup.
+Optional extra: ``uv sync --extra gridded``. Corrects an earlier, wrong
+assumption here: the PyPI ``eccodes`` package is pure-Python *bindings*
+only -- it does not bundle the compiled ``libeccodes`` library the way this
+docstring used to claim. Verified two ways: on macOS it fails with
+``RuntimeError: Cannot find the ecCodes library`` (not even
+``ModuleNotFoundError`` -- see ``require_era5_deps``'s docstring); on the
+Ubuntu 22.04 GCP training VM (``docs/train_infrastructure.md``) the same
+failure occurred until ``sudo apt-get install libeccodes0`` provided the
+actual ``.so``. A real system install is required on Linux; ``brew install
+eccodes`` on macOS (untested here, since ``era5_cache`` doesn't need it and
+this project's GDAS work runs on the Linux VM).
 
 **Neither source carries SST or OHC at these levels.** ERA5's store does
 have ``sea_surface_temperature``, used here. GDAS's atmospheric ``pgrb2``
