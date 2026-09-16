@@ -59,6 +59,9 @@ shedding), `inference/cycle` (execution, degraded modes),
 
 **Layer 7 — models.** Seven PyTorch builders, all returning `(module, spec)`.
 `training/device` picks MPS/CUDA/CPU for local (non-cloud) runs.
+`training/capacity_ablation` and `training/noise_sensitivity` are diagnostic
+harnesses built on the same LSTM-proxy methodology (see `docs/`), not
+production training code.
 
 ---
 
@@ -166,14 +169,26 @@ publishes the 48h figure, and extrapolating a lead-time curve from one
 verified point would be fabricating precision. Pull the full lead-time
 breakdown from the spring Verification Report before touching those.
 
-**Noise-emulator recalibration is a prerequisite, not a refinement.** Emanuel and
-Zhang (2016) find intensity error growth over the first few days is dominated by
-initial-intensity error — exactly what `emulate_working_fix()` perturbs, at
-exactly the leads the promotion gates score. The scope's 5 kt / 3 mb defaults are
-roughly half the published estimates (Torn and Snyder 2012), and the real error
-is intensity-dependent, which the scalar-RMS emulator cannot express.
-`WorkingTrackNoise.from_literature()` exists to measure the sensitivity before
-real paired data arrives.
+**Noise-emulator recalibration — measured, not load-bearing at this
+precision.** Emanuel and Zhang (2016) find intensity error growth over the
+first few days is dominated by initial-intensity error — exactly what
+`emulate_working_fix()` perturbs, at exactly the leads the promotion gates
+score. The scope's 5 kt / 3 mb defaults are roughly half the published
+estimates (Torn and Snyder 2012), and the real error is intensity-dependent,
+which the scalar-RMS emulator cannot express.
+`training.noise_sensitivity.run_noise_sensitivity()` measured the sensitivity
+on real HURDAT2 data (same LSTM-proxy methodology as the capacity ablation,
+§ above): training a fixed architecture on default- vs. literature-noise
+emulated inputs, evaluated against a fixed literature-noise validation set,
+moves validation loss by **+0.21%** — not load-bearing at a 5% threshold.
+Full results, method and the per-dimension robustness check in
+`docs/noise_sensitivity.md`. **Decision: recalibration can reasonably wait**
+for real paired working/final data (#17-scale) rather than being treated as
+a Stage B blocker. The structural gap remains open regardless: both noise
+candidates are a single scalar RMS, while the literature's own numbers are
+intensity-*dependent* — representing that (e.g. `WorkingTrackNoise` keyed on
+category rather than one constant) is a `besttrack` change that needs real
+paired data to fit against, tracked as a follow-up, not attempted here.
 
 **Two structural gaps in the feature set, both intensity-side — minimum-viable
 versions closed.** Inner-core moisture (Emanuel and Zhang 2017 find it matters
@@ -234,3 +249,4 @@ path in production.
 | `test_models.py` | Architecture shapes and latent contracts (needs torch) |
 | `test_device.py` | MPS/CUDA/CPU selection priority; torch.compile skip on MPS (needs torch) |
 | `test_capacity_ablation.py` | Sample-building (storm-relative + augmentation); go/no-go logic; end-to-end training grid (needs torch) |
+| `test_noise_sensitivity.py` | Load-bearing/not-load-bearing logic; end-to-end default-vs-literature noise comparison (needs torch) |
