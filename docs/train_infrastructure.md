@@ -204,26 +204,37 @@ LSTM baseline against a real HURDAT2 file. It's the first of the five Group
 1 models with a real runner -- and deliberately the first one attempted,
 because `models.lstm.build_lstm`'s input is storm-history sequences, not
 gridded imagery: this model never reads ERA5/GDAS pixels, so it needs no
-gridded-field cache to train for real, only real tracks. GNN (graph
-construction) and PINN (environment vector + a base model's candidate
-track) each need their own real data-loading design against the cached
-`GriddedFields` this doc's earlier sections built -- not yet started.
+gridded-field cache to train for real, only real tracks. PINN (environment
+vector + a base model's candidate track to correct) needs its own real
+data-loading design against the cached `GriddedFields` this doc's earlier
+sections built -- not yet started.
 
-CNN and Transformer have real runners too
+CNN, Transformer and GNN have real runners too
 (`training.real_run_cnn.run_cnn_curriculum` / `real_run_transformer.
-run_transformer_curriculum`, `anemoi train --model cnn|transformer`,
-`slurm/train_cnn.sbatch` / `train_transformer.sbatch`): real GOES imagery
-isn't fetched yet (PLAN.md's Satellite row), but both architectures just
-consume a multi-channel 2-D image, so they read the real cached
-`GriddedFields` (all 10 fields) as their channel stack instead of waiting
-on real satellite imagery. Reads from `--era5-cache-dir`/`--gdas-cache-dir`
-(the same dirs `era5-cache`/`gdas-cache` fetch into); a fix with no cached
-file yet is skipped, not an error, so both train on however much is cached
-at the moment invoked and improve as the ingest jobs fill in more.
-Transformer additionally needs an exact grid size (its patch embedding is
-not resolution-agnostic like CNN's global-average-pool encoder is) -- the
-real cached crop is 41x41 (`box_deg=10.0` at 0.25 deg resolution), trimmed
-to 40x40 (the architecture's own default, divisible by its patch size).
+run_transformer_curriculum` / `real_run_gnn.run_gnn_curriculum`, `anemoi
+train --model cnn|transformer|gnn`, `slurm/train_cnn.sbatch` /
+`train_transformer.sbatch` / `train_gnn.sbatch`): real GOES imagery and
+real station/buoy networks aren't fetched yet (PLAN.md's Satellite row;
+`ndbc`/`dropsonde`/`microwave` aren't fetched for real either), but all
+three architectures just need *some* multi-channel spatial input, so they
+read the real cached `GriddedFields` (all 10 fields) instead of waiting on
+those. Reads from `--era5-cache-dir`/`--gdas-cache-dir` (the same dirs
+`era5-cache`/`gdas-cache` fetch into); a fix with no cached file yet is
+skipped, not an error, so all three train on however much is cached at the
+moment invoked and improve as the ingest jobs fill in more.
+
+- Transformer needs an exact grid size (its patch embedding is not
+  resolution-agnostic like CNN's global-average-pool encoder is) -- the
+  real cached crop is 41x41 (`box_deg=10.0` at 0.25 deg resolution),
+  trimmed to 40x40 (the architecture's own default, divisible by its patch
+  size).
+- GNN treats the cached grid as a lattice mesh: cells subsampled every 4
+  in each direction become nodes (10 field values + row/col offset from
+  centre -- 12 features, matching `build_gnn`'s own default exactly),
+  4-connectivity gives the edges (3 features: d_row, d_col, distance,
+  again matching the default exactly). Samples are batched the standard
+  block-diagonal way (`real_run_gnn.batch_graph`) rather than one graph at
+  a time.
 
 What it actually does, end to end:
 
@@ -251,10 +262,11 @@ curl -o ~/hurdat2-atl.txt https://www.nhc.noaa.gov/data/hurdat/hurdat2-atl-1851-
 slurm/run_local.sh slurm/train_lstm.sbatch
 tmux attach -t train-lstm-<id>
 
-# CNN / Transformer -- benefit from era5_cache/gdas_cache having fetched
-# data first, but work with whatever's cached so far:
+# CNN / Transformer / GNN -- benefit from era5_cache/gdas_cache having
+# fetched data first, but work with whatever's cached so far:
 slurm/run_local.sh slurm/train_cnn.sbatch
 slurm/run_local.sh slurm/train_transformer.sbatch
+slurm/run_local.sh slurm/train_gnn.sbatch
 ```
 
 Needs `torch` and `storage` extras (`uv sync --all-extras` already covers
