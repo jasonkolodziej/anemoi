@@ -8,10 +8,14 @@ import pytest
 from anemoi.data.features import (
     FEATURE_NAMES,
     FlavorMismatchError,
+    GriddedFields,
     Normalizer,
+    apply_cold_wake,
     assert_flavor,
+    cold_wake_sst_depression_c,
     compute_environment_features,
     deep_layer_shear,
+    inner_core_moisture,
 )
 from anemoi.data.sources import Flavor
 from anemoi.data.splits import (
@@ -78,6 +82,65 @@ def test_potential_intensity_falls_as_shear_rises():
         generate_fields(T, Flavor.ERA5_PRETRAIN, seed=0, shear_kt=45.0)
     )
     assert sheared["potential_intensity_kt"] < warm["potential_intensity_kt"]
+
+
+def _radial_gradient_fields(*, center_rh: float, edge_rh: float, shape=(41, 41)) -> GriddedFields:
+    """A GriddedFields with a clean (noise-free) radial rh700 gradient, so
+    inner-core vs. environmental sampling can be compared deterministically."""
+    nlat, nlon = shape
+    y, x = np.mgrid[0:nlat, 0:nlon]
+    cy, cx = nlat / 2.0, nlon / 2.0
+    r = np.clip(np.hypot(y - cy, x - cx) / max(cy, 1.0), 0.0, 1.0)
+    rh700 = center_rh + (edge_rh - center_rh) * r
+    flat = np.full(shape, 1.0)
+    return GriddedFields(
+        valid_time=T,
+        flavor=Flavor.ERA5_PRETRAIN,
+        u200=flat, v200=flat, u850=flat, v850=flat, z500=flat,
+        rh700=rh700, t700=flat, mslp=flat,
+        sst=np.full(shape, 28.0), ohc=np.full(shape, 60.0),
+    )
+
+
+def test_inner_core_moisture_reflects_the_core_not_the_environment():
+    """rh700_pct (large box) and the new inner-core feature (small box) must
+    diverge when the storm has a real inner-core-vs-environment gradient --
+    otherwise the inner-core feature is redundant with the environmental one."""
+    fields = _radial_gradient_fields(center_rh=90.0, edge_rh=40.0)
+    fs = compute_environment_features(fields)
+    assert fs["rh700_inner_core_pct"] > fs["rh700_pct"]
+    assert fs["rh700_inner_core_pct"] == pytest.approx(inner_core_moisture(fields))
+
+
+def test_cold_wake_depression_grows_with_wind_and_shrinks_with_translation_speed():
+    weak_fast = cold_wake_sst_depression_c(max_wind_kt=50.0, translation_speed_kt=15.0)
+    strong_fast = cold_wake_sst_depression_c(max_wind_kt=130.0, translation_speed_kt=15.0)
+    strong_slow = cold_wake_sst_depression_c(max_wind_kt=130.0, translation_speed_kt=3.0)
+    assert 0.0 < weak_fast < strong_fast < strong_slow
+    assert strong_slow <= 6.0  # clamped to the documented extreme-case ceiling
+
+
+def test_cold_wake_is_a_noop_for_zero_wind():
+    assert cold_wake_sst_depression_c(max_wind_kt=0.0, translation_speed_kt=10.0) == 0.0
+
+
+def test_apply_cold_wake_depresses_sst_and_ohc_without_touching_other_fields():
+    fields = generate_fields(T, Flavor.ERA5_PRETRAIN, seed=0)
+    waked = apply_cold_wake(fields, max_wind_kt=120.0, translation_speed_kt=4.0)
+
+    assert np.mean(waked.sst) < np.mean(fields.sst)
+    assert np.mean(waked.ohc) < np.mean(fields.ohc)
+    assert waked.valid_time == fields.valid_time
+    assert waked.flavor == fields.flavor
+    np.testing.assert_array_equal(waked.u850, fields.u850)
+    np.testing.assert_array_equal(waked.rh700, fields.rh700)
+
+
+def test_apply_cold_wake_is_a_noop_for_a_calm_storm():
+    fields = generate_fields(T, Flavor.ERA5_PRETRAIN, seed=0)
+    waked = apply_cold_wake(fields, max_wind_kt=0.0, translation_speed_kt=10.0)
+    np.testing.assert_array_equal(waked.sst, fields.sst)
+    np.testing.assert_array_equal(waked.ohc, fields.ohc)
 
 
 def test_normalizer_refuses_to_fit_across_flavors():

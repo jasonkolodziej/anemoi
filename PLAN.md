@@ -147,11 +147,17 @@ is intensity-dependent, which the scalar-RMS emulator cannot express.
 `WorkingTrackNoise.from_literature()` exists to measure the sensitivity before
 real paired data arrives.
 
-**Two structural gaps in the feature set, both intensity-side.** No inner-core
-moisture (Emanuel and Zhang 2017 find it matters as much as the wind field;
-`rh700_pct` is an environmental area mean). No ocean feedback — SST and OHC are
-static daily values persisted from the previous day, so a storm's own cold wake,
-a first-order limit on its own intensification, is nowhere in the system.
+**Two structural gaps in the feature set, both intensity-side — minimum-viable
+versions closed.** Inner-core moisture (Emanuel and Zhang 2017 find it matters
+as much as the wind field) now has `rh700_inner_core_pct`, sampling the same
+700 mb field over a tight inner radius rather than the large environmental box
+`rh700_pct` uses. Ocean feedback — SST/OHC were static daily values persisted
+from the previous day, so a storm's own cold wake was nowhere in the system —
+now has `features.apply_cold_wake()`, an empirical SST/OHC depression from the
+storm's own wind and translation speed, applied to `GriddedFields` before
+feature computation. Neither is the full treatment: a dedicated higher-resolution
+inner-core product (satellite; see the productionization table) and real
+two-way atmosphere-ocean coupling both remain further, larger work.
 
 **Track and intensity thresholds should not share a table.** Intensity skill has
 improved far more slowly than track skill, so a beat rate on intensity is a claim
@@ -187,7 +193,7 @@ path in production.
 | `test_skew.py` | ERA5T audit; alert thresholds; windowing |
 | `test_drift.py` | Feature drift; reference flavor; validation-loss trigger |
 | `test_metrics.py` | Track/intensity errors; beat rate; DM test; CRPS; spread-skill |
-| `test_features_splits.py` | Dual-flavor parity; flavor guards; split leakage |
+| `test_features_splits.py` | Dual-flavor parity; flavor guards; split leakage; inner-core moisture; cold wake |
 | `test_cycle.py` | End-to-end cycle; every degraded mode; extrapolation |
 | `test_postprocess.py` | Cone construction and fallback; PDF; landfall; RI |
 | `test_tags.py` | Tag validation; v2.1 additions |
