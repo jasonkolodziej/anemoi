@@ -57,9 +57,9 @@ body:
     id: parent-plan-section
     attributes:
       label: Parent Plan Section
-      # description: "The specific section in PLAN.md this issue belongs to (maps to project field: Area). Valid values: Layer 1 — Time & Geometry; Layer 2 — Data Contracts; Layer 3 — Training Policy; Layer 4 — Tracking; Layer 5 — Inference; Layer 6 — Monitoring & Metrics; Layer 7 — Models; UI / UX; Infrastructure; Documentation."
       description: |
         The specific section in PLAN.md this issue belongs to (maps to project field: Area).
+
         Valid values:
         - Layer 1 — Time & Geometry
         - Layer 2 — Data Contracts
