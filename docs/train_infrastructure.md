@@ -73,11 +73,46 @@ the `S3_ARTIFACT_*` variables.
 ## On the VM
 
 ```bash
-git clone <repo-url> anemoi && cd anemoi
-uv sync --extra torch --extra gridded --extra storage
-cp example.env .env   # fill in the real R2 credentials, not committed
+curl -LsSf https://astral.sh/uv/install.sh | sh && source $HOME/.local/bin/env
+git clone https://github.com/jasonkolodziej/anemoi.git anemoi && cd anemoi
+uv sync --all-extras
 ```
 
-Then run the real ERA5 fetch / Stage A data assembly and
-`training.orchestrator`'s parallel mode from there rather than from a home
-connection -- that's the entire reason this VM is co-located with the data.
+Copy `.env` over from a local machine rather than retyping R2 credentials
+(goes through the encrypted SSH tunnel, never printed):
+
+```bash
+gcloud compute scp .env anemoi-train-1:~/anemoi/.env --project=anemoi-training --zone=us-central1-a
+```
+
+Verified on the real VM (2026-09-16): `uv run pytest` -- 390 passed, 3
+skipped; a real R2 checkpoint upload/download round-trip; real ERA5 fetch at
+**~6.7-9s/sample**, down from ~13-15s from a home connection but a more
+modest improvement than pure network-latency co-location would suggest --
+a good chunk of the ~13s cost is ARCO-ERA5 chunk decompression, which
+doesn't change with location.
+
+## Real ERA5 fetch/cache (#22 Stage A)
+
+`data.era5_cache` (`anemoi era5-cache` CLI) fetches concurrently and caches
+to local disk -- see its module docstring for why, and the resumability
+design (`skip_existing=True` by default). At ~16,474 train-split fixes and
+a modest 6.7-9s/sample even from this VM, that's still tens of hours
+sequential; concurrency is what makes it practical. Run as a background
+`tmux` session so it survives SSH disconnects (a Spot preemption kills it
+regardless -- re-running the same command resumes from whatever's already
+cached):
+
+```bash
+tmux new-session -d -s era5fetch \
+  'source $HOME/.local/bin/env && cd anemoi && \
+   uv run anemoi era5-cache --hurdat2 <path-to-hurdat2-file> \
+     --cache-dir ~/era5_cache --split train --max-workers 8 \
+     2>&1 | tee -a era5_fetch.log'
+
+tmux attach -t era5fetch   # reattach to watch progress
+tmux ls                    # confirm it's running after disconnecting
+```
+
+The HURDAT2 archive file itself isn't in the repo (6.7MB, not committed) --
+fetch it directly on the VM: `curl -O https://www.nhc.noaa.gov/data/hurdat/hurdat2-atl-1851-2023-042624.txt`.

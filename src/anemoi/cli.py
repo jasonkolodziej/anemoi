@@ -117,6 +117,38 @@ def cmd_ablation(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_era5_cache(args: argparse.Namespace) -> int:
+    """Concurrently fetch and locally cache real ERA5 GriddedFields for one
+    data.splits split, from a real HURDAT2 file. Needs the gridded extra
+    (uv sync --extra gridded). See docs/train_infrastructure.md.
+    """
+    from .data.era5_cache import run_fetch_cache
+    from .data.hurdat2 import parse_hurdat2_file
+    from .data.splits import Split, assign_splits, filter_tracks
+
+    tracks = parse_hurdat2_file(args.hurdat2)
+    assignment = assign_splits(tracks)
+    split_tracks = filter_tracks(tracks, assignment, Split(args.split))
+    print(f"{args.split}: {len(split_tracks)} storms, "
+          f"{sum(len(t.fixes) for t in split_tracks)} fixes")
+
+    report = run_fetch_cache(
+        split_tracks,
+        args.cache_dir,
+        box_deg=args.box_deg,
+        max_workers=args.max_workers,
+        skip_existing=not args.force,
+        progress_every=args.progress_every,
+    )
+    print(
+        f"done: {report.n_fetched} fetched, {report.n_skipped} skipped, "
+        f"{report.n_failed} failed, {report.elapsed_s:.0f}s"
+    )
+    for task, error in report.failures[:20]:
+        print(f"  FAILED {task.storm_id} {task.valid_time}: {error}")
+    return 1 if report.n_failed else 0
+
+
 def cmd_splits(args: argparse.Namespace) -> int:
     tracks = generate_archive(args.start, args.end, seed=args.seed)
     assignment = assign_splits(tracks)
@@ -169,6 +201,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--seed", type=int, default=20260806)
     p.set_defaults(func=cmd_ablation)
+
+    p = sub.add_parser("era5-cache", help="fetch+cache real ERA5 fields for a data.splits split")
+    p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
+    p.add_argument("--cache-dir", dest="cache_dir", required=True, help="local dir to cache into")
+    p.add_argument("--split", default="train", choices=["train", "val", "test", "operational"])
+    p.add_argument("--box-deg", dest="box_deg", type=float, default=10.0)
+    p.add_argument("--max-workers", dest="max_workers", type=int, default=8)
+    p.add_argument("--force", action="store_true", help="refetch even if already cached")
+    p.add_argument("--progress-every", dest="progress_every", type=int, default=50)
+    p.set_defaults(func=cmd_era5_cache)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

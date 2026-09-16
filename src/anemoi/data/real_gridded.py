@@ -166,17 +166,31 @@ ERA5_ZARR_PATH = "gs://gcp-public-data-arco-era5/ar/full_37-1h-0p25deg-chunk-1.z
 STANDARD_GRAVITY_M_S2 = 9.80665
 
 
-def open_era5(valid_time: datetime) -> Any:
-    """Open the ARCO-ERA5 Zarr store and select one synoptic time.
+def open_era5_store() -> Any:
+    """Open the ARCO-ERA5 Zarr store itself, with no time selection.
 
     Network call against a public, anonymous-access Google Cloud Storage
-    bucket -- no account, no API key, no rate limit. Returns an
-    ``xarray.Dataset`` (import deferred; requires the ``gridded`` extra).
+    bucket -- no account, no API key, no rate limit. Opening the store costs
+    ~1-2s (metadata read); reuse the returned handle across many
+    :func:`open_era5` calls (e.g. via its ``store`` argument) rather than
+    reopening it per sample -- see ``data.era5_cache``, which fetches
+    thousands of samples and shares one store handle across worker threads.
     """
     require_era5_deps()
     import xarray as xr  # noqa: PLC0415
 
-    ds = xr.open_zarr(ERA5_ZARR_PATH, chunks=None, storage_options={"token": "anon"})
+    return xr.open_zarr(ERA5_ZARR_PATH, chunks=None, storage_options={"token": "anon"})
+
+
+def open_era5(valid_time: datetime, store: Any = None) -> Any:
+    """Select one synoptic time from the ARCO-ERA5 store.
+
+    ``store`` may be a Dataset from :func:`open_era5_store`, to avoid
+    reopening the store on every call; if omitted, opens a fresh one (this
+    is the original, backward-compatible single-sample behaviour). Returns
+    an ``xarray.Dataset`` (import deferred; requires the ``gridded`` extra).
+    """
+    ds = store if store is not None else open_era5_store()
     return ds.sel(time=np.datetime64(valid_time.replace(tzinfo=None)))
 
 
