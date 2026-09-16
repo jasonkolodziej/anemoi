@@ -19,6 +19,18 @@ A clear description of what you'd like to happen.
 
 Describe any alternative solutions or features you've considered.
 
+## Traceability
+
+- Source plan: [PLAN.md](../../PLAN.md)
+- Parent plan section: [e.g. "Layer 3 — training policy"]
+- Related project item: [link to project board item]
+- Acceptance criteria:
+  - [ ]
+- Depends on:
+  - [ ]
+- Blocks:
+  - [ ]
+
 ## Additional Context
 
 Any mockups, references, related issues, or other context.

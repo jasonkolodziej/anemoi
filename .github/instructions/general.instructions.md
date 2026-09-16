@@ -34,3 +34,13 @@ Example: `"Missing required environment variable DATABASE_URL — set it in .env
 - Avoid restating what the code does — explain _why_ non-obvious decisions were made.
 - Use `TODO(username):` and `FIXME(username):` prefixes for outstanding work items.
 - Keep comments up to date when code changes.
+
+## Wiki Synchronization Rule
+
+- The wiki is the canonical source of truth for architecture, scope, invariants, and operating assumptions.
+- Before making changes to code, configuration, workflows, or project planning, read the relevant wiki pages first.
+- If the code and wiki disagree, treat the wiki as the design source of truth unless the user explicitly requests a different behavior.
+- Any substantive change must be accompanied by a matching wiki update when architecture, system boundaries, operational behavior, or user-facing workflows change.
+- If a feature or workflow is not documented in the wiki, add or update the relevant wiki page in the same change.
+- Do not leave documentation drift behind: code, plan, and wiki must stay aligned.
+- When unsure, say which wiki page you are checking and which code path you are validating before proceeding.

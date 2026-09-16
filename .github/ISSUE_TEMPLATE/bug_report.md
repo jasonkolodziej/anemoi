@@ -30,6 +30,18 @@ What actually happened. Include error messages, stack traces, or screenshots whe
 - Language / runtime version: [e.g., Node.js 20.x, Python 3.12]
 - Relevant dependency versions:
 
+## Traceability
+
+- Source plan: [PLAN.md](../../PLAN.md)
+- Parent plan section: [e.g. "Layer 2 — data contracts"]
+- Related project item: [link to project board item]
+- Acceptance criteria:
+  - [ ]
+- Depends on:
+  - [ ]
+- Blocks:
+  - [ ]
+
 ## Additional Context
 
 Any other context about the problem.
