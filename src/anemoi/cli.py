@@ -218,32 +218,44 @@ def cmd_gdas_cache(args: argparse.Namespace) -> int:
 def cmd_train(args: argparse.Namespace) -> int:
     """Run a real Stage A/B curriculum against a real HURDAT2 file (#22).
 
-    Only 'lstm' has a real runner so far (data.real_run.run_lstm_curriculum)
-    -- it's the one Group 1 model whose input is storm-history sequences,
-    not gridded imagery, so it needs no ERA5/GDAS cache to train for real.
     Needs the torch and storage extras (uv sync --extra torch --extra
     storage) and real R2/S3 credentials (S3_ARTIFACT_* in .env) -- every
     stage's checkpoint is uploaded durably, not just left on local disk.
+
+    'lstm' needs no gridded-field cache (its input is storm-history
+    sequences, not pixels). 'cnn' reads real cached GriddedFields from
+    --era5-cache-dir/--gdas-cache-dir (data.era5_cache/data.gdas_cache's
+    own --cache-dir) as its channel stack -- see training.real_run_cnn's
+    module docstring for why. transformer/gnn/pinn have no real runner yet.
     """
     from .data.hurdat2 import parse_hurdat2_file
     from .data.sources import Flavor
     from .tracking.checkpoint_store import CheckpointStore, S3Config
     from .tracking.registry import ModelRegistry
     from .training.promotion import MetricSet, evaluate_promotion
-    from .training.real_run import run_lstm_curriculum
-
-    if args.model != "lstm":
-        print(
-            f"only 'lstm' has a real training runner so far; got {args.model!r} -- "
-            "see cmd_train's docstring",
-        )
-        return 1
 
     tracks = parse_hurdat2_file(args.hurdat2)
     store = CheckpointStore(S3Config.from_env())
-    run, val_metrics = run_lstm_curriculum(
-        tracks, store, seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
-    )
+
+    if args.model == "lstm":
+        from .training.real_run import run_lstm_curriculum
+
+        run, val_metrics = run_lstm_curriculum(
+            tracks, store, seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
+        )
+    elif args.model == "cnn":
+        from .training.real_run_cnn import run_cnn_curriculum
+
+        if not args.era5_cache_dir or not args.gdas_cache_dir:
+            print("cnn needs --era5-cache-dir and --gdas-cache-dir")
+            return 1
+        run, val_metrics = run_cnn_curriculum(
+            tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
+            seed=args.seed, n_augment=args.n_augment,
+        )
+    else:
+        print(f"no real training runner yet for {args.model!r} -- see cmd_train's docstring")
+        return 1
 
     print(f"curriculum complete: {[r.stage_name for r in run.results]}")
     for r in run.results:
@@ -255,21 +267,23 @@ def cmd_train(args: argparse.Namespace) -> int:
         print(f"  {key}: {val_metrics.values[key]:.3f}")
 
     registry = ModelRegistry(args.registry_root)
-    existing = registry.versions("lstm")
+    existing = registry.versions(args.model)
     incumbent_metrics = (
         MetricSet(split="val", flavor=existing[-1].input_flavor, values=existing[-1].metrics)
         if existing
         else None
     )
     version = registry.register(
-        "lstm",
+        args.model,
         run_id=f"cli-{datetime.now(UTC):%Y%m%dT%H%M%S}",
         input_flavor=Flavor.GDAS_FINETUNE,
         metrics=val_metrics.values,
     )
-    print(f"registered lstm v{version.version} in {args.registry_root}")
+    print(f"registered {args.model} v{version.version} in {args.registry_root}")
 
-    decision = evaluate_promotion("lstm", run, val_metrics, incumbent_val_metrics=incumbent_metrics)
+    decision = evaluate_promotion(
+        args.model, run, val_metrics, incumbent_val_metrics=incumbent_metrics
+    )
     print(
         f"promotion: staging={decision.promote_to_staging} "
         f"production={decision.promote_to_production}"
@@ -357,11 +371,19 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_gdas_cache)
 
     p = sub.add_parser("train", help="run a real Stage A/B curriculum (#22)")
-    p.add_argument("--model", default="lstm", choices=["lstm"])
+    p.add_argument("--model", default="lstm", choices=["lstm", "cnn"])
     p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
     p.add_argument("--seed", type=int, default=20260806)
     p.add_argument("--n-augment", dest="n_augment", type=int, default=3)
-    p.add_argument("--hidden-dim", dest="hidden_dim", type=int, default=128)
+    p.add_argument("--hidden-dim", dest="hidden_dim", type=int, default=128, help="lstm only")
+    p.add_argument(
+        "--era5-cache-dir", dest="era5_cache_dir", default=None,
+        help="cnn only: data.era5_cache's --cache-dir",
+    )
+    p.add_argument(
+        "--gdas-cache-dir", dest="gdas_cache_dir", default=None,
+        help="cnn only: data.gdas_cache's --cache-dir",
+    )
     p.add_argument(
         "--registry-root", dest="registry_root",
         default=str(Path.home() / ".anemoi" / "registry"),

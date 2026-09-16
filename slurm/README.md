@@ -46,6 +46,7 @@ needing checkpoint/restart logic in the launcher itself.
 | `era5_cache.sbatch` | Fetch+cache real ERA5 (`data.era5_cache`) for one `data.splits` split | `gridded` extra (xarray/zarr/gcsfs) |
 | `gdas_cache.sbatch` | Fetch+cache real GDAS (`data.gdas_cache`), the Stage B analog | `gridded` extra, plus `sudo apt-get install libeccodes0` -- `pip install eccodes` alone is bindings only, not the compiled library (docs/train_infrastructure.md) |
 | `train_lstm.sbatch` | Real Stage A -> Stage B curriculum for the LSTM baseline (`training.real_run`, #22) -- a GPU job, unlike the two ingest jobs above | `torch` + `storage` extras, real R2 credentials (`S3_ARTIFACT_*` in `.env`) -- every stage's checkpoint uploads durably |
+| `train_cnn.sbatch` | Real Stage A -> Stage B curriculum for the CNN baseline (`training.real_run_cnn`, #22) -- reads real cached GriddedFields as its channel stack, so it benefits from `era5_cache.sbatch`/`gdas_cache.sbatch` having fetched data first (works with whatever's cached so far, not all-or-nothing) | Same as `train_lstm.sbatch`, plus `ERA5_CACHE_DIR`/`GDAS_CACHE_DIR` pointing at the ingest jobs' cache dirs |
 
 The two cache scripts take the split name as their one positional arg
 (default `train`), and read `HURDAT2_PATH` / `CACHE_DIR` / `MAX_WORKERS`

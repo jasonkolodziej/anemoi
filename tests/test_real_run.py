@@ -194,12 +194,12 @@ def test_train_lstm_stage_reduces_loss_over_epochs():
 
 
 @pytest.mark.torch
-def test_freeze_encoder_leaves_only_head_trainable():
+def testfreeze_encoder_leaves_only_head_trainable():
     from anemoi.models.lstm import build_lstm
-    from anemoi.training.real_run import _freeze_encoder
+    from anemoi.training.real_run import freeze_encoder
 
     model, _spec = build_lstm(input_dim=5, hidden_dim=8, lead_hours=(12,))
-    _freeze_encoder(model, ("encoder",))
+    freeze_encoder(model, ("encoder",))
     for name, param in model.named_parameters():
         if name.startswith("head."):
             assert param.requires_grad
@@ -208,12 +208,12 @@ def test_freeze_encoder_leaves_only_head_trainable():
 
 
 @pytest.mark.torch
-def test_freeze_encoder_is_a_noop_without_encoder_in_frozen_modules():
+def testfreeze_encoder_is_a_noop_without_encoder_in_frozen_modules():
     from anemoi.models.lstm import build_lstm
-    from anemoi.training.real_run import _freeze_encoder
+    from anemoi.training.real_run import freeze_encoder
 
     model, _spec = build_lstm(input_dim=5, hidden_dim=8, lead_hours=(12,))
-    _freeze_encoder(model, ())
+    freeze_encoder(model, ())
     assert all(p.requires_grad for p in model.parameters())
 
 

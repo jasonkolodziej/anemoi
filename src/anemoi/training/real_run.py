@@ -100,6 +100,65 @@ class StageSamples:
         return len(self.x)
 
 
+@dataclass(frozen=True, slots=True)
+class StageWindow:
+    """One training window's track-derived pieces, common to every model's
+    real Stage A/B runner regardless of what ``x`` representation (track
+    sequence, gridded channel stack, graph, environment vector...) gets
+    built from it.
+
+    ``window`` is ``SEQUENCE_LENGTH + 1`` working-quality fixes ending at
+    ``current``; ``y``/``mask`` are the same masked multi-lead targets
+    `build_stage_samples` (LSTM) uses, described there.
+    """
+
+    storm_id: str
+    window: tuple
+    current: object
+    y: np.ndarray
+    mask: np.ndarray
+
+
+def iter_stage_windows(
+    tracks: list[Track],
+    rng: np.random.Generator,
+    n_augment: int = 1,
+    noise: WorkingTrackNoise | None = None,
+):
+    """Yield one `StageWindow` per (storm, augmented working-track, window)
+    triple -- the shared windowing/target-construction loop every real
+    per-model sample builder (LSTM's `build_stage_samples`, and the
+    CNN/Transformer/GNN/PINN builders alongside it) is built on, so the
+    "which fixes form a window, which leads are real" logic exists once.
+    """
+    n_leads = len(LEAD_STEPS)
+    for final in tracks:
+        if len(final.fixes) < SEQUENCE_LENGTH + 1 + LEAD_STEPS[0]:
+            continue
+        for working in augment_track(final, rng, n_variants=n_augment, noise=noise):
+            for i in range(len(working.fixes) - SEQUENCE_LENGTH):
+                window = working.fixes[i : i + SEQUENCE_LENGTH + 1]
+                current = window[-1]
+                current_idx = i + SEQUENCE_LENGTH
+
+                y = np.zeros((n_leads, 3))
+                mask = np.zeros(n_leads, dtype=bool)
+                for li, step in enumerate(LEAD_STEPS):
+                    target_idx = current_idx + step
+                    if target_idx >= len(final.fixes):
+                        continue
+                    target = final.fixes[target_idx]
+                    dx, dy = displacement_nm(current, target)
+                    y[li] = [dx, dy, target.max_wind_kt]
+                    mask[li] = True
+
+                if not mask.any():
+                    continue
+                yield StageWindow(
+                    storm_id=final.storm_id, window=window, current=current, y=y, mask=mask
+                )
+
+
 def build_stage_samples(
     tracks: list[Track],
     rng: np.random.Generator,
@@ -119,34 +178,12 @@ def build_stage_samples(
     base_lat_rows: list[float] = []
     base_lon_rows: list[float] = []
 
-    for final in tracks:
-        if len(final.fixes) < SEQUENCE_LENGTH + 1 + LEAD_STEPS[0]:
-            continue
-        for working in augment_track(final, rng, n_variants=n_augment, noise=noise):
-            for i in range(len(working.fixes) - SEQUENCE_LENGTH):
-                window = working.fixes[i : i + SEQUENCE_LENGTH + 1]
-                seq = storm_relative_sequence(window)
-                current = window[-1]
-                current_idx = i + SEQUENCE_LENGTH
-
-                y = np.zeros((n_leads, 3))
-                mask = np.zeros(n_leads, dtype=bool)
-                for li, step in enumerate(LEAD_STEPS):
-                    target_idx = current_idx + step
-                    if target_idx >= len(final.fixes):
-                        continue
-                    target = final.fixes[target_idx]
-                    dx, dy = displacement_nm(current, target)
-                    y[li] = [dx, dy, target.max_wind_kt]
-                    mask[li] = True
-
-                if not mask.any():
-                    continue
-                x_rows.append(seq)
-                y_rows.append(y)
-                mask_rows.append(mask)
-                base_lat_rows.append(current.lat)
-                base_lon_rows.append(current.lon)
+    for sw in iter_stage_windows(tracks, rng, n_augment, noise):
+        x_rows.append(storm_relative_sequence(sw.window))
+        y_rows.append(sw.y)
+        mask_rows.append(sw.mask)
+        base_lat_rows.append(sw.current.lat)
+        base_lon_rows.append(sw.current.lon)
 
     if not x_rows:
         return StageSamples(
@@ -191,7 +228,7 @@ def _standardize_y(y: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, np.ndar
     return mean, std
 
 
-def _freeze_encoder(model, frozen_modules: tuple[str, ...]) -> None:
+def freeze_encoder(model, frozen_modules: tuple[str, ...]) -> None:
     """LSTM-specific: 'encoder' means every parameter outside `.head`
     (the `.rnn` + `.norm` submodules `TrackRNN.encode` uses). No
     generalised per-architecture freezing contract exists yet -- add one
@@ -240,7 +277,7 @@ def train_lstm_stage(
     y_train_z = (train_samples.y - y_mean) / y_std
     y_val_z = (val_samples.y - y_mean) / y_std  # standardised with TRAIN stats only
 
-    _freeze_encoder(model, stage.frozen_modules)
+    freeze_encoder(model, stage.frozen_modules)
     model.to(device)
 
     def masked_mse(pred, target, mask3) -> object:
