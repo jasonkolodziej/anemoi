@@ -19,6 +19,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source "$HOME/.local/bin/env" 2>/dev/null || true  # uv, if installed via astral's installer
+if [ -f .env ]; then set -a && source .env && set +a; fi  # S3_ARTIFACT_*, checkpoint upload is not optional here
 
 HURDAT2="${HURDAT2_PATH:-$HOME/hurdat2-atl.txt}"
 REGISTRY_ROOT="${REGISTRY_ROOT:-$HOME/.anemoi/registry}"
