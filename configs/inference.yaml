@@ -38,6 +38,20 @@ ensemble:
   # Below this fraction of the climatological radius at the longest lead, the
   # cone is drawn from climatology instead.
   underdispersion_fraction: 0.5
+  # NHC-style 2/3-probability circle radii (nm), current-season (2026) Atlantic
+  # basin values from https://www.nhc.noaa.gov/aboutcone.shtml (2021-2025 error
+  # statistics). Documentation only -- there is no config loader yet (see the
+  # wiki Roadmap page's "Config loader" item), so this must be kept in sync by
+  # hand with inference/postprocess.py:CLIMATOLOGICAL_CONE_NM. Re-baseline
+  # every season.
+  climatological_cone_nm:
+    12: 25
+    24: 39
+    36: 49
+    48: 62
+    72: 95
+    96: 134
+    120: 200
 
 products:
   lead_hours: [12, 24, 36, 48, 72, 96, 120]

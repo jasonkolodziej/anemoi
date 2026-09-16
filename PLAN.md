@@ -104,7 +104,7 @@ the affected model only" impossible to do accidentally.
 | Gridded fields | Synthetic, dual-flavor | GRIB2 readers for GDAS/GFS and ERA5 into `GriddedFields` |
 | Satellite | Not implemented | GOES-18/19 storm-relative crops into the CNN channel stack |
 | Potential intensity | SST/OHC/shear regression | Full Emanuel (1995) from thermodynamic soundings |
-| Cone radii | Placeholder table | Current-season NHC error percentiles |
+| Cone radii | Current-season (2026) NHC 2/3-probability radii, documented in `configs/inference.yaml` | Re-baseline each season against nhc.noaa.gov/aboutcone.shtml |
 | Appendix B thresholds | Provisional | Re-baseline against the current NHC verification report |
 | Models | Untrained | Stage A on ERA5, Stage B on GDAS, per `configs/curriculum.yaml` |
 
