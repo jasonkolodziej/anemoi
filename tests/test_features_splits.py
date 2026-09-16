@@ -24,6 +24,8 @@ from anemoi.data.features import (
 from anemoi.data.features import _saturation_vapor_pressure_hpa
 from anemoi.data.sources import Flavor
 from anemoi.data.splits import (
+    DEFAULT_BOUNDARIES,
+    STAGE_B_BOUNDARIES,
     LeakageError,
     Split,
     assert_no_leakage,
@@ -266,6 +268,33 @@ def test_overlapping_boundaries_are_rejected():
     }
     with pytest.raises(ValueError, match="overlapping"):
         assign_splits(generate_archive(2019, 2021, 3, seed=4), boundaries)
+
+
+def test_stage_b_boundaries_are_valid_and_disjoint_from_the_default_train_window():
+    """STAGE_B_BOUNDARIES exists because GDAS's real archive (2021-present)
+    has zero overlap with DEFAULT_BOUNDARIES' train window (1980-2019) --
+    assign_splits with it must not raise, and its train window must sit
+    entirely within GDAS's real-data floor."""
+    tracks = generate_archive(2021, 2025, storms_per_season=4, seed=7)
+    assignment = assign_splits(tracks, STAGE_B_BOUNDARIES)  # must not raise
+    assert_no_leakage(assignment, tracks)
+
+    train_lo, _ = STAGE_B_BOUNDARIES[Split.TRAIN]
+    default_train_lo, default_train_hi = DEFAULT_BOUNDARIES[Split.TRAIN]
+    assert train_lo > default_train_hi  # no season is real-GDAS-train under both schemes
+
+
+def test_stage_b_boundaries_assign_the_expected_split_per_season():
+    tracks = generate_archive(2021, 2025, storms_per_season=3, seed=8)
+    assignment = assign_splits(tracks, STAGE_B_BOUNDARIES)
+    for track in tracks:
+        split = assignment.of(track.storm_id)
+        if track.season <= 2022:
+            assert split is Split.TRAIN
+        elif track.season == 2023:
+            assert split is Split.VAL
+        else:
+            assert split is Split.TEST
 
 
 def test_leakage_is_detected_when_a_storm_id_repeats_across_seasons():

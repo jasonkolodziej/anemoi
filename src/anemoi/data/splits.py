@@ -37,6 +37,27 @@ DEFAULT_BOUNDARIES: dict[Split, tuple[int, int]] = {
     Split.OPERATIONAL: (2026, 2100),
 }
 
+#: Stage B (GDAS fine-tuning)'s own boundaries, scoped to GDAS's real archive
+#: window -- see ``data.gdas_cache.GDAS_ARCHIVE_START``. DEFAULT_BOUNDARIES'
+#: `train` (1980-2019) has zero overlap with real GDAS data at all, because
+#: it was set for Stage A/ERA5's decades-deep pretraining window, not Stage
+#: B's; reusing it for GDAS meant `--split train` always returned 0 real
+#: samples, discovered when `gdas-cache`'s season-range fix (#22) made that
+#: 0 explicit instead of masked by requests that 404'd anyway. `train`/`val`
+#: split 2021-2022/2023 (the only seasons with both real GDAS coverage and
+#: final best-track labels in the current HURDAT2 archive, 21/16 storms
+#: respectively); `test` (2024-2025) is intentionally seasons this archive
+#: doesn't have data for yet -- it fills in as the incremental archive
+#: (`--sync-archive`) accumulates newer seasons, rather than needing another
+#: boundary change later. `operational` matches DEFAULT_BOUNDARIES' since
+#: that range's meaning (live, not-yet-reanalysed storms) isn't stage-specific.
+STAGE_B_BOUNDARIES: dict[Split, tuple[int, int]] = {
+    Split.TRAIN: (2021, 2022),
+    Split.VAL: (2023, 2023),
+    Split.TEST: (2024, 2025),
+    Split.OPERATIONAL: (2026, 2100),
+}
+
 
 class LeakageError(RuntimeError):
     """A storm appears in more than one split, or split ordering is violated."""

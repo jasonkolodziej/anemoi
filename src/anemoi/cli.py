@@ -117,15 +117,27 @@ def cmd_ablation(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_gridded_cache(args: argparse.Namespace, run_fetch_cache, *, archive_prefix: str) -> int:
+def _cmd_gridded_cache(
+    args: argparse.Namespace,
+    run_fetch_cache,
+    *,
+    archive_prefix: str,
+    boundaries: dict | None = None,
+) -> int:
     """Shared body for cmd_era5_cache/cmd_gdas_cache -- same split-selection,
-    reporting and exit-code behaviour, different underlying fetch pipeline."""
+    reporting and exit-code behaviour, different underlying fetch pipeline.
+
+    ``boundaries`` overrides ``data.splits.DEFAULT_BOUNDARIES`` -- GDAS uses
+    ``data.splits.STAGE_B_BOUNDARIES`` instead, since GDAS's real archive
+    doesn't overlap the default `train` window at all (see that constant's
+    docstring); ERA5 keeps the default.
+    """
     from .data.gridded_cache import build_fetch_tasks
     from .data.hurdat2 import parse_hurdat2_file
     from .data.splits import Split, assign_splits, filter_tracks
 
     tracks = parse_hurdat2_file(args.hurdat2)
-    assignment = assign_splits(tracks)
+    assignment = assign_splits(tracks, boundaries=boundaries)
     split_tracks = filter_tracks(tracks, assignment, Split(args.split))
     print(f"{args.split}: {len(split_tracks)} storms, "
           f"{sum(len(t.fixes) for t in split_tracks)} fixes")
@@ -189,10 +201,17 @@ def cmd_gdas_cache(args: argparse.Namespace) -> int:
     cmd_era5_cache). Needs the gridded extra's eccodes -- which, unlike
     xarray for ERA5, has a real broken-native-library failure mode on some
     machines; see real_gridded.require_gdas_deps's docstring.
+
+    Uses data.splits.STAGE_B_BOUNDARIES, not the default train/val/test
+    boundaries -- those were set for Stage A/ERA5's 1980-2025 pretraining
+    window and have zero overlap with GDAS's real 2021-present archive.
     """
     from .data.gdas_cache import run_fetch_cache
+    from .data.splits import STAGE_B_BOUNDARIES
 
-    return _cmd_gridded_cache(args, run_fetch_cache, archive_prefix="gdas_archive")
+    return _cmd_gridded_cache(
+        args, run_fetch_cache, archive_prefix="gdas_archive", boundaries=STAGE_B_BOUNDARIES
+    )
 
 
 def cmd_splits(args: argparse.Namespace) -> int:
