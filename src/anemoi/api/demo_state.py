@@ -140,7 +140,9 @@ class DemoState:
             plan,
             fix,
             deterministic,
-            lambda det: climatological_ensemble(det, n_members=members, seed=hash(cycle) & 0xFFFF),
+            lambda det, n: climatological_ensemble(
+                det, n_members=min(members, n), seed=hash(cycle) & 0xFFFF
+            ),
             coastline=coastline,
         )
         with self._lock:

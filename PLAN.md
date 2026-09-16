@@ -166,11 +166,6 @@ distillable from an already-trained diffusion model — a graded response to tim
 pressure rather than dropping members. Evaluate before relying on the shedding
 path in production.
 
-**Load shedding is planned but not implemented downstream.** The scheduler
-selects the reduced profile and flags it, but `run_cycle` does not yet reduce
-the requested member count. Wiring `CyclePlan.load_shed` through to the ensemble
-generator is a small change and should happen before any live use.
-
 ---
 
 ## 6. Test suite map
