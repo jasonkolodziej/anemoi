@@ -1,0 +1,106 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens for the Anemoi console.
+ *
+ * The six wind-god colours (+ Fusion's neutral, + the two structural-only
+ * colours) come from the Branding Brief and are the *only* saturated hues
+ * in this system -- every other UI colour is drawn from the neutral scale
+ * plus a single interactive blue, deliberately chosen outside the god
+ * palette. If a colour identifies a model, it appears nowhere else; if a
+ * colour is UI chrome, it never appears on a track line or model badge.
+ * `lib/branding.ts` is the single source of truth these are copied from.
+ */
+@theme {
+	--font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+	--font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+	--font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+	/* Neutral scale -- the console's actual palette. Blue-slate, not pure
+	   black: warmer under long viewing, and it keeps the god colours (several
+	   of which are themselves cool) from fighting the background. */
+	--color-bg: #0a0e14;
+	--color-surface: #10161f;
+	--color-surface-raised: #161d29;
+	--color-border: #212b38;
+	--color-border-strong: #2e3b4d;
+	--color-text: #e7ecf3;
+	--color-text-muted: #8b96a8;
+	--color-text-faint: #5b6576;
+
+	/* The one interactive hue outside the god set. */
+	--color-action: #60a5fa;
+	--color-action-strong: #93c5fd;
+
+	/* Wind gods (Anemoi-Core, except Skiron/Spread) -- Branding Brief §5.2. */
+	--color-boreas: #06b6d4;
+	--color-notus: #f59e0b;
+	--color-eurus: #ef4444;
+	--color-zephyrus: #10b981;
+	--color-kaikias: #8b5cf6;
+	--color-skiron: #ec4899;
+	--color-fusion: #f8fafc;
+
+	/* Structural-only (wind-rose scaffolding). Never a model colour. */
+	--color-euronotus: #fb923c;
+	--color-lips: #a3e635;
+
+	--radius-sm: 0.25rem;
+	--radius-md: 0.375rem;
+	--radius-lg: 0.5rem;
+}
+
+@layer base {
+	* {
+		border-color: var(--color-border);
+	}
+	html {
+		color-scheme: dark;
+	}
+	body {
+		font-family: var(--font-sans);
+	}
+	::selection {
+		background: color-mix(in oklab, var(--color-action) 35%, transparent);
+	}
+	:focus-visible {
+		outline: 2px solid var(--color-action);
+		outline-offset: 2px;
+	}
+	/* Real tabular data -- coordinates, cycle labels, durations -- gets the
+	   monospace face with tabular figures. Never used for UI labels. */
+	.font-data {
+		font-family: var(--font-mono);
+		font-variant-numeric: tabular-nums;
+		font-feature-settings: 'tnum' 1;
+	}
+	@media (prefers-reduced-motion: reduce) {
+		*,
+		*::before,
+		*::after {
+			animation-duration: 0.001ms !important;
+			animation-iteration-count: 1 !important;
+			transition-duration: 0.001ms !important;
+			scroll-behavior: auto !important;
+		}
+	}
+}
+
+@keyframes cone-draw {
+	from {
+		stroke-dashoffset: var(--cone-length);
+	}
+	to {
+		stroke-dashoffset: 0;
+	}
+}
+
+@keyframes ri-pulse {
+	0%,
+	100% {
+		box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-fusion) 22%, transparent);
+	}
+	50% {
+		box-shadow: 0 0 0 6px color-mix(in oklab, var(--color-fusion) 0%, transparent);
+	}
+}
