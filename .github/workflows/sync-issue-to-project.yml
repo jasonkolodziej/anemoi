@@ -58,7 +58,7 @@ jobs:
             // ----------------------------------------------------------------
             // 1. Look up the project by owner + number
             // ----------------------------------------------------------------
-            const projectQuery = await github.graphql(`
+            const projectQueryPromise = github.graphql(`
               query($login: String!, $number: Int!) {
                 user(login: $login) {
                   projectV2(number: $number) {
@@ -112,6 +112,22 @@ jobs:
                 }
               }
             `, { login: owner, number: projectNumber });
+
+            let projectQuery;
+            try {
+              projectQuery = await projectQueryPromise;
+            } catch (err) {
+              // github.graphql() throws whenever the response has ANY errors,
+              // even if the data we actually need came back fine (e.g. the
+              // `organization` lookup fails with NOT_FOUND for a user-owned
+              // project while `user` succeeds). Fall back to the partial data
+              // the error carries rather than treating this as fatal.
+              if (err.data) {
+                projectQuery = err.data;
+              } else {
+                throw err;
+              }
+            }
 
             const project = projectQuery.user?.projectV2 ?? projectQuery.organization?.projectV2;
             if (!project) {
