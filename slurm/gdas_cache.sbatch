@@ -8,9 +8,11 @@
 # Lower default concurrency than ERA5 (4 vs 8): many fixes share the same
 # underlying GRIB2 file's byte ranges, see gdas_cache.run_fetch_cache's
 # docstring for why hammering one NOAA object harder isn't free here.
-# Needs eccodes actually working (not just installed) -- see
-# real_gridded.require_gdas_deps's docstring for a real observed failure
-# mode where it isn't, on some machines.
+# Needs the real libeccodes system library, not just `pip install eccodes`
+# (that package is pure-Python bindings only): `sudo apt-get install
+# libeccodes0` on this VM's Ubuntu 22.04 -- see docs/train_infrastructure.md
+# and real_gridded.py's module docstring for the "prebuilt binary" claim
+# this corrects.
 #
 # Real SLURM cluster:  sbatch slurm/gdas_cache.sbatch [split]
 # This VM (no scheduler): slurm/run_local.sh slurm/gdas_cache.sbatch [split]

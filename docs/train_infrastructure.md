@@ -76,7 +76,16 @@ the `S3_ARTIFACT_*` variables.
 curl -LsSf https://astral.sh/uv/install.sh | sh && source $HOME/.local/bin/env
 git clone https://github.com/jasonkolodziej/anemoi.git anemoi && cd anemoi
 uv sync --all-extras
+sudo apt-get update -qq && sudo apt-get install -y libeccodes0 tmux
 ```
+
+The `libeccodes0` system package is required for GDAS caching (Stage B):
+the PyPI `eccodes` package is pure-Python *bindings* only and does not
+bundle the compiled library, unlike this repo's earlier assumption (fixed
+after being verified wrong on both macOS and this VM -- see
+`real_gridded.py`'s module docstring). Without it, `eccodes` fails with
+`RuntimeError: Cannot find the ecCodes library` on import -- not a missing
+package, a missing native library.
 
 Copy `.env` over from a local machine rather than retyping R2 credentials
 (goes through the encrypted SSH tunnel, never printed):
@@ -85,12 +94,14 @@ Copy `.env` over from a local machine rather than retyping R2 credentials
 gcloud compute scp .env anemoi-train-1:~/anemoi/.env --project=anemoi-training --zone=us-central1-a
 ```
 
-Verified on the real VM (2026-09-16): `uv run pytest` -- 390 passed, 3
+Verified on the real VM (2026-09-16): `uv run pytest` -- 405 passed, 4
 skipped; a real R2 checkpoint upload/download round-trip; real ERA5 fetch at
 **~6.7-9s/sample**, down from ~13-15s from a home connection but a more
 modest improvement than pure network-latency co-location would suggest --
 a good chunk of the ~13s cost is ARCO-ERA5 chunk decompression, which
-doesn't change with location.
+doesn't change with location; `eccodes` (needed for GDAS) confirmed working
+after `libeccodes0` install, version 2.24.2 -- older than the 2.42.0
+`gribapi` recommends, but functional for this module's message parsing.
 
 ## Real ERA5/GDAS fetch/cache (#22 Stage A/B)
 
