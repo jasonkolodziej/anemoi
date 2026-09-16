@@ -2,6 +2,14 @@ name: Sync Issue Fields to Project Board
 
 # Fires when an issue is opened or edited so the project board fields
 # stay in sync with the traceability section of the issue body.
+# What to do
+# 1. Create a classic PAT
+# 2. Grant it access to the repo and project permissions
+# 3. Store it as `PROJECT_PAT`
+# 4. Keep the workflow as-is, but use that classic token (stored as `PROJECT_PAT`)
+#
+# Example secret name:
+# - `PROJECT_PAT`
 on:
   issues:
     types: [opened, edited]
