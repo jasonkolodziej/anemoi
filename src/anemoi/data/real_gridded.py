@@ -50,19 +50,46 @@ _GRIDDED_HINT = (
 )
 
 
-def require_gridded_deps() -> None:
-    """Import-check the optional gridded-data stack, or raise a clear message."""
+def require_era5_deps() -> None:
+    """Import-check ERA5's dependency stack (xarray/zarr/gcsfs), or raise a
+    clear message. Deliberately does not import ``eccodes``: ERA5 is a Zarr
+    read and never touches GRIB parsing, so a broken/missing eccodes native
+    library (a real, observed failure mode -- see ``gribapi.bindings``'s
+    "Cannot find the ecCodes library" ``RuntimeError``, which isn't even a
+    ``ModuleNotFoundError`` this can catch) must not block ERA5 access."""
     try:
-        import eccodes  # noqa: F401, PLC0415
-        import requests  # noqa: F401, PLC0415
         import xarray  # noqa: F401, PLC0415
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError(_GRIDDED_HINT) from exc
 
 
+def require_gdas_deps() -> None:
+    """Import-check GDAS's dependency stack (eccodes/requests), or raise a
+    clear message."""
+    try:
+        import eccodes  # noqa: F401, PLC0415
+        import requests  # noqa: F401, PLC0415
+    except ModuleNotFoundError as exc:
+        raise ModuleNotFoundError(_GRIDDED_HINT) from exc
+
+
+def require_gridded_deps() -> None:
+    """Import-check the full optional gridded-data stack (both sources)."""
+    require_era5_deps()
+    require_gdas_deps()
+
+
 def gridded_deps_available() -> bool:
     try:
         require_gridded_deps()
+        return True
+    except ModuleNotFoundError:
+        return False
+
+
+def era5_deps_available() -> bool:
+    try:
+        require_era5_deps()
         return True
     except ModuleNotFoundError:
         return False
@@ -146,7 +173,7 @@ def open_era5(valid_time: datetime) -> Any:
     bucket -- no account, no API key, no rate limit. Returns an
     ``xarray.Dataset`` (import deferred; requires the ``gridded`` extra).
     """
-    require_gridded_deps()
+    require_era5_deps()
     import xarray as xr  # noqa: PLC0415
 
     ds = xr.open_zarr(ERA5_ZARR_PATH, chunks=None, storage_options={"token": "anon"})
@@ -261,7 +288,7 @@ def fetch_gdas_grib2_fields(
     Returns ``{("UGRD", 200): (721, 1440) array, ..., ("PRMSL", "mean sea
     level"): array}``, the same keys :func:`gdas_to_gridded_fields` expects.
     """
-    require_gridded_deps()
+    require_gdas_deps()
     import eccodes  # noqa: PLC0415
     import requests  # noqa: PLC0415
 
