@@ -44,7 +44,9 @@ chronological). This layer is where the train/serve policy is mechanised.
 `training/orchestrator` (wave scheduling), `training/triggers` (cascade).
 
 **Layer 4 — tracking.** `tracking/tags` (validated tag set),
-`tracking/registry` (MLflow-optional, model-set pinning).
+`tracking/registry` (MLflow-optional, model-set pinning), `tracking/checkpoint_store`
+(S3/R2-compatible durable checkpoint storage, duck-typed the same way as the
+MLflow client so tests need no real credentials).
 
 **Layer 5 — inference.** `inference/scheduler` (timeline, gating, load
 shedding), `inference/cycle` (execution, degraded modes),
@@ -106,7 +108,7 @@ the affected model only" impossible to do accidentally.
 | Potential intensity | SST/OHC/shear regression (still the pipeline default); real Bister-Emanuel (1998) closed form implemented separately (`emanuel_potential_intensity`), not yet wired in | Real boundary-layer/outflow soundings, then swap the one call site in `compute_environment_features` |
 | Cone radii | Current-season (2026) NHC 2/3-probability radii, documented in `configs/inference.yaml` | Re-baseline each season against nhc.noaa.gov/aboutcone.shtml |
 | Appendix B thresholds | Provisional | Re-baseline against the current NHC verification report |
-| Models | Untrained | Stage A on ERA5, Stage B on GDAS, per `configs/curriculum.yaml` |
+| Models | Untrained; durable checkpoint storage now exists (`tracking.checkpoint_store`, S3/R2-compatible) | Stage A on ERA5, Stage B on GDAS, per `configs/curriculum.yaml`; point `StageResult.checkpoint_uri` at a real `CheckpointStore.upload()` result |
 
 The synthetic generator's ERA5/GDAS offset (`synthetic.GDAS_BIAS`) is
 deliberate and load-bearing for the tests. It is not a claim about the real
@@ -195,6 +197,7 @@ path in production.
 | `test_curriculum.py` | Stage A/B ordering; flavor rules; deployability |
 | `test_promotion.py` | Validation-only gates; manual gate; test-set budget; track/intensity threshold split |
 | `test_registry.py` | Versioning; model-set pinning; rollback; MLflow degradation |
+| `test_checkpoint_store.py` | S3/R2 upload/download round-trip; bucket-mismatch rejection; env-var config; boto3 adapter wiring |
 | `test_triggers.py` | Trigger conditions; cascade; nightly-latent suppression |
 | `test_orchestrator.py` | Wave schedules; dependency handling; failure isolation |
 | `test_skew.py` | ERA5T audit; alert thresholds; windowing |
