@@ -12,7 +12,7 @@ is called at every boundary where a flavor mismatch would be silent.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 import numpy as np
@@ -20,23 +20,38 @@ import numpy as np
 from .sources import Flavor
 
 # Two structural gaps in this feature set, both affecting intensity rather than
-# track, and both worth naming here rather than discovering during a backtest.
+# track. Both now have a minimum-viable closing, named here rather than left
+# to be discovered during a backtest -- neither is the full treatment.
 #
-# 1. No inner-core moisture. Emanuel and Zhang (2017,
-#    doi:10.1175/JAS-D-17-0008.1) find intensity error growth is at least as
-#    sensitive to inner-core moisture specification as to the wind field.
-#    ``rh700_pct`` below is an area mean over the storm-relative box -- an
-#    environmental quantity, not an inner-core one.
+# 1. Inner-core moisture. Emanuel and Zhang (2017, doi:10.1175/JAS-D-17-0008.1)
+#    find intensity error growth is at least as sensitive to inner-core
+#    moisture specification as to the wind field. ``rh700_pct`` is an area
+#    mean over the *whole* storm-relative box -- an environmental quantity.
+#    ``rh700_inner_core_pct`` below samples the same field over a much
+#    tighter inner radius (see ``INNER_CORE_RADIUS_FRAC``), which is the
+#    inner-core signal this box can actually resolve. A dedicated
+#    higher-resolution inner-core product (e.g. from satellite; see #19) is a
+#    further step, not a prerequisite for this one.
 #
-# 2. No ocean feedback. ``sst_c`` and ``ohc_kj_cm2`` are static area means from a
+# 2. Ocean feedback. ``sst_c`` and ``ohc_kj_cm2`` were static area means from a
 #    daily product persisted from the previous day (see data.availability). A
 #    storm's own cold wake -- the upwelling and mixing it induces, which then
-#    limits its own intensification -- is nowhere in this system. For intensity
-#    that is a first-order feedback, not a refinement. A minimum viable version
-#    makes SST/OHC vary along the forecast track with a wake parameterisation
-#    rather than freezing them at t-1 day.
+#    limits its own intensification -- was nowhere in this system, despite
+#    being a first-order intensity feedback. :func:`apply_cold_wake` is the
+#    minimum viable version PLAN.md/Roadmap describe: an empirical SST/OHC
+#    depression from the storm's own wind speed and translation speed, applied
+#    to ``GriddedFields`` before feature computation. It is not two-way
+#    atmosphere-ocean coupling (Lai et al. 2025 driving UWIN-CM; FuXi-TC on a
+#    coupled base) -- that remains a separate, larger effort.
+
+#: Radius (as a fraction of the domain, see :func:`area_mean`) used to sample
+#: the inner-core moisture feature -- much tighter than the default 0.5 used
+#: for environmental sampling elsewhere in this module.
+INNER_CORE_RADIUS_FRAC = 0.15
 
 #: Names produced by :func:`compute_environment_features`, in output order.
+#: New features are appended, never inserted -- several call sites (the drift
+#: monitor's reference distribution, test fixtures) index into this tuple.
 FEATURE_NAMES: tuple[str, ...] = (
     "shear_magnitude_kt",
     "shear_direction_deg",
@@ -48,6 +63,7 @@ FEATURE_NAMES: tuple[str, ...] = (
     "vorticity850_1e5s",
     "potential_intensity_kt",
     "ivt_kg_ms",
+    "rh700_inner_core_pct",
 )
 
 
@@ -209,6 +225,60 @@ def integrated_vapor_transport(fields: GriddedFields) -> float:
     return float(area_mean(speed_ms * q) * 9806.65 / 9.81)
 
 
+def inner_core_moisture(fields: GriddedFields) -> float:
+    """700 mb relative humidity sampled over the inner core, not the environment.
+
+    Same field as ``rh700_pct``, sampled over ``INNER_CORE_RADIUS_FRAC``
+    instead of the default environmental box -- see the module-level note on
+    why this is the minimum-viable closing of the inner-core moisture gap.
+    """
+    return area_mean(fields.rh700, radius_frac=INNER_CORE_RADIUS_FRAC)
+
+
+def cold_wake_sst_depression_c(
+    max_wind_kt: float, translation_speed_kt: float, *, max_depression_c: float = 6.0
+) -> float:
+    """Empirical SST depression (°C) from a storm's own wind-driven mixing.
+
+    Not a mixed-layer model -- a minimum-viable parameterisation capturing the
+    two dominant, well-documented dependencies (e.g. Cione and Uhlhorn 2003,
+    Mei and Pasquero 2013): cooling grows roughly with the cube of wind speed
+    (wind-stress-driven mixing) and falls off with translation speed (a fast
+    mover spends less time over any one patch of ocean). Clamped to
+    ``max_depression_c``, matching the upper end of documented extreme cases
+    (e.g. Hurricane Igor, ~6 degC).
+    """
+    if max_wind_kt <= 0.0:
+        return 0.0
+    speed_floor_kt = 2.0  # avoids a near-stationary storm producing unbounded cooling
+    speed = max(translation_speed_kt, speed_floor_kt)
+    depression = 0.35 * (max_wind_kt / 50.0) ** 3 * (10.0 / speed)
+    return float(np.clip(depression, 0.0, max_depression_c))
+
+
+def apply_cold_wake(
+    fields: GriddedFields, max_wind_kt: float, translation_speed_kt: float
+) -> GriddedFields:
+    """Return ``fields`` with SST/OHC depressed by the storm's own cold wake.
+
+    Minimum viable version of PLAN.md/Roadmap's "make SST/OHC vary along the
+    forecast track with a wake parameterisation, rather than freezing them at
+    t-1 day": applied once, to the fields for a given cycle/lead, using that
+    cycle's own wind and translation speed -- not an ocean model, and not
+    persisted across cycles. OHC is depressed less than SST in relative terms
+    (it integrates a deeper layer than the skin temperature does).
+    """
+    depression_c = cold_wake_sst_depression_c(max_wind_kt, translation_speed_kt)
+    if depression_c <= 0.0:
+        return fields
+    ohc_factor = 1.0 - 0.6 * (depression_c / 6.0)
+    return replace(
+        fields,
+        sst=np.clip(fields.sst - depression_c, -2.0, None),
+        ohc=np.clip(fields.ohc * ohc_factor, 0.0, None),
+    )
+
+
 def compute_environment_features(fields: GriddedFields) -> FeatureSet:
     """The single code path used for both Stage A and Stage B (§4.6.1).
 
@@ -232,6 +302,7 @@ def compute_environment_features(fields: GriddedFields) -> FeatureSet:
             relative_vorticity_850(fields),
             potential_intensity(sst_c, ohc, shear_mag),
             integrated_vapor_transport(fields),
+            inner_core_moisture(fields),
         ],
         dtype=float,
     )
