@@ -48,6 +48,7 @@ needing checkpoint/restart logic in the launcher itself.
 | `train_lstm.sbatch` | Real Stage A -> Stage B curriculum for the LSTM baseline (`training.real_run`, #22) -- a GPU job, unlike the two ingest jobs above | `torch` + `storage` extras, real R2 credentials (`S3_ARTIFACT_*` in `.env`) -- every stage's checkpoint uploads durably |
 | `train_cnn.sbatch` | Real Stage A -> Stage B curriculum for the CNN baseline (`training.real_run_cnn`, #22) -- reads real cached GriddedFields as its channel stack, so it benefits from `era5_cache.sbatch`/`gdas_cache.sbatch` having fetched data first (works with whatever's cached so far, not all-or-nothing) | Same as `train_lstm.sbatch`, plus `ERA5_CACHE_DIR`/`GDAS_CACHE_DIR` pointing at the ingest jobs' cache dirs |
 | `train_transformer.sbatch` | Same as `train_cnn.sbatch` for the Transformer baseline (`training.real_run_transformer`) -- the real cached crop (41x41) is trimmed to the model's fixed grid size (40x40) | Same as `train_cnn.sbatch` |
+| `train_gnn.sbatch` | Same real cached-field source as `train_cnn.sbatch`, treated as a lattice-graph mesh (`training.real_run_gnn`) -- subsampled grid cells as nodes, 4-connectivity edges | Same as `train_cnn.sbatch` |
 
 The two cache scripts take the split name as their one positional arg
 (default `train`), and read `HURDAT2_PATH` / `CACHE_DIR` / `MAX_WORKERS`
