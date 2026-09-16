@@ -11,7 +11,7 @@ import warnings
 
 import pytest
 
-fastapi = pytest.importorskip("fastapi")
+pytest.importorskip("fastapi")
 
 # Third-party lazy-import deprecation noise (anyio/starlette internals, not
 # anemoi code) -- the repo's global `filterwarnings = ["error::DeprecationWarning"]`
