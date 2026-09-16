@@ -48,7 +48,7 @@ def deterministic_fn(plan, fix):
     )
 
 
-def good_ensemble(det):
+def good_ensemble(det, n_members=20):
     """A credibly-dispersed ensemble: spread grows with lead time."""
     rng = np.random.default_rng(0)
     growth = 1.0 + np.arange(len(LEADS), dtype=float)
@@ -60,7 +60,7 @@ def good_ensemble(det):
             lons=det.lons + rng.normal(0, 0.6, len(LEADS)) * growth,
             winds_kt=np.clip(det.winds_kt + rng.normal(0, 8, len(LEADS)), 0, None),
         )
-        for i in range(20)
+        for i in range(n_members)
     ]
 
 
@@ -85,7 +85,7 @@ def test_fix_must_match_the_cycle_time():
 
 
 def test_diffusion_crash_falls_back_to_a_climatological_ensemble():
-    def crashing(_det):
+    def crashing(_det, _n):
         raise RuntimeError("CUDA out of memory")
 
     plan = plan_cycle(T, LatencyOracle())
@@ -97,9 +97,45 @@ def test_diffusion_crash_falls_back_to_a_climatological_ensemble():
 
 def test_empty_ensemble_also_triggers_the_fallback():
     plan = plan_cycle(T, LatencyOracle())
-    out = run_cycle(plan, make_fix(), deterministic_fn, lambda d: [])
+    out = run_cycle(plan, make_fix(), deterministic_fn, lambda d, n: [])
     assert out.products.ensemble_size > 0
     assert out.degraded
+
+
+def test_load_shed_plan_requests_the_reduced_member_count():
+    """CyclePlan.load_shed must actually reduce what the generator produces."""
+    oracle = LatencyOracle()
+    oracle.set_arrival("besttrack_working", T, T + timedelta(hours=3))
+    plan = plan_cycle(T, oracle)
+    assert plan.load_shed
+    assert plan.requested_ensemble_members == 10
+
+    out = run_cycle(plan, make_fix(TrackQuality.ESTIMATED), deterministic_fn, good_ensemble)
+    assert out.products.ensemble_size == 10
+    assert "load_shed:members=10" in out.flags
+    assert out.degraded
+
+
+def test_load_shed_also_reduces_the_climatological_fallback():
+    """The fallback path must honor the reduction too, not just the happy path."""
+
+    def crashing(_det, _n):
+        raise RuntimeError("CUDA out of memory")
+
+    oracle = LatencyOracle()
+    oracle.set_arrival("besttrack_working", T, T + timedelta(hours=3))
+    plan = plan_cycle(T, oracle)
+
+    out = run_cycle(plan, make_fix(TrackQuality.ESTIMATED), deterministic_fn, crashing)
+    assert out.products.ensemble_size == 10
+    assert any(f.startswith("spread_fallback") for f in out.flags)
+
+
+def test_nominal_plan_does_not_flag_load_shed():
+    plan = plan_cycle(T, LatencyOracle())
+    out = run_cycle(plan, make_fix(), deterministic_fn, good_ensemble)
+    assert plan.requested_ensemble_members == 20
+    assert not any(f.startswith("load_shed") for f in out.flags)
 
 
 def test_stale_nwp_is_flagged_on_the_payload():

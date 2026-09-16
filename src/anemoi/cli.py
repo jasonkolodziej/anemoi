@@ -87,7 +87,7 @@ def cmd_cycle(args: argparse.Namespace) -> int:
         plan,
         fix,
         deterministic,
-        lambda det: climatological_ensemble(det, n_members=args.members, seed=1),
+        lambda det, n: climatological_ensemble(det, n_members=min(args.members, n), seed=1),
     )
     print(json.dumps(output.payload(), indent=2))
     return 0

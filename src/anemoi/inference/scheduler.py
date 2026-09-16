@@ -72,6 +72,13 @@ REDUCED_BUDGETS: tuple[StageBudget, ...] = (
 )
 
 
+#: Ensemble member counts by profile (configs/inference.yaml: ensemble.members /
+#: ensemble.min_members_for_ensemble_cone). The reduced count matches the
+#: REDUCED_BUDGETS docstring above: "a 10-member ensemble instead of 20-50."
+DEFAULT_ENSEMBLE_MEMBERS = 20
+REDUCED_ENSEMBLE_MEMBERS = 10
+
+
 def total_budget(budgets=DEFAULT_BUDGETS, *, worst_case: bool = False) -> timedelta:
     return sum(
         (b.maximum if worst_case else b.target for b in budgets),
@@ -160,6 +167,17 @@ class CyclePlan:
     @property
     def degraded(self) -> bool:
         return self.vitals_estimated or self.load_shed or self.inputs.degraded
+
+    @property
+    def requested_ensemble_members(self) -> int:
+        """Ensemble member count the cycle should request from Anemoi-Spread.
+
+        This is what ``load_shed`` actually controls: the flag alone changes
+        nothing downstream unless something reads it. ``run_cycle`` passes
+        this to the ensemble generator so the reduced profile's time savings
+        (REDUCED_BUDGETS) are real rather than just a schedule on paper.
+        """
+        return REDUCED_ENSEMBLE_MEMBERS if self.load_shed else DEFAULT_ENSEMBLE_MEMBERS
 
     def _stage(self, stage: Stage) -> ScheduledStage:
         for s in self.stages:

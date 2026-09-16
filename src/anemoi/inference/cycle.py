@@ -97,7 +97,10 @@ class CycleOutput:
 
 
 DeterministicFn = Callable[[CyclePlan, Fix], DeterministicForecast]
-EnsembleFn = Callable[[DeterministicForecast], list[EnsembleMember]]
+#: The second argument is the requested member count (``CyclePlan.
+#: requested_ensemble_members``) -- reduced under load shedding, so the
+#: generator plugged in here is what actually makes the reduction real.
+EnsembleFn = Callable[[DeterministicForecast, int], list[EnsembleMember]]
 
 
 def climatological_ensemble(
@@ -184,14 +187,17 @@ def run_cycle(
             flags.append(f"missing:{status.source_key}")
 
     deterministic = deterministic_fn(plan, initial_fix)
+    requested_members = plan.requested_ensemble_members
+    if plan.load_shed:
+        flags.append(f"load_shed:members={requested_members}")
 
     try:
-        members = ensemble_fn(deterministic)
+        members = ensemble_fn(deterministic, requested_members)
         if not members:
             raise CycleError("ensemble generator returned no members")
     except Exception as exc:  # noqa: BLE001 - any Anemoi-Spread failure degrades, never blocks
         flags.append(f"spread_fallback:{type(exc).__name__}")
-        members = climatological_ensemble(deterministic, seed=ensemble_seed)
+        members = climatological_ensemble(deterministic, n_members=requested_members, seed=ensemble_seed)
 
     products = build_products(
         members, coastline=coastline, degraded=bool(flags)
