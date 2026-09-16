@@ -93,6 +93,30 @@ def cmd_cycle(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ablation(args: argparse.Namespace) -> int:
+    """Run the #9 capacity-vs-sample-size ablation against a real HURDAT2 file.
+
+    Needs the torch extra (uv sync --extra torch). See docs/capacity_ablation.md
+    for the recorded run and what it does/does not measure.
+    """
+    from .data.hurdat2 import parse_hurdat2_file
+    from .training.capacity_ablation import run_capacity_ablation
+
+    tracks = parse_hurdat2_file(args.hurdat2)
+    report = run_capacity_ablation(
+        tracks,
+        hidden_dims=tuple(args.hidden_dims),
+        sample_fractions=tuple(args.sample_fractions),
+        n_augment=args.n_augment,
+        epochs=args.epochs,
+        seed=args.seed,
+    )
+    print(report.to_markdown())
+    print()
+    print(report.recommend())
+    return 0
+
+
 def cmd_splits(args: argparse.Namespace) -> int:
     tracks = generate_archive(args.start, args.end, seed=args.seed)
     assignment = assign_splits(tracks)
@@ -131,6 +155,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--end", type=int, default=2026)
     p.add_argument("--seed", type=int, default=20260806)
     p.set_defaults(func=cmd_splits)
+
+    p = sub.add_parser("ablation", help="run the #9 capacity-vs-sample-size ablation")
+    p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
+    p.add_argument(
+        "--hidden-dims", dest="hidden_dims", type=int, nargs="+", default=[8, 16, 32, 64, 128]
+    )
+    p.add_argument(
+        "--sample-fractions", dest="sample_fractions", type=float, nargs="+",
+        default=[0.1, 0.25, 0.5, 1.0],
+    )
+    p.add_argument("--n-augment", dest="n_augment", type=int, default=3)
+    p.add_argument("--epochs", type=int, default=30)
+    p.add_argument("--seed", type=int, default=20260806)
+    p.set_defaults(func=cmd_ablation)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
