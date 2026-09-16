@@ -17,7 +17,23 @@ import numpy as np
 import pytest
 
 pytest.importorskip("xarray")
-pytest.importorskip("eccodes")
+try:
+    import eccodes  # noqa: F401
+except (ImportError, RuntimeError) as exc:
+    # eccodes' native library can be present-but-broken on a given machine
+    # (gribapi.bindings raises RuntimeError, not ImportError, when it can't
+    # find the compiled library) -- pytest.importorskip only catches
+    # ImportError, so that failure mode would otherwise abort collection of
+    # this whole file, including the ERA5-only tests that never touch
+    # eccodes at all. Skip GDAS-specific tests explicitly instead (see
+    # NEEDS_ECCODES below); everything else still runs.
+    _ECCODES_ERROR = str(exc)
+else:
+    _ECCODES_ERROR = None
+
+NEEDS_ECCODES = pytest.mark.skipif(
+    _ECCODES_ERROR is not None, reason=f"eccodes unavailable: {_ECCODES_ERROR}"
+)
 
 from anemoi.data.real_gridded import (  # noqa: E402
     GDAS_LEVEL_MESSAGES,
@@ -29,10 +45,12 @@ from anemoi.data.real_gridded import (  # noqa: E402
     _crop_box,
     _parse_grib2_index,
     _specific_humidity_to_rh_pct,
+    era5_deps_available,
     era5_to_gridded_fields,
     fetch_gdas_grib2_fields,
     gdas_to_gridded_fields,
     open_era5,
+    require_era5_deps,
 )
 from anemoi.data.sources import Flavor  # noqa: E402
 
@@ -99,6 +117,28 @@ def test_specific_humidity_is_clipped_to_the_unit_range():
     )
     assert rh[0] == pytest.approx(0.0)
     assert rh[1] <= 100.0
+
+
+# --- ERA5/GDAS dependency isolation ---------------------------------------------
+
+
+def test_era5_deps_do_not_require_eccodes(monkeypatch):
+    """ERA5 is a Zarr read and never touches GRIB parsing -- require_era5_deps
+    must succeed even when eccodes is entirely unimportable, which is a real,
+    observed failure mode on this machine (gribapi.bindings' "Cannot find the
+    ecCodes library" RuntimeError, not even an ImportError)."""
+    import builtins
+
+    real_import = builtins.__import__
+
+    def blocked(name, *args, **kwargs):
+        if name == "eccodes" or name.startswith("eccodes."):
+            raise RuntimeError("simulated: cannot find the ecCodes library")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocked)
+    require_era5_deps()  # must not raise
+    assert era5_deps_available()
 
 
 # --- GDAS .idx parsing ---------------------------------------------------------
@@ -200,6 +240,7 @@ def test_open_era5_reads_the_real_arco_era5_store():
 
 
 @pytest.mark.network
+@NEEDS_ECCODES
 def test_fetch_gdas_grib2_fields_reads_the_real_noaa_archive():
     messages = fetch_gdas_grib2_fields(T)
     fields = gdas_to_gridded_fields(messages, center_lat=20.0, center_lon=-60.0, valid_time=T)
