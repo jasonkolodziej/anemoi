@@ -120,3 +120,21 @@ def test_parse_hurdat2_file_reads_from_disk(tmp_path):
     tracks = parse_hurdat2_file(path)
     assert len(tracks) == 1
     assert tracks[0].storm_id == "AL011999"
+
+
+def test_west_longitude_past_180_wraps_into_range():
+    """Real HURDAT2 entries: an extratropical remnant tracked across the prime
+    meridian (into the Norwegian Sea) is recorded as e.g. ``354.5W`` -- degrees
+    west counted past 180 rather than switching to "E" -- which is
+    ``354.5 - 360 = -5.5``, i.e. ~5.5 degrees *east*. Found parsing the real
+    1851-2023 Atlantic archive (AL grep '354.5W'); a constructed fixture below
+    reproduces the same field format without transcribing the real storm."""
+    text = f"""\
+AL011969,          TEST,     1,
+19690827, 1200,  , EX, 64.5N, 354.5W,  35,  997, {RADII},
+"""
+    tracks = parse_hurdat2(text)
+    assert len(tracks) == 1
+    fix = tracks[0].fixes[0]
+    assert fix.lon == pytest.approx(5.5)
+    assert -180.0 <= fix.lon < 180.0

@@ -11,6 +11,7 @@ from anemoi.data.besttrack import (
     TrackQuality,
     WorkingTrackNoise,
     assert_input_safe,
+    augment_track,
     emulate_working_fix,
     emulate_working_track,
     recalibrate_from_pairs,
@@ -173,3 +174,36 @@ def test_defaults_are_unchanged_by_the_literature_alternative():
 def test_recalibration_rejects_mismatched_pairs():
     with pytest.raises(ValueError, match="valid_time"):
         recalibrate_from_pairs([(make_fix(0, TrackQuality.WORKING), make_fix(6))])
+
+
+def test_augment_track_returns_the_requested_number_of_variants():
+    rng = np.random.default_rng(11)
+    final = make_track(6)
+    variants = augment_track(final, rng, n_variants=5)
+    assert len(variants) == 5
+    assert all(v.quality is TrackQuality.EMULATED for v in variants)
+    assert all(len(v.fixes) == 6 for v in variants)
+
+
+def test_augment_track_variants_differ_from_each_other():
+    """Each variant draws fresh noise -- they should not be identical copies."""
+    rng = np.random.default_rng(12)
+    final = make_track(6)
+    variants = augment_track(final, rng, n_variants=3)
+    tracks_as_arrays = [v.as_array() for v in variants]
+    assert not np.allclose(tracks_as_arrays[0], tracks_as_arrays[1])
+    assert not np.allclose(tracks_as_arrays[1], tracks_as_arrays[2])
+
+
+def test_augment_track_rejects_non_final_input():
+    rng = np.random.default_rng(13)
+    working = make_track(4, quality=TrackQuality.WORKING)
+    with pytest.raises(ValueError, match="FINAL"):
+        augment_track(working, rng, n_variants=2)
+
+
+def test_augment_track_rejects_zero_or_negative_variants():
+    rng = np.random.default_rng(14)
+    final = make_track(4)
+    with pytest.raises(ValueError, match="n_variants"):
+        augment_track(final, rng, n_variants=0)

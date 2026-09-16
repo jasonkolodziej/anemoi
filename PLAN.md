@@ -35,9 +35,11 @@ the t-6 selection rule. Everything downstream assumes cycle t never reads the
 cycle named t, so that is enforced here rather than remembered everywhere else.
 
 **Layer 2 — data contracts.** `data/sources` (role registry), `data/besttrack`
-(working vs final, noise emulator), `data/availability` (what has published),
-`data/features` (one code path per flavor), `data/splits` (storm-wise +
-chronological). This layer is where the train/serve policy is mechanised.
+(working vs final, noise emulator, augmentation), `data/storm_relative`
+(storm-relative coordinate transform for track-sequence inputs),
+`data/availability` (what has published), `data/features` (one code path per
+flavor), `data/splits` (storm-wise + chronological). This layer is where the
+train/serve policy is mechanised.
 
 **Layer 3 — training policy.** `training/curriculum` (Stage A/B),
 `training/promotion` (validation-only gates, test-set budget),
@@ -102,7 +104,7 @@ the affected model only" impossible to do accidentally.
 
 | Component | Status | To productionise |
 |---|---|---|
-| Storm archive | Parser done (`data.hurdat2.parse_hurdat2`), not wired as the default source | Point the CLI/API/demo at a real HURDAT2 file |
+| Storm archive | Parser done (`data.hurdat2.parse_hurdat2`); exercised against the real 1851-2023 Atlantic archive by the #9 capacity ablation (`anemoi ablation --hurdat2 <path>`), not yet wired as the CLI/API/demo default source | Point the CLI/API/demo at a real HURDAT2 file |
 | Working track | Parsers done (`data.atcf.parse_bdeck`, `parse_tcvitals`); `pair_by_valid_time` + `recalibrate_from_pairs` demonstrated on parsed data | Point at a real archive; recalibrate Stage B's noise defaults from it |
 | Gridded fields | Real readers done (`data.real_gridded`): ERA5 via public Zarr, GDAS/GFS via byte-range GRIB2; synthetic still the pipeline default | Point the CLI/API/demo at real reads; wire real SST/OHC sources |
 | Satellite | Synthetic crops (`data.satellite`), matching `data.synthetic`'s role for `GriddedFields` | Real GOES-18/19 storm-relative crops from the already-registered `goes` source |
@@ -122,15 +124,28 @@ offset between those analysis systems.
 Citations for everything below are in `docs/references.md`.
 
 
-**Sample size.** Roughly 10-15k synoptic fixes exist across the full archive.
-For a 6-layer transformer and a diffusion model that is thin. Stage A on ERA5
-helps, but the honest mitigation is aggressive augmentation, storm-relative
-coordinates, and being ready to conclude the transformer is not the right
-capacity for this dataset. Worth measuring before committing GPU-months --
-and the measurement itself doesn't need those GPU-months: the transformer
-builder is ~4.8M parameters (`build_transformer()` defaults), small enough
-that the capacity/learning-curve ablation runs on a local machine (Apple
-Silicon MPS via `training.device.get_device()`) rather than rented compute.
+**Sample size -- measured (LSTM proxy); transformer itself still open.** The
+real HURDAT2 archive gives 561 training-split storms / 16,474 synoptic fixes
+(1980-2019, `data.splits.DEFAULT_BOUNDARIES`) -- confirms the "thin" concern
+at roughly the scale this section originally estimated. `data.storm_relative`
+(storm-relative coordinate transform) and `data.besttrack.augment_track`
+(augmentation strategy: independently re-emulated working-quality realisations
+per storm) are both implemented and used by the ablation.
+`training.capacity_ablation.run_capacity_ablation()` swept LSTM hidden width
+(8-128) against training-storm fraction (10%-100%) on real data; full
+results, method and caveats in `docs/capacity_ablation.md`. **Decision: GO on
+capacity** -- validation loss keeps improving substantially through
+hidden_dim=128 with no sign of flattening, so nothing here justifies capping
+the transformer's size on capacity grounds. The sample-size axis of that run
+is **inconclusive, not "no effect"**: fixed-epoch full-batch training gives
+every fraction the same number of gradient updates, which confounds "more
+data doesn't help" with "the training procedure under-trains the large-data
+cells" -- re-run with mini-batching before trusting that axis. This LSTM
+result does not by itself clear the transformer's gridded-field capacity for
+Stage A/B (#22); that needs the same experiment against real ERA5/GDAS
+fields. The ablation runs entirely on a local machine (Apple Silicon MPS via
+`training.device.get_device()`, ~16s wall-clock for the full grid), no
+rented compute needed.
 
 **Ensemble dispersion at recurvature.** Anemoi-Spread conditioned on Anemoi-Core latents
 will tend to underdisperse precisely where the distribution is bimodal.
@@ -194,8 +209,9 @@ path in production.
 |---|---|
 | `test_time_utils.py` | Synoptic arithmetic; t-6 selection; t-12 fallback |
 | `test_sources.py` | Role assignment; operational guard |
-| `test_besttrack.py` | Working/final separation; emulator statistics; recalibration |
-| `test_hurdat2.py` | HURDAT2 parsing; synoptic-hour filtering; missing-field handling |
+| `test_besttrack.py` | Working/final separation; emulator statistics; recalibration; augmentation |
+| `test_hurdat2.py` | HURDAT2 parsing; synoptic-hour filtering; missing-field handling; longitude wrap |
+| `test_storm_relative.py` | Storm-relative displacement geometry; sequence shape and column contract |
 | `test_atcf.py` | b-deck/TC-Vitals parsing; unit conversion; working/final pairing + recalibration |
 | `test_availability.py` | Publication timing; outages; opportunistic feeds |
 | `test_scheduler.py` | Cycle timeline; vitals gating; load shedding; deadlines |
@@ -217,3 +233,4 @@ path in production.
 | `test_real_gridded.py` | ERA5/GDAS unit conversion and cropping (synthetic-schema); real endpoints behind `ANEMOI_RUN_NETWORK_TESTS=1` |
 | `test_models.py` | Architecture shapes and latent contracts (needs torch) |
 | `test_device.py` | MPS/CUDA/CPU selection priority; torch.compile skip on MPS (needs torch) |
+| `test_capacity_ablation.py` | Sample-building (storm-relative + augmentation); go/no-go logic; end-to-end training grid (needs torch) |

@@ -29,6 +29,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ..geo import wrap_longitude
 from ..time_utils import SYNOPTIC_HOURS
 from .besttrack import Fix, Track, TrackQuality
 
@@ -46,6 +47,14 @@ class Hurdat2Error(ValueError):
 
 
 def _parse_latlon(lat_field: str, lon_field: str) -> tuple[float, float]:
+    """Parse HURDAT2's ``28.0N`` / ``93.4W``-style fields.
+
+    A handful of real entries -- extratropical remnants tracked across the
+    prime meridian (e.g. into the Norwegian Sea) -- carry a "W" longitude
+    magnitude past 180 (``354.5W``) rather than switching to "E", counting
+    degrees west all the way around instead of wrapping. ``wrap_longitude``
+    normalises that (and any ordinary value) into [-180, 180).
+    """
     lat_field, lon_field = lat_field.strip(), lon_field.strip()
     if len(lat_field) < 2 or lat_field[-1] not in "NS":
         raise Hurdat2Error(f"malformed latitude: {lat_field!r}")
@@ -53,7 +62,7 @@ def _parse_latlon(lat_field: str, lon_field: str) -> tuple[float, float]:
         raise Hurdat2Error(f"malformed longitude: {lon_field!r}")
     lat = float(lat_field[:-1]) * (1.0 if lat_field[-1] == "N" else -1.0)
     lon = float(lon_field[:-1]) * (1.0 if lon_field[-1] == "E" else -1.0)
-    return lat, lon
+    return lat, float(wrap_longitude(lon))
 
 
 def _parse_header(line: str) -> tuple[str, int]:

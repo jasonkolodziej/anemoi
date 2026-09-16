@@ -280,6 +280,31 @@ def recalibrate_from_pairs(pairs: list[tuple[Fix, Fix]]) -> WorkingTrackNoise:
     )
 
 
+def augment_track(
+    final: Track,
+    rng: np.random.Generator,
+    n_variants: int,
+    noise: WorkingTrackNoise | None = None,
+) -> list[Track]:
+    """Draw ``n_variants`` independent EMULATED tracks from one FINAL track.
+
+    The augmentation strategy PLAN.md §5 "Sample size" calls for (#9): each
+    call to :func:`emulate_working_track` draws fresh noise from
+    ``WorkingTrackNoise``, so one archived storm yields several distinct,
+    physically-plausible working-quality training tracks bounded by measured
+    (or literature) observation-error statistics, rather than a single fixed
+    working track repeated every epoch. This multiplies effective sample
+    count for a thin archive without inventing storms that never happened,
+    the way a from-scratch synthetic generator would -- the underlying FINAL
+    track, and therefore the label, is always real.
+    """
+    if n_variants < 1:
+        raise ValueError(f"n_variants must be >= 1, got {n_variants}")
+    if final.quality is not TrackQuality.FINAL:
+        raise ValueError(f"expected a FINAL track, got {final.quality.value}")
+    return [emulate_working_track(final, rng, noise) for _ in range(n_variants)]
+
+
 def assert_input_safe(fixes: tuple[Fix, ...] | list[Fix]) -> None:
     """Guard: refuse FINAL-quality fixes on the model-input path.
 
