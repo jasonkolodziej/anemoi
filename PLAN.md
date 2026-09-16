@@ -239,7 +239,7 @@ path in production.
 | `test_skew.py` | ERA5T audit; alert thresholds; windowing |
 | `test_drift.py` | Feature drift; reference flavor; validation-loss trigger |
 | `test_metrics.py` | Track/intensity errors; beat rate; DM test; CRPS; spread-skill |
-| `test_features_splits.py` | Dual-flavor parity; flavor guards; split leakage; inner-core moisture; cold wake; Emanuel PI closed form |
+| `test_features_splits.py` | Dual-flavor parity; flavor guards; split leakage; inner-core moisture; cold wake; Emanuel PI closed form; `STAGE_B_BOUNDARIES` validity and per-season assignment |
 | `test_cycle.py` | End-to-end cycle; every degraded mode; extrapolation |
 | `test_postprocess.py` | Cone construction and fallback; PDF; landfall; RI |
 | `test_tags.py` | Tag validation; v2.1 additions |
@@ -249,6 +249,7 @@ path in production.
 | `test_era5_cache.py` | Fetch-task building; cache round-trip; resumable skip logic; concurrent execution; failure isolation (fake fetcher, no network) |
 | `test_gdas_cache.py` | Same coverage as test_era5_cache.py for the GDAS/Stage B analog; shared-session wiring; default filtering of fixes before `GDAS_ARCHIVE_START` |
 | `test_gridded_cache.py` | Shared-engine pieces not covered via the era5/gdas wrappers: `filter_tracks_by_min_valid_time`, durable archive sync (`sync_cache_to_archive`) against an in-memory fake archive client |
+| `test_cli.py` | `era5-cache`/`gdas-cache` select the right `data.splits` boundary scheme (default vs. `STAGE_B_BOUNDARIES`) |
 | `test_models.py` | Architecture shapes and latent contracts (needs torch) |
 | `test_device.py` | MPS/CUDA/CPU selection priority; torch.compile skip on MPS (needs torch) |
 | `test_capacity_ablation.py` | Sample-building (storm-relative + augmentation); go/no-go logic; end-to-end training grid (needs torch) |

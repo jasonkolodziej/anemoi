@@ -156,9 +156,21 @@ Concretely:
 
 - `data.gdas_cache.run_fetch_cache` now defaults to dropping any fix earlier
   than `GDAS_ARCHIVE_START` (2021-01-01) before fetching -- `data.splits`'
-  season boundaries are shared with Stage A/ERA5 and go back to 1980, so an
-  unfiltered `--split train` run would otherwise spend one request per fix
-  discovering each one is a guaranteed 404.
+  *default* season boundaries are shared with Stage A/ERA5 and go back to
+  1980, so an unfiltered `--split train` run would otherwise spend one
+  request per fix discovering each one is a guaranteed 404.
+- `anemoi gdas-cache` now assigns storms with `data.splits.
+  STAGE_B_BOUNDARIES` instead of the default boundaries: the default
+  `train` window (1980-2019) has **zero overlap** with GDAS's real archive
+  at all, which is what this filter first made visible (`--split train`
+  going from "100% failed" to "0 total, 0 fetched" -- correct behaviour
+  given the filter, but still no real data). `STAGE_B_BOUNDARIES` scopes
+  `train`/`val` to 2021-2022/2023 (the only seasons with both real GDAS
+  coverage and final best-track labels in the current HURDAT2 archive);
+  `test` (2024-2025) is deliberately empty for now -- it fills in as the
+  incremental archive (below) accumulates newer seasons, rather than
+  needing another boundary change later. `era5-cache` is unaffected and
+  keeps the default boundaries -- Stage A wants the full 1980-2025 window.
 - `configs/curriculum.yaml`'s `stage_b.season_range` is now `[2021, 2023]` --
   2021 is the real GDAS floor, 2023 is the latest season this project's
   HURDAT2 archive has final best-track labels for.
