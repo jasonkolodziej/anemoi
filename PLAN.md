@@ -109,7 +109,7 @@ the affected model only" impossible to do accidentally.
 |---|---|---|
 | Storm archive | Parser done (`data.hurdat2.parse_hurdat2`); exercised against the real 1851-2023 Atlantic archive by the #9 capacity ablation (`anemoi ablation --hurdat2 <path>`), not yet wired as the CLI/API/demo default source | Point the CLI/API/demo at a real HURDAT2 file |
 | Working track | Parsers done (`data.atcf.parse_bdeck`, `parse_tcvitals`); `pair_by_valid_time` + `recalibrate_from_pairs` demonstrated on parsed data | Point at a real archive; recalibrate Stage B's noise defaults from it |
-| Gridded fields | Real readers done (`data.real_gridded`): ERA5 via public Zarr, GDAS/GFS via byte-range GRIB2; synthetic still the pipeline default. `data.era5_cache`/`data.gdas_cache` (shared engine: `data.gridded_cache`) fetch+cache real fields concurrently for Stage A/B; run as `slurm/` job scripts (see `docs/train_infrastructure.md`) | Point the CLI/API/demo at real reads; wire real SST/OHC sources |
+| Gridded fields | Real readers done (`data.real_gridded`): ERA5 via public Zarr, GDAS/GFS via byte-range GRIB2; synthetic still the pipeline default. `data.era5_cache`/`data.gdas_cache` (shared engine: `data.gridded_cache`) fetch+cache real fields concurrently for Stage A/B; run as `slurm/` job scripts (see `docs/train_infrastructure.md`). GDAS's real archive only goes back to 2021-01-01 (undocumented retention -- see `data.gdas_cache.GDAS_ARCHIVE_START`), so fetch auto-filters fixes before it and `--sync-archive` backfills what's fetched into durable R2 storage rather than depending on NOAA's bucket as the system of record | Point the CLI/API/demo at real reads; wire real SST/OHC sources |
 | Satellite | Synthetic crops (`data.satellite`), matching `data.synthetic`'s role for `GriddedFields` | Real GOES-18/19 storm-relative crops from the already-registered `goes` source |
 | Potential intensity | SST/OHC/shear regression (still the pipeline default); real Bister-Emanuel (1998) closed form implemented separately (`emanuel_potential_intensity`), not yet wired in | Real boundary-layer/outflow soundings, then swap the one call site in `compute_environment_features` |
 | Cone radii | Current-season (2026) NHC 2/3-probability radii, documented in `configs/inference.yaml` | Re-baseline each season against nhc.noaa.gov/aboutcone.shtml |
@@ -247,7 +247,8 @@ path in production.
 | `test_satellite.py` | Synthetic GOES crop shape/channels; intensity-dependent structure; CNN integration |
 | `test_real_gridded.py` | ERA5/GDAS unit conversion and cropping (synthetic-schema); real endpoints behind `ANEMOI_RUN_NETWORK_TESTS=1` |
 | `test_era5_cache.py` | Fetch-task building; cache round-trip; resumable skip logic; concurrent execution; failure isolation (fake fetcher, no network) |
-| `test_gdas_cache.py` | Same coverage as test_era5_cache.py for the GDAS/Stage B analog; shared-session wiring |
+| `test_gdas_cache.py` | Same coverage as test_era5_cache.py for the GDAS/Stage B analog; shared-session wiring; default filtering of fixes before `GDAS_ARCHIVE_START` |
+| `test_gridded_cache.py` | Shared-engine pieces not covered via the era5/gdas wrappers: `filter_tracks_by_min_valid_time`, durable archive sync (`sync_cache_to_archive`) against an in-memory fake archive client |
 | `test_models.py` | Architecture shapes and latent contracts (needs torch) |
 | `test_device.py` | MPS/CUDA/CPU selection priority; torch.compile skip on MPS (needs torch) |
 | `test_capacity_ablation.py` | Sample-building (storm-relative + augmentation); go/no-go logic; end-to-end training grid (needs torch) |

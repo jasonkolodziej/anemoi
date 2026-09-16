@@ -117,9 +117,10 @@ def cmd_ablation(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_gridded_cache(args: argparse.Namespace, run_fetch_cache) -> int:
+def _cmd_gridded_cache(args: argparse.Namespace, run_fetch_cache, *, archive_prefix: str) -> int:
     """Shared body for cmd_era5_cache/cmd_gdas_cache -- same split-selection,
     reporting and exit-code behaviour, different underlying fetch pipeline."""
+    from .data.gridded_cache import build_fetch_tasks
     from .data.hurdat2 import parse_hurdat2_file
     from .data.splits import Split, assign_splits, filter_tracks
 
@@ -143,7 +144,33 @@ def _cmd_gridded_cache(args: argparse.Namespace, run_fetch_cache) -> int:
     )
     for task, error in report.failures[:20]:
         print(f"  FAILED {task.storm_id} {task.valid_time}: {error}")
-    return 1 if report.n_failed else 0
+    exit_code = 1 if report.n_failed else 0
+
+    if args.sync_archive:
+        from .data.gridded_cache import sync_cache_to_archive
+        from .tracking.checkpoint_store import CheckpointStore, S3Config
+
+        store = CheckpointStore(S3Config.from_env())
+        sync_report = sync_cache_to_archive(
+            build_fetch_tasks(split_tracks),
+            args.cache_dir,
+            store,
+            prefix=archive_prefix,
+            max_workers=args.max_workers,
+            progress_every=args.progress_every,
+        )
+        print(
+            f"archive sync: {sync_report.n_uploaded} uploaded, "
+            f"{sync_report.n_already_archived} already archived, "
+            f"{sync_report.n_missing_local} not yet cached locally, "
+            f"{sync_report.n_failed} failed, {sync_report.elapsed_s:.0f}s"
+        )
+        for task, error in sync_report.failures[:20]:
+            print(f"  ARCHIVE FAILED {task.storm_id} {task.valid_time}: {error}")
+        if sync_report.n_failed:
+            exit_code = 1
+
+    return exit_code
 
 
 def cmd_era5_cache(args: argparse.Namespace) -> int:
@@ -153,7 +180,7 @@ def cmd_era5_cache(args: argparse.Namespace) -> int:
     """
     from .data.era5_cache import run_fetch_cache
 
-    return _cmd_gridded_cache(args, run_fetch_cache)
+    return _cmd_gridded_cache(args, run_fetch_cache, archive_prefix="era5_archive")
 
 
 def cmd_gdas_cache(args: argparse.Namespace) -> int:
@@ -165,7 +192,7 @@ def cmd_gdas_cache(args: argparse.Namespace) -> int:
     """
     from .data.gdas_cache import run_fetch_cache
 
-    return _cmd_gridded_cache(args, run_fetch_cache)
+    return _cmd_gridded_cache(args, run_fetch_cache, archive_prefix="gdas_archive")
 
 
 def cmd_splits(args: argparse.Namespace) -> int:
@@ -231,6 +258,11 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--max-workers", dest="max_workers", type=int, default=default_max_workers)
         p.add_argument("--force", action="store_true", help="refetch even if already cached")
         p.add_argument("--progress-every", dest="progress_every", type=int, default=50)
+        p.add_argument(
+            "--sync-archive", dest="sync_archive", action="store_true",
+            help="after fetching, upload any newly-cached files not yet in the durable "
+                 "R2 archive (needs the storage extra and S3_ARTIFACT_* env vars)",
+        )
 
     p = sub.add_parser("era5-cache", help="fetch+cache real ERA5 fields for a data.splits split")
     _add_gridded_cache_args(p, default_max_workers=8)

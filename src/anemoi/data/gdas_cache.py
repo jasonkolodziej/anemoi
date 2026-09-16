@@ -23,15 +23,24 @@ fine (the eccodes import is deferred into the fetch call, same as
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .besttrack import Track
 from .features import GriddedFields
-from .gridded_cache import FetchCacheReport, FieldsFetcher
+from .gridded_cache import FetchCacheReport, FieldsFetcher, filter_tracks_by_min_valid_time
 from .gridded_cache import run_fetch_cache as _run_fetch_cache
 
-__all__ = ["run_fetch_cache"]
+__all__ = ["GDAS_ARCHIVE_START", "run_fetch_cache"]
+
+#: Earliest date with real data in noaa-gfs-bdp-pds, verified via direct S3
+#: `list-type=2` listing (2026-09-16) -- the bucket has no documented
+#: retention policy, so this is an observed floor, not a guaranteed one.
+#: `data.splits`' season boundaries predate this by decades (Stage A/ERA5
+#: needs them to); `run_fetch_cache` filters against this separately so
+#: fetching an early split doesn't spend a request per fix on a guaranteed
+#: 404. See docs/train_infrastructure.md and data.sources's gdas_gfs entry.
+GDAS_ARCHIVE_START = datetime(2021, 1, 1, tzinfo=UTC)
 
 
 def _default_fetch_fn(box_deg: float) -> FieldsFetcher:
@@ -63,6 +72,7 @@ def run_fetch_cache(
     skip_existing: bool = True,
     fetch_fn: FieldsFetcher | None = None,
     progress_every: int = 50,
+    min_valid_time: datetime | None = GDAS_ARCHIVE_START,
 ) -> FetchCacheReport:
     """Fetch real GDAS GriddedFields for every fix across ``tracks``,
     concurrently, caching each to ``cache_dir``.
@@ -74,8 +84,16 @@ def run_fetch_cache(
     range requests. ``fetch_fn`` -- ``(valid_time, lat, lon) ->
     GriddedFields`` -- is injectable so tests can supply a fast synthetic
     fetcher instead of hitting the network.
+
+    ``min_valid_time`` defaults to :data:`GDAS_ARCHIVE_START` and drops fixes
+    earlier than it before fetching -- ``data.splits``' season boundaries are
+    shared with Stage A/ERA5 and go back to 1980, decades before GDAS's real
+    archive starts, so an unfiltered ``--split train`` run would spend one
+    request per fix discovering each one 404s. Pass ``None`` to disable.
     """
     fetch_fn = fetch_fn if fetch_fn is not None else _default_fetch_fn(box_deg)
+    if min_valid_time is not None:
+        tracks = filter_tracks_by_min_valid_time(tracks, min_valid_time)
     return _run_fetch_cache(
         tracks,
         cache_dir,

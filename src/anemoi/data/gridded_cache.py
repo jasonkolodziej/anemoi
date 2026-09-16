@@ -11,6 +11,15 @@ as the same :class:`~anemoi.data.features.GriddedFields` shape, and both
 archives are large enough (tens of thousands of fixes) that fetching
 sequentially is impractical either way. See ``docs/train_infrastructure.md``
 for the measured throughput this buys.
+
+:func:`sync_cache_to_archive` is a second, independent pass over the same
+local cache: it uploads whatever's been fetched to a durable off-box store
+(see :class:`ArchiveClient`), so what's on one Spot VM's disk survives that
+VM's teardown. Deliberately not folded into :func:`run_fetch_cache` itself
+-- keeping fetch (network-bound, resumable via local `skip_existing`) and
+archive sync (upload-bound, resumable via the archive's own `exists` check)
+as separate passes means a slow/flaky archive endpoint can never stall or
+fail a fetch run, and either pass can be re-run alone.
 """
 
 from __future__ import annotations
@@ -21,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Protocol
 
 import numpy as np
 
@@ -54,6 +64,26 @@ def build_fetch_tasks(tracks: list[Track]) -> list[FetchTask]:
         for track in tracks
         for fix in track.fixes
     ]
+
+
+def filter_tracks_by_min_valid_time(tracks: list[Track], min_valid_time: datetime) -> list[Track]:
+    """Drop fixes earlier than ``min_valid_time``, and storms left with none.
+
+    `data.splits`' season boundaries are shared across sources and set for
+    Stage A's decades-deep ERA5 pretraining (`Split.TRAIN` starts 1980); a
+    source whose real archive starts later than that -- GDAS's does, see
+    `gdas_cache.GDAS_ARCHIVE_START` -- would otherwise be asked to fetch fixes
+    that provably 404 rather than being excluded up front. Splitting this out
+    as a source-level filter, separate from the split boundaries themselves,
+    keeps Stage A's full historical window intact while making a
+    source-specific fetch pipeline honest about what it can actually return.
+    """
+    filtered = []
+    for track in tracks:
+        fixes = tuple(f for f in track.fixes if f.valid_time >= min_valid_time)
+        if fixes:
+            filtered.append(Track(storm_id=track.storm_id, fixes=fixes))
+    return filtered
 
 
 def cache_path(cache_dir: Path | str, task: FetchTask) -> Path:
@@ -161,6 +191,122 @@ def run_fetch_cache(
         n_total=len(tasks),
         n_fetched=n_fetched,
         n_skipped=n_skipped,
+        failures=failures,
+        elapsed_s=time.time() - t0,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Durable archive sync
+# --------------------------------------------------------------------------- #
+
+
+class ArchiveClient(Protocol):
+    """Whatever `run_fetch_cache` caches locally still lives only on one VM's
+    disk -- gone on teardown, and un-shared across VMs. This is the surface a
+    durable off-box store must expose to receive it; `tracking.checkpoint_store
+    .CheckpointStore` already satisfies it structurally (same put/get/exists
+    duck-typed pattern used for MLflow-optional tracking), so no new backend
+    is needed -- it's reused here under a different key prefix, not
+    subclassed or renamed, since ``S3_ARTIFACT_*`` already names a general
+    artifact bucket, not a checkpoint-only one.
+    """
+
+    def exists(self, key: str) -> bool: ...
+    def upload(self, local_path: Path | str, key: str) -> str: ...
+
+
+def archive_key(prefix: str, task: FetchTask) -> str:
+    return f"{prefix}/{task.storm_id}/{task.valid_time:%Y%m%d%H}.npz"
+
+
+@dataclass(slots=True)
+class SyncReport:
+    n_total: int
+    n_uploaded: int
+    n_already_archived: int
+    n_missing_local: int
+    failures: list[tuple[FetchTask, str]] = field(default_factory=list)
+    elapsed_s: float = 0.0
+
+    @property
+    def n_failed(self) -> int:
+        return len(self.failures)
+
+
+def sync_cache_to_archive(
+    tasks: list[FetchTask],
+    cache_dir: Path | str,
+    archive: ArchiveClient,
+    *,
+    prefix: str,
+    max_workers: int = 8,
+    progress_every: int = 50,
+    label: str = "gridded_cache",
+) -> SyncReport:
+    """Upload every locally cached fix under ``cache_dir`` to ``archive`` that
+    isn't already there.
+
+    The durable-archive counterpart to `run_fetch_cache`'s local
+    ``skip_existing``: existence is checked in the archive itself (a
+    ``head_object``-backed call, not a separately tracked ledger), so
+    re-running this after a partial upload, or as a one-time backfill of
+    files fetched before archiving existed, just picks up whatever isn't
+    there yet -- same resumability shape as the fetch side, one layer out.
+    A task whose local ``.npz`` doesn't exist yet (not yet fetched) is
+    counted in ``n_missing_local`` rather than attempted or treated as a
+    failure -- sync and fetch are separate, independently resumable passes.
+    """
+    cache_dir = Path(cache_dir)
+    n_missing_local = 0
+    to_check: list[tuple[FetchTask, Path, str]] = []
+    for task in tasks:
+        local_path = cache_path(cache_dir, task)
+        if not local_path.exists():
+            n_missing_local += 1
+            continue
+        to_check.append((task, local_path, archive_key(prefix, task)))
+
+    def _work(item: tuple[FetchTask, Path, str]) -> tuple[FetchTask, str | None, bool]:
+        task, local_path, key = item
+        try:
+            if archive.exists(key):
+                return task, None, False
+            archive.upload(local_path, key)
+            return task, None, True
+        except Exception as exc:  # noqa: BLE001 - one bad upload must not kill the run
+            return task, f"{type(exc).__name__}: {exc}", False
+
+    failures: list[tuple[FetchTask, str]] = []
+    n_uploaded = 0
+    n_already_archived = 0
+    t0 = time.time()
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(_work, item) for item in to_check]
+        for i, future in enumerate(as_completed(futures), start=1):
+            task, error, uploaded = future.result()
+            if error is not None:
+                failures.append((task, error))
+            elif uploaded:
+                n_uploaded += 1
+            else:
+                n_already_archived += 1
+            if progress_every and i % progress_every == 0:
+                elapsed = time.time() - t0
+                rate = i / elapsed if elapsed > 0 else 0.0
+                print(
+                    f"[{label}-archive] {i}/{len(to_check)} checked "
+                    f"({n_uploaded} uploaded, {n_already_archived} already there, "
+                    f"{len(failures)} failed) {rate:.2f}/s, {elapsed:.0f}s elapsed",
+                    flush=True,
+                )
+
+    return SyncReport(
+        n_total=len(tasks),
+        n_uploaded=n_uploaded,
+        n_already_archived=n_already_archived,
+        n_missing_local=n_missing_local,
         failures=failures,
         elapsed_s=time.time() - t0,
     )
