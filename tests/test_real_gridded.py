@@ -141,6 +141,29 @@ def test_era5_deps_do_not_require_eccodes(monkeypatch):
     assert era5_deps_available()
 
 
+def test_open_era5_reuses_a_passed_in_store_instead_of_reopening():
+    """era5_cache shares one store handle across many samples to avoid
+    reopening the Zarr store per fetch (~1-2s each, see
+    docs/capacity_ablation.md's benchmark) -- open_era5 must call .sel() on
+    exactly the store it was given, not open a fresh one."""
+
+    class FakeStore:
+        def __init__(self):
+            self.sel_calls = 0
+            self.last_kwargs = None
+
+        def sel(self, **kwargs):
+            self.sel_calls += 1
+            self.last_kwargs = kwargs
+            return "selected"
+
+    store = FakeStore()
+    result = open_era5(T, store=store)
+    assert store.sel_calls == 1
+    assert "time" in store.last_kwargs
+    assert result == "selected"
+
+
 # --- GDAS .idx parsing ---------------------------------------------------------
 
 
