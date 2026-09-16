@@ -85,7 +85,11 @@ REGISTRY: dict[str, DataSource] = {
             typical_latency=int(3.5 * 60) * _M,
             max_latency=4 * _H,
             fmt="GRIB2",
-            retention="2015-present archived; rolling 2yr hot",
+            retention="2021-01-01-present in noaa-gfs-bdp-pds (verified via direct S3 "
+            "listing, 2026-09-16); no documented retention policy for this bucket "
+            "either way -- see data.gridded_cache's archive-sync path, which backfills "
+            "this into permanent storage rather than depending on NOAA's bucket as the "
+            "system of record",
             notes=(
                 "Operational gridded input; cycle t consumes the t-6 cycle. "
                 "No public pre-converted Zarr exists for GDAS/GFS pressure "
@@ -95,7 +99,10 @@ REGISTRY: dict[str, DataSource] = {
                 "data.real_gridded.fetch_gdas_grib2_fields() reads it via "
                 "per-message byte-range fetch against the AWS Open Data "
                 "mirror (anonymous, no NOMADS access-window constraint) "
-                "rather than downloading the full ~450 MB file."
+                "rather than downloading the full ~450 MB file. Do not confuse "
+                "this bucket (noaa-gfs-bdp-pds) with the older, Unidata-maintained "
+                "noaa-gfs-pds, which documents an explicit rolling 4-week archive -- "
+                "that policy does not apply here."
             ),
         ),
         DataSource(

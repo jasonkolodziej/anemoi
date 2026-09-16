@@ -48,7 +48,18 @@ needing checkpoint/restart logic in the launcher itself.
 
 Both take the split name as their one positional arg (default `train`), and
 read `HURDAT2_PATH` / `CACHE_DIR` / `MAX_WORKERS` from the environment if you
-want to override their defaults without editing the script.
+want to override their defaults without editing the script. Set
+`SYNC_ARCHIVE=1` to also upload newly-cached files to the durable R2 archive
+(`.env`'s `S3_ARTIFACT_*`, same bucket `tracking.checkpoint_store` uses) --
+see docs/train_infrastructure.md's "Durable archive" section for why this
+matters more for GDAS than ERA5 (NOAA's bucket has no documented retention
+policy, so a local-only cache on a Spot VM is the only copy until it's
+synced off-box).
+
+`gdas_cache.sbatch` also drops any fix dated before GDAS's real archive
+start (2021-01-01, `data.gdas_cache.GDAS_ARCHIVE_START`) before fetching --
+`--split train` covers 1980-2019, decades before real GDAS data exists, so
+without this every such fix would just 404.
 
 Add a new ingest job here the same way: a `#SBATCH`-headered script that
 `cd`s to the repo root, resolves its inputs from env vars with sane

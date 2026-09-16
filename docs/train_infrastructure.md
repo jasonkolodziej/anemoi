@@ -134,3 +134,52 @@ tmux attach -t era5-cache-<id>     # watch one (Ctrl+B, D to detach)
 A Spot preemption kills whichever job is running regardless of how it was
 launched -- re-running the same `slurm/run_local.sh` command resumes from
 whatever's already cached.
+
+## Durable archive (GDAS/Stage B long-term data strategy)
+
+`data/sources.py` originally claimed GDAS was "2015-present archived" on
+NOAA's AWS Open Data bucket (`noaa-gfs-bdp-pds`). Verified wrong (direct S3
+`list-type=2` listing, 2026-09-16): the bucket's real `gfs.*` coverage starts
+**2021-01-01**, not 2015 -- `configs/curriculum.yaml`'s old `stage_b.
+season_range: [2015, 2019]` covered a period with zero real GDAS data, which
+is why an early `anemoi gdas-cache --split train` run 404'd on every single
+fix. No retention policy is documented for this bucket either way (a
+different, older bucket, `noaa-gfs-pds`, documents a rolling 4-week window --
+don't confuse the two).
+
+Given that, the decision for long-term production is to **not** depend on
+NOAA's bucket as the system of record: back-fill what's currently available
+(2021-present) into this project's own durable storage now, then keep it
+current incrementally as new cycles are fetched, rather than re-deriving a
+training set from a live bucket whose retention could change at any time.
+Concretely:
+
+- `data.gdas_cache.run_fetch_cache` now defaults to dropping any fix earlier
+  than `GDAS_ARCHIVE_START` (2021-01-01) before fetching -- `data.splits`'
+  season boundaries are shared with Stage A/ERA5 and go back to 1980, so an
+  unfiltered `--split train` run would otherwise spend one request per fix
+  discovering each one is a guaranteed 404.
+- `configs/curriculum.yaml`'s `stage_b.season_range` is now `[2021, 2023]` --
+  2021 is the real GDAS floor, 2023 is the latest season this project's
+  HURDAT2 archive has final best-track labels for.
+- `anemoi era5-cache`/`gdas-cache --sync-archive` (or `SYNC_ARCHIVE=1` on the
+  `slurm/` scripts) uploads every locally-cached `.npz` not yet in R2 to
+  `s3://<bucket>/{era5,gdas}_archive/<storm_id>/<cycle>.npz`, the same
+  R2 bucket/credentials `tracking.checkpoint_store` already uses
+  (`S3_ARTIFACT_*` in `.env`) -- reused as-is rather than a new backend,
+  since that bucket already names itself a general artifact store, not a
+  checkpoint-only one. It's a separate, independently-resumable pass over
+  the local cache (existence checked in R2 itself, not a separate ledger),
+  not folded into the fetch call, so a slow archive endpoint can never stall
+  or fail a fetch run.
+
+One-time backfill of everything already cached on this VM:
+
+```bash
+SYNC_ARCHIVE=1 slurm/run_local.sh slurm/gdas_cache.sbatch train
+
+# or, without re-fetching (already-cached files are skipped by default,
+# --sync-archive still runs against whatever's on disk):
+uv run anemoi gdas-cache --hurdat2 ~/hurdat2-atl.txt --cache-dir ~/gdas_cache \
+  --split train --sync-archive
+```

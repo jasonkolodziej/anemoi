@@ -13,17 +13,17 @@ import pytest
 
 from anemoi.data.besttrack import Fix, Track, TrackQuality
 from anemoi.data.features import GriddedFields
-from anemoi.data.gdas_cache import run_fetch_cache
+from anemoi.data.gdas_cache import GDAS_ARCHIVE_START, run_fetch_cache
 from anemoi.data.sources import Flavor
 
 T = datetime(2026, 8, 6, 0, tzinfo=UTC)
 
 
-def make_track(storm_id: str, n: int) -> Track:
+def make_track(storm_id: str, n: int, *, start: datetime = T) -> Track:
     fixes = tuple(
         Fix(
             storm_id=storm_id,
-            valid_time=T + timedelta(hours=6 * i),
+            valid_time=start + timedelta(hours=6 * i),
             lat=20.0 + 0.1 * i,
             lon=-60.0 - 0.2 * i,
             max_wind_kt=60.0,
@@ -104,6 +104,42 @@ def test_run_fetch_cache_records_failures_without_aborting_the_run(tmp_path):
     assert report.n_fetched == 2
     assert report.n_failed == 1
     assert "simulated NOAA range-request failure" in report.failures[0][1]
+
+
+def test_run_fetch_cache_drops_fixes_before_the_real_archive_start_by_default(tmp_path):
+    """GDAS's real archive (noaa-gfs-bdp-pds) starts 2021-01-01 -- a fix
+    dated earlier is a guaranteed 404, not a transient failure, so it should
+    never reach fetch_fn at all (see gdas_cache.GDAS_ARCHIVE_START)."""
+    pre_archive = make_track("AL01", 2, start=datetime(2015, 8, 1, tzinfo=UTC))
+    post_archive = make_track("AL02", 2, start=datetime(2022, 8, 1, tzinfo=UTC))
+    calls = []
+
+    def fake_fetch(valid_time, lat, lon):
+        calls.append(valid_time)
+        return make_fields()
+
+    report = run_fetch_cache(
+        [pre_archive, post_archive], tmp_path, fetch_fn=fake_fetch, progress_every=0
+    )
+
+    assert report.n_total == 2  # only post_archive's fixes were ever tasks
+    assert report.n_fetched == 2
+    assert all(v >= GDAS_ARCHIVE_START for v in calls)
+    assert len(list(tmp_path.glob("AL01/*.npz"))) == 0
+    assert len(list(tmp_path.glob("AL02/*.npz"))) == 2
+
+
+def test_run_fetch_cache_min_valid_time_none_disables_the_filter(tmp_path):
+    pre_archive = make_track("AL01", 2, start=datetime(2015, 8, 1, tzinfo=UTC))
+
+    def fake_fetch(valid_time, lat, lon):
+        return make_fields()
+
+    report = run_fetch_cache(
+        [pre_archive], tmp_path, fetch_fn=fake_fetch, min_valid_time=None, progress_every=0
+    )
+    assert report.n_total == 2
+    assert report.n_fetched == 2
 
 
 @pytest.mark.gridded

@@ -4,7 +4,8 @@ Scope v2.1 §4.6.1.
 
 * **Stage A (pretrain)** -- ERA5, 1980-present, final best-track as labels.
   Buys representation quality from four decades of homogeneous reanalysis.
-* **Stage B (fine-tune)** -- GDAS/GFS analyses 2015-present, working-quality
+* **Stage B (fine-tune)** -- GDAS/GFS analyses 2021-present (the real archive's
+  verified start -- see ``data.sources``'s ``gdas_gfs`` entry), working-quality
   track as *input*, final best-track still as labels. Buys the thing that
   actually matters: weights adapted to the distribution the model is served.
 
@@ -98,7 +99,7 @@ def stage_b(
     *,
     epochs: int = 20,
     learning_rate: float = 1e-4,
-    season_range: tuple[int, int] = (2015, 2019),
+    season_range: tuple[int, int] = (2021, 2023),
     frozen_modules: tuple[str, ...] = ("encoder",),
 ) -> StageSpec:
     """Canonical Stage B: GDAS fine-tuning on operational-quality inputs.
@@ -106,6 +107,13 @@ def stage_b(
     The default learning rate is an order of magnitude below Stage A's: the aim
     is to re-seat the model on the operational distribution, not to relearn the
     representation on a decade of data.
+
+    ``season_range`` defaults to (2021, 2023): 2021 is GDAS's verified real
+    archive start in ``noaa-gfs-bdp-pds`` (no data exists before it, see
+    ``data.sources``'s ``gdas_gfs`` entry); 2023 is the latest season this
+    project's HURDAT2 archive (``hurdat2-atl-1851-2023-042624.txt``) has
+    final best-track labels for -- Stage B needs both a real GDAS input and a
+    real final-best-track label for every season it trains on.
     """
     return StageSpec(
         name="B",

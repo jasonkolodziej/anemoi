@@ -20,6 +20,11 @@ SPLIT="${1:-train}"
 HURDAT2="${HURDAT2_PATH:-$HOME/hurdat2-atl.txt}"
 CACHE_DIR="${CACHE_DIR:-$HOME/era5_cache}"
 MAX_WORKERS="${MAX_WORKERS:-8}"
+# Set SYNC_ARCHIVE=1 to also upload newly-cached files to the durable R2
+# archive (needs the storage extra and S3_ARTIFACT_* in .env) -- see
+# docs/train_infrastructure.md's "Durable archive" section.
+SYNC_ARCHIVE_FLAG=""
+[ "${SYNC_ARCHIVE:-0}" = "1" ] && SYNC_ARCHIVE_FLAG="--sync-archive"
 
 if [ ! -f "$HURDAT2" ]; then
   echo "HURDAT2 archive not found at $HURDAT2 -- fetch it first:" >&2
@@ -31,4 +36,5 @@ uv run anemoi era5-cache \
   --hurdat2 "$HURDAT2" \
   --cache-dir "$CACHE_DIR" \
   --split "$SPLIT" \
-  --max-workers "$MAX_WORKERS"
+  --max-workers "$MAX_WORKERS" \
+  $SYNC_ARCHIVE_FLAG
