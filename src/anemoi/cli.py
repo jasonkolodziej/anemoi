@@ -328,6 +328,59 @@ def cmd_train(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_train_schedule(args: argparse.Namespace) -> int:
+    """Run the full multi-model wave schedule via training.orchestrator,
+    backed by the real per-model runners (training.real_orchestrator, #22).
+
+    Only lstm/cnn/transformer/gnn/pinn have real implementations --
+    training.orchestrator.build_schedule always appends latents/diffusion/
+    fusion waves too (Anemoi-Spread diffusion and the fusion consensus
+    have no real runner yet), and those report a clear "not implemented
+    yet" failure rather than silently no-op'ing; run_schedule's own
+    dependency semantics then correctly skip whatever depended on them.
+    Every Group 1 model still trains for real regardless.
+
+    Needs the torch and storage extras and real R2/S3 credentials
+    (S3_ARTIFACT_* in .env), same as `anemoi train`; cnn/transformer/gnn/
+    pinn additionally need --era5-cache-dir/--gdas-cache-dir.
+    """
+    from .data.hurdat2 import parse_hurdat2_file
+    from .tracking.checkpoint_store import CheckpointStore, S3Config
+    from .tracking.registry import ModelRegistry
+    from .training.orchestrator import Mode, build_schedule, run_schedule
+    from .training.real_orchestrator import RealOrchestratorRunner
+
+    tracks = parse_hurdat2_file(args.hurdat2)
+    store = CheckpointStore(S3Config.from_env())
+    registry = ModelRegistry(args.registry_root)
+
+    mode = Mode(args.mode)
+    default_models = ("lstm", "cnn", "transformer", "gnn", "pinn")
+    models = tuple(args.models.split(",")) if args.models else default_models
+    schedule = build_schedule(mode, models=models)
+
+    runner = RealOrchestratorRunner(
+        tracks=tracks,
+        checkpoint_store=store,
+        era5_cache_dir=args.era5_cache_dir,
+        gdas_cache_dir=args.gdas_cache_dir,
+        registry=registry,
+        seed=args.seed,
+        n_augment=args.n_augment,
+    )
+    result = run_schedule(schedule, runner)
+
+    print(f"schedule: {mode.value}, {len(schedule.task_names())} tasks")
+    for outcome in result.outcomes:
+        status = "OK" if outcome.ok else "FAILED"
+        print(f"  [{status}] {outcome.task}: {outcome.detail}")
+    if result.skipped:
+        print(f"  SKIPPED (unmet dependencies): {', '.join(result.skipped)}")
+    print(f"succeeded: {list(result.succeeded)}")
+    print(f"failed: {list(result.failed)}")
+    return 0 if not result.failed else 1
+
+
 def cmd_splits(args: argparse.Namespace) -> int:
     tracks = generate_archive(args.start, args.end, seed=args.seed)
     assignment = assign_splits(tracks)
@@ -426,6 +479,27 @@ def main(argv: list[str] | None = None) -> int:
         default=str(Path.home() / ".anemoi" / "registry"),
     )
     p.set_defaults(func=cmd_train)
+
+    p = sub.add_parser(
+        "train-schedule", help="run the full multi-model wave schedule (#22)"
+    )
+    p.add_argument(
+        "--mode", default="sequential", choices=["sequential", "parallel"],
+    )
+    p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
+    p.add_argument(
+        "--models", default=None,
+        help="comma-separated Group 1 models to schedule (default: all five)",
+    )
+    p.add_argument("--seed", type=int, default=20260806)
+    p.add_argument("--n-augment", dest="n_augment", type=int, default=3)
+    p.add_argument("--era5-cache-dir", dest="era5_cache_dir", default=None)
+    p.add_argument("--gdas-cache-dir", dest="gdas_cache_dir", default=None)
+    p.add_argument(
+        "--registry-root", dest="registry_root",
+        default=str(Path.home() / ".anemoi" / "registry"),
+    )
+    p.set_defaults(func=cmd_train_schedule)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
