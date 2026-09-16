@@ -20,6 +20,7 @@ jobs:
         uses: actions/github-script@v7
         env:
           PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+          PROJECT_PAT: ${{ secrets.PROJECT_PAT }}
         with:
           github-token: ${{ secrets.PROJECT_PAT || github.token }}
           script: |
@@ -29,6 +30,15 @@ jobs:
                 'PROJECT_NUMBER repository variable is not set or is not a number. ' +
                 'Set it to the GitHub Project number (as shown in the project URL) to enable auto-sync. ' +
                 'See .github/workflows/sync-issue-to-project.yml for details.'
+              );
+              return;
+            }
+
+            if (!process.env.PROJECT_PAT) {
+              core.setFailed(
+                'PROJECT_PAT is required for this workflow. The default GITHUB_TOKEN cannot update ' +
+                'GitHub Projects v2 in many repositories, and the project mutation will fail with ' +
+                '"Resource not accessible by integration".'
               );
               return;
             }
@@ -67,12 +77,37 @@ jobs:
                     }
                   }
                 }
+                organization(login: $login) {
+                  projectV2(number: $number) {
+                    id
+                    fields(first: 50) {
+                      nodes {
+                        ... on ProjectV2Field {
+                          id
+                          name
+                          dataType
+                        }
+                        ... on ProjectV2SingleSelectField {
+                          id
+                          name
+                          dataType
+                          options { id name }
+                        }
+                        ... on ProjectV2IterationField {
+                          id
+                          name
+                          dataType
+                        }
+                      }
+                    }
+                  }
+                }
               }
             `, { login: owner, number: projectNumber });
 
-            const project = projectQuery.user?.projectV2;
+            const project = projectQuery.user?.projectV2 ?? projectQuery.organization?.projectV2;
             if (!project) {
-              core.warning(`Project #${projectNumber} not found for user ${owner}.`);
+              core.warning(`Project #${projectNumber} not found for owner ${owner} or the token does not have access to it.`);
               return;
             }
 
