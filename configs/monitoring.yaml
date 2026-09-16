@@ -26,8 +26,11 @@ promotion:
   flavor: gdas_finetune
   primary_metric: track_error_48h_nm
   require_manual_gate: true
+  # track_error_48h_nm re-baselined against NHC's GPRA performance-measures
+  # table (45.4 nm 2024, 53.4 nm 2025, 51.0 nm 2026 target); the rest are not
+  # yet re-derived -- see training/promotion.py:TRACK_THRESHOLDS.
   thresholds:
-    track_error_48h_nm:         {limit: 90.0,  lower_is_better: true}
+    track_error_48h_nm:         {limit: 70.0,  lower_is_better: true}
     track_error_72h_nm:         {limit: 150.0, lower_is_better: true}
     track_error_120h_nm:        {limit: 250.0, lower_is_better: true}
     intensity_error_48h_kt:     {limit: 15.0,  lower_is_better: true}
