@@ -20,6 +20,17 @@
 # something this launcher tries to solve.
 #
 # Usage: slurm/run_local.sh slurm/<script>.sbatch [job-script-args...]
+#
+# Env vars a job script reads (SYNC_ARCHIVE, HURDAT2_PATH, ...) are passed
+# through explicitly below via `tmux new-session -e`, not left to ambient
+# inheritance -- tmux only captures a NEW session's environment from its
+# client at the moment the SERVER itself starts. Once a server is already
+# running (any earlier job this boot), a later `tmux new-session` does NOT
+# pick up env vars set only in that later shell -- confirmed the hard way:
+# `SYNC_ARCHIVE=1 slurm/run_local.sh slurm/gdas_cache.sbatch` silently ran
+# with SYNC_ARCHIVE unset whenever it wasn't the first job launched since
+# boot, so `--sync-archive` never reached the script and nothing reached R2,
+# with no error at all -- the fetch step still "succeeded" on its own.
 
 set -euo pipefail
 
@@ -49,7 +60,21 @@ LOG_DIR="$ROOT_DIR/logs"
 mkdir -p "$LOG_DIR"
 LOG_PATH="$LOG_DIR/${SESSION}.log"
 
-tmux new-session -d -s "$SESSION" \
+#: Job-script env vars this launcher forwards explicitly (see the note
+#: above on why ambient inheritance isn't enough). Add a name here if a new
+#: job script reads a new env var.
+PASSTHROUGH_VARS=(
+  SYNC_ARCHIVE HURDAT2_PATH CACHE_DIR MAX_WORKERS
+  REGISTRY_ROOT SEED N_AUGMENT HIDDEN_DIM
+)
+TMUX_ENV_ARGS=()
+for var in "${PASSTHROUGH_VARS[@]}"; do
+  if [ -n "${!var:-}" ]; then
+    TMUX_ENV_ARGS+=(-e "${var}=${!var}")
+  fi
+done
+
+tmux new-session -d -s "$SESSION" "${TMUX_ENV_ARGS[@]}" \
   "bash '$SCRIPT' $* 2>&1 | tee -a '$LOG_PATH'"
 
 echo "submitted '$JOB_NAME' as tmux session '$SESSION'"
