@@ -99,7 +99,7 @@ the affected model only" impossible to do accidentally.
 
 | Component | Status | To productionise |
 |---|---|---|
-| Storm archive | Synthetic, seeded | Parse HURDAT2 into `Track`; keep `TrackQuality.FINAL` |
+| Storm archive | Parser done (`data.hurdat2.parse_hurdat2`), not wired as the default source | Point the CLI/API/demo at a real HURDAT2 file |
 | Working track | Emulated from final | Ingest real a-deck/b-deck/TC-Vitals; run `recalibrate_from_pairs` |
 | Gridded fields | Synthetic, dual-flavor | GRIB2 readers for GDAS/GFS and ERA5 into `GriddedFields` |
 | Satellite | Not implemented | GOES-18/19 storm-relative crops into the CNN channel stack |
@@ -175,6 +175,7 @@ path in production.
 | `test_time_utils.py` | Synoptic arithmetic; t-6 selection; t-12 fallback |
 | `test_sources.py` | Role assignment; operational guard |
 | `test_besttrack.py` | Working/final separation; emulator statistics; recalibration |
+| `test_hurdat2.py` | HURDAT2 parsing; synoptic-hour filtering; missing-field handling |
 | `test_availability.py` | Publication timing; outages; opportunistic feeds |
 | `test_scheduler.py` | Cycle timeline; vitals gating; load shedding; deadlines |
 | `test_curriculum.py` | Stage A/B ordering; flavor rules; deployability |
