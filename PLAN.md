@@ -103,7 +103,7 @@ the affected model only" impossible to do accidentally.
 | Working track | Parsers done (`data.atcf.parse_bdeck`, `parse_tcvitals`); `pair_by_valid_time` + `recalibrate_from_pairs` demonstrated on parsed data | Point at a real archive; recalibrate Stage B's noise defaults from it |
 | Gridded fields | Synthetic, dual-flavor | GRIB2 readers for GDAS/GFS and ERA5 into `GriddedFields` |
 | Satellite | Not implemented | GOES-18/19 storm-relative crops into the CNN channel stack |
-| Potential intensity | SST/OHC/shear regression | Full Emanuel (1995) from thermodynamic soundings |
+| Potential intensity | SST/OHC/shear regression (still the pipeline default); real Bister-Emanuel (1998) closed form implemented separately (`emanuel_potential_intensity`), not yet wired in | Real boundary-layer/outflow soundings, then swap the one call site in `compute_environment_features` |
 | Cone radii | Current-season (2026) NHC 2/3-probability radii, documented in `configs/inference.yaml` | Re-baseline each season against nhc.noaa.gov/aboutcone.shtml |
 | Appendix B thresholds | Provisional | Re-baseline against the current NHC verification report |
 | Models | Untrained | Stage A on ERA5, Stage B on GDAS, per `configs/curriculum.yaml` |
@@ -200,7 +200,7 @@ path in production.
 | `test_skew.py` | ERA5T audit; alert thresholds; windowing |
 | `test_drift.py` | Feature drift; reference flavor; validation-loss trigger |
 | `test_metrics.py` | Track/intensity errors; beat rate; DM test; CRPS; spread-skill |
-| `test_features_splits.py` | Dual-flavor parity; flavor guards; split leakage; inner-core moisture; cold wake |
+| `test_features_splits.py` | Dual-flavor parity; flavor guards; split leakage; inner-core moisture; cold wake; Emanuel PI closed form |
 | `test_cycle.py` | End-to-end cycle; every degraded mode; extrapolation |
 | `test_postprocess.py` | Cone construction and fallback; PDF; landfall; RI |
 | `test_tags.py` | Tag validation; v2.1 additions |

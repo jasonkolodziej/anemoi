@@ -11,12 +11,17 @@ from anemoi.data.features import (
     GriddedFields,
     Normalizer,
     apply_cold_wake,
+    area_mean,
     assert_flavor,
     cold_wake_sst_depression_c,
+    compare_potential_intensity_estimates,
     compute_environment_features,
     deep_layer_shear,
+    emanuel_potential_intensity,
     inner_core_moisture,
+    potential_intensity,
 )
+from anemoi.data.features import _saturation_vapor_pressure_hpa
 from anemoi.data.sources import Flavor
 from anemoi.data.splits import (
     LeakageError,
@@ -141,6 +146,60 @@ def test_apply_cold_wake_is_a_noop_for_a_calm_storm():
     waked = apply_cold_wake(fields, max_wind_kt=0.0, translation_speed_kt=10.0)
     np.testing.assert_array_equal(waked.sst, fields.sst)
     np.testing.assert_array_equal(waked.ohc, fields.ohc)
+
+
+def test_saturation_vapor_pressure_matches_known_bolton_values():
+    """External sanity check against commonly-cited values, not just internal
+    consistency: es(0 degC) = 6.112 hPa by construction; es(25 degC) ~ 31.7 hPa
+    is the standard textbook figure."""
+    assert _saturation_vapor_pressure_hpa(0.0) == pytest.approx(6.112, abs=0.01)
+    assert _saturation_vapor_pressure_hpa(25.0) == pytest.approx(31.7, abs=0.2)
+
+
+def test_emanuel_pi_increases_with_warmer_sst():
+    cool = emanuel_potential_intensity(24.0, 24.0 + 273.15 - 1.0, 80.0, 1012.0)
+    warm = emanuel_potential_intensity(30.0, 30.0 + 273.15 - 1.0, 80.0, 1012.0)
+    assert warm > cool
+
+
+def test_emanuel_pi_is_reduced_above_the_shear_onset():
+    calm = emanuel_potential_intensity(29.0, 29.0 + 273.15 - 1.0, 80.0, 1012.0, shear_kt=5.0)
+    sheared = emanuel_potential_intensity(29.0, 29.0 + 273.15 - 1.0, 80.0, 1012.0, shear_kt=40.0)
+    assert sheared < calm
+
+
+def test_emanuel_pi_is_zero_when_the_boundary_layer_is_warmer_and_moister_than_the_surface():
+    """A stable/inverted setup has no thermodynamic potential intensity --
+    delta_k is floored at zero rather than going negative."""
+    pi = emanuel_potential_intensity(
+        sst_c=15.0, boundary_layer_temp_k=320.0, boundary_layer_rh_pct=99.0,
+        surface_pressure_mb=1012.0,
+    )
+    assert pi == 0.0
+
+
+def test_compare_potential_intensity_estimates_documents_the_closed_form_running_hot():
+    """The closed-form model, fed a guessed climatological boundary layer
+    (GriddedFields has no real near-surface sounding), runs systematically
+    higher than the regression proxy -- this is *why* potential_intensity()
+    keeps the proxy as the pipeline default rather than switching to the
+    real equation with fabricated inputs. If this stops being true, the
+    docstrings in features.py making that argument need revisiting too."""
+    fields = generate_fields(T, Flavor.ERA5_PRETRAIN, seed=0)
+    estimates = compare_potential_intensity_estimates(fields, shear_kt=12.0)
+    assert estimates["closed_form_kt"] > estimates["proxy_kt"]
+
+
+def test_potential_intensity_proxy_is_unaffected_by_the_closed_form_addition():
+    """Regression guard: compute_environment_features must still call the
+    proxy, not the closed form, for its production feature values."""
+    fields = generate_fields(T, Flavor.ERA5_PRETRAIN, seed=0)
+    sst_c = area_mean(fields.sst)
+    ohc = area_mean(fields.ohc)
+    shear_mag = deep_layer_shear(fields)[0]
+    expected = potential_intensity(sst_c, ohc, shear_mag)
+    fs = compute_environment_features(fields)
+    assert fs["potential_intensity_kt"] == pytest.approx(expected)
 
 
 def test_normalizer_refuses_to_fit_across_flavors():

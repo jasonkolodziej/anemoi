@@ -199,23 +199,138 @@ def relative_vorticity_850(fields: GriddedFields, dx_km: float = 27.75) -> float
     return float(area_mean((dvdx - dudy) * kt_to_ms) * 1e5)
 
 
+#: Bister & Emanuel (1998) take Ck/Cd close to 1 (their surface-exchange
+#: coefficients for enthalpy and momentum); observations suggest both vary at
+#: extreme wind speeds, but a constant ratio is the standard simplification.
+CK_OVER_CD = 1.0
+
+#: Outflow-layer (tropopause) temperature. The real algorithm derives this
+#: from a full vertical sounding (the parcel's saturation point at its
+#: outflow level); GriddedFields does not carry one, so this is a fixed
+#: climatological value for the deep tropics rather than a computed one.
+OUTFLOW_TEMPERATURE_K = 200.0
+
+#: Standard thermodynamic constants used by the enthalpy-disequilibrium term.
+LATENT_HEAT_VAPORIZATION_J_KG = 2.5e6
+SPECIFIC_HEAT_DRY_AIR_J_KG_K = 1005.0
+
+#: Above this shear (kt), potential intensity is reduced below the
+#: thermodynamic ceiling. Shear disruption is a well-established empirical
+#: effect (e.g. DeMaria 1996, doi:10.1175/1520-0469(1996)053<2076:TEOVWS>2.0.CO;2)
+#: applied on top of PI, not part of Emanuel's Carnot-cycle theory itself --
+#: PI is inherently a shear-free ceiling.
+SHEAR_PENALTY_ONSET_KT = 10.0
+SHEAR_PENALTY_KT_PER_KT = 1.8
+
+
+def _saturation_vapor_pressure_hpa(temp_c: float) -> float:
+    """Bolton (1980, doi:10.1175/1520-0493(1980)108<1046:TCOEPT>2.0.CO;2),
+    accurate to within ~0.3% over -35 to 35 degC -- the standard closed-form
+    substitute for integrating the Clausius-Clapeyron relation."""
+    return 6.112 * float(np.exp(17.67 * temp_c / (temp_c + 243.5)))
+
+
+def _specific_humidity_kg_kg(vapor_pressure_hpa: float, pressure_hpa: float) -> float:
+    denom = max(pressure_hpa - 0.378 * vapor_pressure_hpa, 1.0)
+    return 0.622 * vapor_pressure_hpa / denom
+
+
+def emanuel_potential_intensity(
+    sst_c: float,
+    boundary_layer_temp_k: float,
+    boundary_layer_rh_pct: float,
+    surface_pressure_mb: float,
+    shear_kt: float = 0.0,
+    *,
+    ck_over_cd: float = CK_OVER_CD,
+    outflow_temp_k: float = OUTFLOW_TEMPERATURE_K,
+) -> float:
+    """Potential intensity (kt) from Bister & Emanuel's (1998) closed form.
+
+    ``Vmax^2 = (Ck/Cd) * (Ts - T0)/T0 * dk``, where ``dk`` is the enthalpy
+    disequilibrium between air saturated at the sea surface and the actual
+    boundary-layer air (doi:10.1175/1520-0469(1995)052<3969:SOTCTS>2.0.CO;2,
+    as extended by doi:10.1007/BF01030791 for dissipative heating -- citing
+    the 1995 paper alone understates what is actually implemented here,
+    matching the operational ``pcmin`` code's formulation). This is the real
+    equation, not a regression standing in for it.
+
+    A shear penalty is applied afterward, not folded into ``dk`` -- PI theory
+    is inherently a shear-free ceiling; shear is a separate, well-established
+    reduction below that ceiling (see ``SHEAR_PENALTY_ONSET_KT``).
+    """
+    sst_k = sst_c + 273.15
+
+    es_sst = _saturation_vapor_pressure_hpa(sst_c)
+    qs_sst = _specific_humidity_kg_kg(es_sst, surface_pressure_mb)
+
+    boundary_layer_temp_c = boundary_layer_temp_k - 273.15
+    es_bl = _saturation_vapor_pressure_hpa(boundary_layer_temp_c)
+    e_bl = np.clip(boundary_layer_rh_pct, 0.0, 100.0) / 100.0 * es_bl
+    q_bl = _specific_humidity_kg_kg(e_bl, surface_pressure_mb)
+
+    delta_k = SPECIFIC_HEAT_DRY_AIR_J_KG_K * (sst_k - boundary_layer_temp_k) + (
+        LATENT_HEAT_VAPORIZATION_J_KG * (qs_sst - q_bl)
+    )
+    delta_k = max(delta_k, 0.0)  # a stable/inverted boundary layer has no PI, not a negative one
+
+    v_max_ms_sq = ck_over_cd * (sst_k - outflow_temp_k) / outflow_temp_k * delta_k
+    v_max_kt = np.sqrt(max(v_max_ms_sq, 0.0)) * 1.943844
+
+    shear_penalty = SHEAR_PENALTY_KT_PER_KT * max(shear_kt - SHEAR_PENALTY_ONSET_KT, 0.0)
+    return float(np.clip(v_max_kt - shear_penalty, 0.0, 200.0))
+
+
 def potential_intensity(sst_c: float, ohc: float, shear_kt: float) -> float:
-    """Empirical potential-intensity proxy in knots.
+    """Empirical potential-intensity proxy in knots. Still the pipeline default.
 
-    An SST/OHC/shear regression standing in for the real algorithm named in §4.3,
-    which needs a full thermodynamic sounding. The interface is the one the real
-    implementation will keep; swapping it out changes this function only.
+    An SST/OHC/shear regression standing in for :func:`emanuel_potential_intensity`,
+    the real algorithm implemented above. The interface is the one the real
+    implementation will keep; swapping it out changes this function's one
+    call site in :func:`compute_environment_features`.
 
-    The algorithm to swap in is Emanuel (1995,
-    doi:10.1175/1520-0469(1995)052<3969:SOTCTS>2.0.CO;2) as extended by Bister and
-    Emanuel (1998, doi:10.1007/BF01030791) -- the open-cycle formulation with
-    dissipative heating, which is what the operational ``pcmin`` code implements.
-    Citing the 1995 paper alone understates what is actually used.
+    Deliberately not swapped in yet: :func:`emanuel_potential_intensity` needs
+    a real boundary-layer/outflow sounding to be trustworthy, and
+    ``GriddedFields`` only has 700 mb-level fields, not a near-surface one.
+    Feeding it a guessed boundary layer close to SST produces PI estimates
+    that stay implausibly high across the full SST range this proxy covers
+    (see :func:`compare_potential_intensity_estimates` and
+    ``test_emanuel_pi_needs_real_soundings_before_replacing_the_proxy``) --
+    swapping a regression for a real equation fed fabricated inputs is not
+    an improvement, it just moves the uncertainty somewhere less visible.
+    Wiring this in for real is tracked with real GriddedFields (#18).
     """
     base = 15.0 * max(sst_c - 26.0, 0.0)
     ohc_bonus = 0.25 * max(ohc, 0.0)
     shear_penalty = 1.8 * max(shear_kt - 10.0, 0.0)
     return float(np.clip(35.0 + base + ohc_bonus - shear_penalty, 0.0, 200.0))
+
+
+def compare_potential_intensity_estimates(fields: GriddedFields, shear_kt: float) -> dict[str, float]:
+    """Run both PI estimates on the same case, for inspection and testing.
+
+    The closed-form estimate approximates the boundary layer GriddedFields
+    doesn't carry as a well-mixed marine layer close to SST, humidity
+    modulated by 700 mb RH as the best available moisture signal -- a
+    climatological stand-in, not measured data. Compare the two rather than
+    trusting either in isolation until real soundings exist.
+    """
+    sst_c = area_mean(fields.sst)
+    ohc = area_mean(fields.ohc)
+    surface_pressure_mb = area_mean(fields.mslp)
+    boundary_layer_temp_k = sst_c + 273.15 - 1.0
+    boundary_layer_rh_pct = np.clip(80.0 * (area_mean(fields.rh700) / 70.0), 50.0, 95.0)
+
+    return {
+        "proxy_kt": potential_intensity(sst_c, ohc, shear_kt),
+        "closed_form_kt": emanuel_potential_intensity(
+            sst_c,
+            boundary_layer_temp_k,
+            boundary_layer_rh_pct,
+            surface_pressure_mb,
+            shear_kt,
+        ),
+    }
 
 
 def integrated_vapor_transport(fields: GriddedFields) -> float:
