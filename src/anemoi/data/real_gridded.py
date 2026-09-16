@@ -291,7 +291,7 @@ def _parse_grib2_index(idx_text: str) -> dict[tuple[str, str], tuple[int, int | 
 
 
 def fetch_gdas_grib2_fields(
-    valid_time: datetime, *, timeout: float = 60.0
+    valid_time: datetime, *, timeout: float = 60.0, session: Any = None
 ) -> dict[tuple[str, int | str], np.ndarray]:
     """Byte-range fetch the pressure-level messages this module needs from
     NOAA's public GDAS/GFS analysis GRIB2 file on AWS Open Data.
@@ -301,13 +301,22 @@ def fetch_gdas_grib2_fields(
     exact byte range, and ``eccodes`` parses one small temp file per message.
     Returns ``{("UGRD", 200): (721, 1440) array, ..., ("PRMSL", "mean sea
     level"): array}``, the same keys :func:`gdas_to_gridded_fields` expects.
+
+    ``session`` may be a shared ``requests.Session`` -- each sample already
+    makes ~8 HTTP requests to the same host, and a shared session reuses the
+    underlying TCP/TLS connection pool across many samples (and across
+    concurrent worker threads, ``requests.Session`` is thread-safe for this
+    use); if omitted, uses the plain ``requests.get`` module functions
+    (this function's original, single-sample behaviour).
     """
     require_gdas_deps()
     import eccodes  # noqa: PLC0415
     import requests  # noqa: PLC0415
 
+    http = session if session is not None else requests
+
     url = _gdas_analysis_url(valid_time)
-    idx_resp = requests.get(f"{url}.idx", timeout=timeout)
+    idx_resp = http.get(f"{url}.idx", timeout=timeout)
     idx_resp.raise_for_status()
     byte_ranges = _parse_grib2_index(idx_resp.text)
 
@@ -320,7 +329,7 @@ def fetch_gdas_grib2_fields(
         if start is None:
             raise KeyError(f"{short_name}:{level_label} not found in {url}.idx")
         range_header = f"bytes={start}-{end - 1}" if end is not None else f"bytes={start}-"
-        resp = requests.get(url, headers={"Range": range_header}, timeout=timeout)
+        resp = http.get(url, headers={"Range": range_header}, timeout=timeout)
         resp.raise_for_status()
 
         with tempfile.NamedTemporaryFile(suffix=".grib2") as tmp:
