@@ -204,10 +204,22 @@ LSTM baseline against a real HURDAT2 file. It's the first of the five Group
 1 models with a real runner -- and deliberately the first one attempted,
 because `models.lstm.build_lstm`'s input is storm-history sequences, not
 gridded imagery: this model never reads ERA5/GDAS pixels, so it needs no
-gridded-field cache to train for real, only real tracks. CNN (imagery),
-Transformer (gridded fields), GNN (graph construction) and PINN (environment
-vector) each need their own real data-loading design against the cached
-`GriddedFields` this doc's earlier sections built -- not yet started.
+gridded-field cache to train for real, only real tracks. Transformer
+(gridded fields), GNN (graph construction) and PINN (environment vector +
+a base model's candidate track) each need their own real data-loading
+design against the cached `GriddedFields` this doc's earlier sections
+built -- not yet started.
+
+CNN has one too (`training.real_run_cnn.run_cnn_curriculum`, `anemoi train
+--model cnn`, `slurm/train_cnn.sbatch`): real GOES imagery isn't fetched
+yet (PLAN.md's Satellite row), but `build_cnn`'s architecture just consumes
+any multi-channel 2-D image (global average pool at the end makes it
+resolution-agnostic) -- so it reads the real cached `GriddedFields` (all 10
+fields) as its channel stack instead of waiting on real satellite imagery.
+Reads from `--era5-cache-dir`/`--gdas-cache-dir` (the same dirs
+`era5-cache`/`gdas-cache` fetch into); a fix with no cached file yet is
+skipped, not an error, so it trains on however much is cached at the
+moment it's invoked and improves as the ingest jobs fill in more.
 
 What it actually does, end to end:
 
@@ -234,6 +246,10 @@ curl -o ~/hurdat2-atl.txt https://www.nhc.noaa.gov/data/hurdat/hurdat2-atl-1851-
 
 slurm/run_local.sh slurm/train_lstm.sbatch
 tmux attach -t train-lstm-<id>
+
+# CNN -- benefits from era5_cache/gdas_cache having fetched data first,
+# but works with whatever's cached so far:
+slurm/run_local.sh slurm/train_cnn.sbatch
 ```
 
 Needs `torch` and `storage` extras (`uv sync --all-extras` already covers
