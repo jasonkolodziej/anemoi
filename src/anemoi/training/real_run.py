@@ -101,6 +101,41 @@ class StageSamples:
 
 
 @dataclass(frozen=True, slots=True)
+class RunArtifacts:
+    """Everything beyond ``(CurriculumRun, MetricSet)`` that
+    `training.real_latents.extract_joint_latents` needs from a completed
+    Stage B run: the trained model, and the EXACT standardisation stats
+    Stage B fit its inputs/targets with. Neither is recoverable any other
+    way -- `tracking.registry.ModelVersion` doesn't record a checkpoint_uri
+    (so the model can't just be reloaded), and the z-score stats are local
+    variables inside `train_lstm_stage`/its per-model siblings, never
+    returned anywhere else. Re-fitting them independently later (e.g. from
+    the same tracks with a fresh RNG draw) would only approximate the real
+    ones the model was actually trained against -- close, but not the
+    exact inverse of what the model's output space actually is.
+    """
+
+    model: object
+    #: LSTM/CNN/Transformer/GNN only: the single input tensor's and the
+    #: (dx_east_nm, dy_north_nm, wind_kt) target's standardisation stats.
+    #: None for PINN, whose inputs are a differently-shaped
+    #: (environment, candidate) pair rather than one ``x`` -- see
+    #: ``env_mean``/``env_std``/``candidate_model`` below instead.
+    x_mean: np.ndarray | None = None
+    x_std: np.ndarray | None = None
+    y_mean: np.ndarray | None = None
+    y_std: np.ndarray | None = None
+    #: PINN only (`real_run_pinn`): its Stage B candidate-generator LSTM,
+    #: plus the environment vector's standardisation stats. None for every
+    #: other model, which don't have a second model or an environment
+    #: vector to standardise. PINN's own output is already absolute
+    #: (lat, lon, wind), so it needs no y_mean/y_std to un-standardise.
+    candidate_model: object | None = None
+    env_mean: np.ndarray | None = None
+    env_std: np.ndarray | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class StageWindow:
     """One training window's track-derived pieces, common to every model's
     real Stage A/B runner regardless of what ``x`` representation (track
@@ -249,16 +284,19 @@ def train_lstm_stage(
     *,
     n_augment: int = 3,
     device=None,
-) -> tuple[object, float, float, MetricSet]:
+) -> tuple[object, float, float, MetricSet, tuple]:
     """Train ``model`` (fresh, or Stage A's trained weights for Stage B)
     through one curriculum stage against real tracks.
 
     Full-batch, matching `capacity_ablation.train_cell`'s proven pattern --
     same training shape, generalised to masked multi-lead targets and
     ``stage.frozen_modules``. Returns ``(model, train_loss, val_loss,
-    val_metrics)``: the two losses are masked MSE in standardised space
-    (comparable across stages), ``val_metrics`` carries the real nm/kt
-    breakdown `training.promotion.evaluate_promotion` needs.
+    val_metrics, standardization_stats)``: the two losses are masked MSE in
+    standardised space (comparable across stages), ``val_metrics`` carries
+    the real nm/kt breakdown `training.promotion.evaluate_promotion` needs,
+    and ``standardization_stats`` is ``(x_mean, x_std, y_mean, y_std)`` --
+    this stage's exact fit, needed to correctly un-standardise this model's
+    output later (`training.real_latents`).
     """
     if not train_tracks or not val_tracks:
         raise ValueError(f"stage {stage.name}: empty train or val storm set")
@@ -334,7 +372,7 @@ def train_lstm_stage(
     if not pairs:
         raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
     val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
-    return model, train_loss, val_loss, val_metrics
+    return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 
 def run_lstm_curriculum(
@@ -345,7 +383,7 @@ def run_lstm_curriculum(
     n_augment: int = 3,
     hidden_dim: int = 128,
     curriculum_kwargs: dict | None = None,
-) -> tuple[CurriculumRun, MetricSet]:
+) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the LSTM baseline
     against real HURDAT2 tracks, uploading each stage's checkpoint to
     durable storage.
@@ -354,9 +392,12 @@ def run_lstm_curriculum(
     (`docs/capacity_ablation.md`) -- validation loss kept improving through
     hidden_dim=128 with no sign of flattening, so this is the largest
     capacity that ablation actually measured, not an arbitrary choice.
-    Returns the completed ``CurriculumRun`` and Stage B's (the deployable
-    stage's) validation ``MetricSet``, ready for
-    ``training.promotion.evaluate_promotion``.
+    Returns the completed ``CurriculumRun``, Stage B's (the deployable
+    stage's) validation ``MetricSet`` (ready for
+    ``training.promotion.evaluate_promotion``), and a ``RunArtifacts``
+    bundling the trained Stage B model with its standardisation stats --
+    needed by ``training.real_latents`` to extract real Anemoi-Spread/fusion
+    conditioning latents and un-standardised predictions (#22, §5.7).
     """
     from ..models.lstm import build_lstm
 
@@ -379,7 +420,7 @@ def run_lstm_curriculum(
                 lead_hours=DEFAULT_LEADS,
             )
 
-        model, train_loss, val_loss, val_metrics = train_lstm_stage(
+        model, train_loss, val_loss, val_metrics, stats = train_lstm_stage(
             model, stage, train_tracks, val_tracks, rng, n_augment=n_augment,
         )
 
@@ -403,4 +444,6 @@ def run_lstm_curriculum(
         )
 
     assert val_metrics is not None  # curriculum always has >=1 stage
-    return run, val_metrics
+    x_mean, x_std, y_mean, y_std = stats
+    artifacts = RunArtifacts(model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std)
+    return run, val_metrics, artifacts

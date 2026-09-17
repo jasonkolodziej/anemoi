@@ -119,7 +119,7 @@ def test_train_transformer_stage_runs_and_produces_val_metrics(tmp_path):
     stage = stage_a(epochs=2, learning_rate=1e-2)
     rng = np.random.default_rng(5)
 
-    trained_model, train_loss, val_loss, val_metrics = train_transformer_stage(
+    trained_model, train_loss, val_loss, val_metrics, _stats = train_transformer_stage(
         model, stage, train_tracks, val_tracks, tmp_path, rng, n_augment=1,
     )
     assert trained_model is model
@@ -173,7 +173,7 @@ def test_run_transformer_curriculum_completes_both_stages(tmp_path):
     # dropout=0.0: torch's MPS backend (this machine, when run locally)
     # can't do scaled_dot_product_attention with dropout > 0 -- a platform
     # gap, not something real training on the CUDA VM needs to work around.
-    run, val_metrics = run_transformer_curriculum(
+    run, val_metrics, _artifacts = run_transformer_curriculum(
         tracks, store, era5_dir, gdas_dir, seed=42, n_augment=1, d_model=16, dropout=0.0,
     )
 

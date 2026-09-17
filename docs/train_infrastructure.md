@@ -135,6 +135,25 @@ A Spot preemption kills whichever job is running regardless of how it was
 launched -- re-running the same `slurm/run_local.sh` command resumes from
 whatever's already cached.
 
+**The `val` split needs fetching too, separately.** Every real per-model
+runner's `train_*_stage` builds BOTH a train and a val sample set and
+raises if either comes back empty (`training.real_run.train_lstm_stage`'s
+`"stage {name}: no usable samples built from the given tracks"` and its
+per-model siblings) -- `Curriculum.standard`'s Stage A/B both need real
+validation loss and `metrics.track.verify` pairs, not just training data.
+Running only `era5_cache.sbatch train`/`gdas_cache.sbatch train` (as the
+example above does) leaves the val-split storms with zero cached fixes, so
+CNN/Transformer/GNN/PINN's Stage A fails outright with "no cached
+GriddedFields matched the given tracks" even once train-split coverage is
+substantial -- discovered for real running this on the VM: 152 train-split
+storms already well-cached, but 0 of the 68 ERA5/val-split or 21
+GDAS-Stage-B-val-split storms. Fetch both:
+
+```bash
+slurm/run_local.sh slurm/era5_cache.sbatch val
+slurm/run_local.sh slurm/gdas_cache.sbatch val
+```
+
 ## Durable archive (GDAS/Stage B long-term data strategy)
 
 `data/sources.py` originally claimed GDAS was "2015-present archived" on
@@ -281,27 +300,77 @@ slurm/run_local.sh slurm/train_gnn.sbatch
 slurm/run_local.sh slurm/train_pinn.sbatch
 ```
 
-## Running all five as one schedule (`training.orchestrator`)
+## Running all seven as one schedule (`training.orchestrator`)
 
 `training.orchestrator.run_schedule`'s injected `runner` is wired to all
-five real per-model runners above
+seven real tasks the schedule can contain
 (`training.real_orchestrator.RealOrchestratorRunner`, `anemoi
 train-schedule`, `slurm/train_schedule.sbatch`) -- one job/log instead of
 launching each `train_<model>.sbatch` by hand, with the same real
 checkpoint upload, registry registration and promotion evaluation per
-model. `orchestrator.build_schedule` always appends `latents`/`diffusion`/
-`fusion` waves too (Anemoi-Spread diffusion and the fusion consensus have
-no real runner yet); those report a clean "not implemented yet" failure
-rather than silently no-op'ing, and `run_schedule`'s own dependency
-semantics (§10.1: one model's failure only skips *its* dependents)
-correctly skip whatever depended on them -- every Group 1 model still
-trains for real regardless.
+model:
 
 ```bash
 slurm/run_local.sh slurm/train_schedule.sbatch sequential
 # or: slurm/run_local.sh slurm/train_schedule.sbatch parallel
 tmux attach -t train-schedule-<id>
 ```
+
+`run_schedule`'s own dependency semantics (§10.1: one model's failure only
+skips *its* dependents) still apply -- if a Group 1 model's real training
+fails (e.g. an empty val split, see above), the `latents` task depending
+on it is skipped, and `diffusion`/`fusion` depending on `latents` are
+skipped in turn, while every model that *can* train still does.
+
+## Real latent extraction and the two derived models (#22, §5.7)
+
+Anemoi-Spread (diffusion) and the fusion consensus model don't read tracks
+or gridded fields directly -- they're conditioned on real latents pulled
+from the five just-trained Group 1 models, which is what the `latents`
+task (`training.real_latents.extract_joint_latents`) does: for every real
+window all five models can build a representation for (same
+`iter_stage_windows` loop every Group 1 runner shares, so a window missing
+cached `GriddedFields` is skipped for all five at once), it runs each
+model's `.encode()` -- the hook `models.base.ModelSpec`'s docstring was
+explicit was built for exactly this -- and concatenates the five real
+latent vectors, plus each model's own real Stage B forecast (converted to
+a shared absolute lat/lon/wind space) and a real synoptic context vector
+derived from the window's own track data (heading, speed, intensity trend,
+season, `real_latents.CONTEXT_FEATURE_NAMES`).
+
+This runs against the trained model objects still in memory from the SAME
+schedule run, not against checkpoints reloaded from storage:
+`tracking.registry.ModelVersion` doesn't record a checkpoint_uri today, and
+PINN's candidate-generator LSTM is never persisted at all (retrained fresh
+each run, per `real_run_pinn`'s own module docstring). Each Group 1
+runner's `real_run.RunArtifacts` carries the exact standardisation stats
+Stage B fit its inputs/targets with, so a model's raw output can be
+correctly un-standardised back to real units -- refitting those
+independently would only approximate the real inverse of the model's
+output space.
+
+Diffusion (`training.real_run_diffusion`) trains the standard DDPM
+epsilon-prediction objective (predict the noise added at a random
+timestep, `models.diffusion.build_diffusion`'s own cosine-schedule
+buffers) over the real masked multi-lead displacement targets, masked the
+same way every other real runner masks a lead beyond a short track's real
+length. Validation reduces the trained ensemble to its per-sample mean for
+`metrics.track.verify` -- a point number for promotion, not a claim that
+the mean IS the model's real product (the full ensemble is;
+`metrics.probabilistic.spread_skill` is the real check for that).
+
+Fusion (`training.real_run_fusion`) trains `models.fusion.build_fusion`'s
+learned per-lead-time consensus weights with a masked MSE directly in the
+shared absolute-coordinate space the five real per-model predictions and
+the true track already share -- no further standardisation needed, the
+same reason PINN's own absolute-space loss doesn't standardise either.
+
+Both derived models register with the real `latent_signature`
+(`tracking.registry.latent_signature`) computed from the Group 1 versions
+they were actually trained against, satisfying `ModelRegistry.pin_set`'s
+requirement that a promotable production set is coherent end to end --
+retraining any Group 1 model changes the signature and correctly
+invalidates the diffusion/fusion versions built from the old one.
 
 Needs `torch` and `storage` extras (`uv sync --all-extras` already covers
 both) and real `S3_ARTIFACT_*` credentials -- unlike the two ingest jobs,

@@ -56,6 +56,7 @@ from .device import get_device
 from .promotion import MetricSet
 from .real_run import (
     LEAD_STEPS,
+    RunArtifacts,
     boundaries_for_flavor,
     displacement_to_latlon,
     freeze_encoder,
@@ -263,11 +264,12 @@ def train_gnn_stage(
     *,
     n_augment: int = 3,
     device=None,
-) -> tuple[object, float, float, MetricSet]:
+) -> tuple[object, float, float, MetricSet, tuple]:
     """GNN analog of `real_run.train_lstm_stage` -- see that function for
-    the loss/verification design this mirrors. ``x`` is batched via
-    `batch_graph` (block-diagonal, see module docstring) before each
-    forward pass."""
+    the loss/verification design this mirrors, including the extra
+    ``(x_mean, x_std, y_mean, y_std)`` returned alongside the usual four
+    values. ``x`` is batched via `batch_graph` (block-diagonal, see module
+    docstring) before each forward pass."""
     if not train_tracks or not val_tracks:
         raise ValueError(f"stage {stage.name}: empty train or val storm set")
 
@@ -354,7 +356,7 @@ def train_gnn_stage(
     if not pairs:
         raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
     val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
-    return model, train_loss, val_loss, val_metrics
+    return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 
 def run_gnn_curriculum(
@@ -367,10 +369,15 @@ def run_gnn_curriculum(
     n_augment: int = 3,
     hidden_dim: int = 128,
     curriculum_kwargs: dict | None = None,
-) -> tuple[CurriculumRun, MetricSet]:
+) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the GNN baseline
     against real cached GriddedFields, treated as a lattice mesh (see
-    module docstring)."""
+    module docstring). Also returns a ``RunArtifacts`` bundling the
+    trained Stage B model with its standardisation stats (see
+    `real_run.run_lstm_curriculum`'s docstring for why) -- its mesh
+    topology isn't included since `build_mesh_topology` is a pure function
+    of the cached field shape/stride, cheap to rebuild rather than thread
+    through."""
     from ..models.gnn import build_gnn
 
     require_torch()
@@ -393,7 +400,7 @@ def run_gnn_curriculum(
                 hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
             )
 
-        model, train_loss, val_loss, val_metrics = train_gnn_stage(
+        model, train_loss, val_loss, val_metrics, stats = train_gnn_stage(
             model, stage, train_tracks, val_tracks, cache_dir, rng, n_augment=n_augment,
         )
 
@@ -417,4 +424,6 @@ def run_gnn_curriculum(
         )
 
     assert val_metrics is not None
-    return run, val_metrics
+    x_mean, x_std, y_mean, y_std = stats
+    artifacts = RunArtifacts(model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std)
+    return run, val_metrics, artifacts

@@ -42,6 +42,7 @@ from .device import get_device
 from .promotion import MetricSet
 from .real_run import (
     LEAD_STEPS,
+    RunArtifacts,
     boundaries_for_flavor,
     displacement_to_latlon,
     freeze_encoder,
@@ -161,11 +162,12 @@ def train_cnn_stage(
     *,
     n_augment: int = 3,
     device=None,
-) -> tuple[object, float, float, MetricSet]:
+) -> tuple[object, float, float, MetricSet, tuple]:
     """CNN analog of `real_run.train_lstm_stage` -- same masked multi-lead
     training/verification shape, ``x`` built from cached real GriddedFields
     instead of track sequences. See that function for the loss/verification
-    design this mirrors.
+    design this mirrors, including the extra ``(x_mean, x_std, y_mean,
+    y_std)`` returned alongside the usual four values.
     """
     if not train_tracks or not val_tracks:
         raise ValueError(f"stage {stage.name}: empty train or val storm set")
@@ -244,7 +246,7 @@ def train_cnn_stage(
     if not pairs:
         raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
     val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
-    return model, train_loss, val_loss, val_metrics
+    return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 
 def run_cnn_curriculum(
@@ -257,7 +259,7 @@ def run_cnn_curriculum(
     n_augment: int = 3,
     latent_dim: int = 256,
     curriculum_kwargs: dict | None = None,
-) -> tuple[CurriculumRun, MetricSet]:
+) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the CNN baseline
     against real cached GriddedFields.
 
@@ -266,7 +268,9 @@ def run_cnn_curriculum(
     `real_run.boundaries_for_flavor`). ``latent_dim`` defaults to the
     architecture's own default (256); the capacity ablation (#9) measured
     only the LSTM, so there's no measured recommendation to override it with
-    yet.
+    yet. Also returns a ``RunArtifacts`` bundling the trained Stage B model
+    with its standardisation stats (see `real_run.run_lstm_curriculum`'s
+    docstring for why).
     """
     from ..models.cnn import build_cnn
 
@@ -289,7 +293,7 @@ def run_cnn_curriculum(
                 in_channels=len(CNN_FIELD_NAMES), latent_dim=latent_dim, lead_hours=DEFAULT_LEADS,
             )
 
-        model, train_loss, val_loss, val_metrics = train_cnn_stage(
+        model, train_loss, val_loss, val_metrics, stats = train_cnn_stage(
             model, stage, train_tracks, val_tracks, cache_dir, rng, n_augment=n_augment,
         )
 
@@ -313,4 +317,6 @@ def run_cnn_curriculum(
         )
 
     assert val_metrics is not None
-    return run, val_metrics
+    x_mean, x_std, y_mean, y_std = stats
+    artifacts = RunArtifacts(model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std)
+    return run, val_metrics, artifacts

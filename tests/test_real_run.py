@@ -182,7 +182,7 @@ def test_train_lstm_stage_reduces_loss_over_epochs():
 
     from anemoi.training.real_run import train_lstm_stage
 
-    trained_model, train_loss, val_loss, val_metrics = train_lstm_stage(
+    trained_model, train_loss, val_loss, val_metrics, _stats = train_lstm_stage(
         model, stage, tracks, val_tracks, rng, n_augment=2,
     )
     assert trained_model is model
@@ -229,7 +229,7 @@ def test_run_lstm_curriculum_completes_both_stages_and_uploads_checkpoints():
 
     from anemoi.training.real_run import run_lstm_curriculum
 
-    run, val_metrics = run_lstm_curriculum(
+    run, val_metrics, _artifacts = run_lstm_curriculum(
         tracks, store, seed=42, n_augment=1, hidden_dim=8,
     )
 
@@ -257,7 +257,9 @@ def test_run_lstm_curriculum_stage_b_starts_from_stage_a_weights_not_fresh(tmp_p
 
     from anemoi.training.real_run import run_lstm_curriculum
 
-    run, _val_metrics = run_lstm_curriculum(tracks, store, seed=42, n_augment=1, hidden_dim=8)
+    run, _val_metrics, _artifacts = run_lstm_curriculum(
+        tracks, store, seed=42, n_augment=1, hidden_dim=8,
+    )
 
     import torch
 

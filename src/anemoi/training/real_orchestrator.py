@@ -11,15 +11,12 @@ registers the result in `ModelRegistry`, and evaluates promotion, exactly
 the sequence `cli.cmd_train` already does for one model at a time -- this
 generalises it across a whole schedule.
 
-Only Group 1 (lstm/cnn/transformer/gnn/pinn) has real implementations.
-`orchestrator.build_schedule` always appends latents/diffusion/fusion
-waves regardless of which Group 1 models are requested (Anemoi-Spread
-diffusion and the fusion consensus have no real runner yet) -- those tasks
-report a clear "not implemented yet" failure rather than silently
-no-op'ing or pretending to succeed. `run_schedule`'s own dependency
-semantics (a Group 1 failure only skips *its* dependents, §10.1) handle
-the rest correctly: every Group 1 model still trains for real, only the
-genuinely-unbuilt downstream stages report as not done.
+All seven tasks the schedule can contain now have real implementations:
+the five Group 1 models, `training.real_latents.extract_joint_latents` for
+the "latents" task, and `training.real_run_diffusion`/`real_run_fusion` for
+the two models derived from those latents (§5.7). A Group 1 model's
+failure still only skips *its* dependents (`run_schedule`'s own dependency
+semantics, §10.1) -- every model that can train, does.
 """
 
 from __future__ import annotations
@@ -32,63 +29,119 @@ from pathlib import Path
 from ..data.besttrack import Track
 from ..data.sources import Flavor
 from ..tracking.checkpoint_store import CheckpointStore
-from ..tracking.registry import ModelRegistry
+from ..tracking.registry import DERIVED_MODELS, GROUP1_MODELS, ModelRegistry, latent_signature
 from .curriculum import CurriculumRun
-from .orchestrator import RunOutcome, Task
+from .orchestrator import OrchestrationError, RunOutcome, Task
 from .promotion import MetricSet, PromotionDecision, evaluate_promotion
 
 
 def _run_lstm(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]:
     from .real_run import run_lstm_curriculum
 
-    return run_lstm_curriculum(r.tracks, r.checkpoint_store, seed=r.seed, n_augment=r.n_augment)
+    run, val_metrics, artifacts = run_lstm_curriculum(
+        r.tracks, r.checkpoint_store, seed=r.seed, n_augment=r.n_augment,
+    )
+    r.trained_artifacts["lstm"] = artifacts
+    return run, val_metrics
 
 
 def _run_cnn(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]:
     from .real_run_cnn import run_cnn_curriculum
 
-    return run_cnn_curriculum(
+    run, val_metrics, artifacts = run_cnn_curriculum(
         r.tracks, r.checkpoint_store, r.era5_cache_dir, r.gdas_cache_dir,
         seed=r.seed, n_augment=r.n_augment,
     )
+    r.trained_artifacts["cnn"] = artifacts
+    return run, val_metrics
 
 
 def _run_transformer(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]:
     from .real_run_transformer import run_transformer_curriculum
 
-    return run_transformer_curriculum(
+    run, val_metrics, artifacts = run_transformer_curriculum(
         r.tracks, r.checkpoint_store, r.era5_cache_dir, r.gdas_cache_dir,
         seed=r.seed, n_augment=r.n_augment,
     )
+    r.trained_artifacts["transformer"] = artifacts
+    return run, val_metrics
 
 
 def _run_gnn(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]:
     from .real_run_gnn import run_gnn_curriculum
 
-    return run_gnn_curriculum(
+    run, val_metrics, artifacts = run_gnn_curriculum(
         r.tracks, r.checkpoint_store, r.era5_cache_dir, r.gdas_cache_dir,
         seed=r.seed, n_augment=r.n_augment,
     )
+    r.trained_artifacts["gnn"] = artifacts
+    return run, val_metrics
 
 
 def _run_pinn(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]:
     from .real_run_pinn import run_pinn_curriculum
 
-    return run_pinn_curriculum(
+    run, val_metrics, artifacts = run_pinn_curriculum(
         r.tracks, r.checkpoint_store, r.era5_cache_dir, r.gdas_cache_dir,
         seed=r.seed, n_augment=r.n_augment,
     )
+    r.trained_artifacts["pinn"] = artifacts
+    return run, val_metrics
+
+
+def _run_latents(r: RealOrchestratorRunner) -> tuple[None, None]:
+    """Not a model -- extracts real Anemoi-Spread/fusion conditioning
+    latents from the five just-trained Group 1 models (`training
+    .real_latents`). Raises (caught by ``__call__``, same as every other
+    task) if a Group 1 model hasn't actually run yet in this schedule --
+    `orchestrator.build_schedule` guarantees the dependency ordering, but
+    this runner is deliberately still checked rather than trusted, since a
+    caller could invoke it directly."""
+    from .real_latents import extract_joint_latents
+
+    missing = [m for m in GROUP1_MODELS if m not in r.trained_artifacts]
+    if missing:
+        raise OrchestrationError(f"latents: Group 1 model(s) not yet trained: {missing}")
+
+    r.joint_latents = extract_joint_latents(
+        r.tracks, r.trained_artifacts, r.gdas_cache_dir, seed=r.seed, n_augment=1,
+    )
+    return None, None
+
+
+def _run_diffusion(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]:
+    from .real_run_diffusion import run_diffusion_curriculum
+
+    if r.joint_latents is None:
+        raise OrchestrationError("diffusion: latents have not been extracted yet")
+    run, val_metrics, _model = run_diffusion_curriculum(
+        r.joint_latents, r.checkpoint_store, seed=r.seed,
+    )
+    return run, val_metrics
+
+
+def _run_fusion(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]:
+    from .real_run_fusion import run_fusion_curriculum
+
+    if r.joint_latents is None:
+        raise OrchestrationError("fusion: latents have not been extracted yet")
+    run, val_metrics, _model = run_fusion_curriculum(
+        r.joint_latents, r.checkpoint_store, seed=r.seed,
+    )
+    return run, val_metrics
 
 
 #: One entry per model with a real runner (#22). Extend this, not
 #: `RealOrchestratorRunner.__call__`, when a new model gets a real
-#: training loop -- e.g. diffusion/fusion once those exist.
+#: training loop.
 _MODEL_RUNNERS: dict[str, Callable[[RealOrchestratorRunner], tuple[CurriculumRun, MetricSet]]] = {
     "lstm": _run_lstm,
     "cnn": _run_cnn,
     "transformer": _run_transformer,
     "gnn": _run_gnn,
     "pinn": _run_pinn,
+    "diffusion": _run_diffusion,
+    "fusion": _run_fusion,
 }
 
 
@@ -117,8 +170,26 @@ class RealOrchestratorRunner:
     curriculum_runs: dict[str, CurriculumRun] = field(default_factory=dict, init=False)
     val_metrics: dict[str, MetricSet] = field(default_factory=dict, init=False)
     promotions: dict[str, PromotionDecision] = field(default_factory=dict, init=False)
+    #: Trained Stage B `real_run.RunArtifacts`, keyed by Group 1 model
+    #: name -- kept in memory rather than reloaded from checkpoint storage,
+    #: since `tracking.registry.ModelVersion` doesn't record a
+    #: checkpoint_uri today (#22). Populated by each `_run_*` dispatcher as
+    #: it completes; PINN's bundle also carries its candidate-generator
+    #: LSTM, never uploaded to checkpoint storage on its own.
+    trained_artifacts: dict[str, object] = field(default_factory=dict, init=False)
+    #: Set by the "latents" task once all five Group 1 models have run;
+    #: consumed by the diffusion/fusion tasks that depend on it.
+    joint_latents: object | None = field(default=None, init=False)
 
     def __call__(self, task: Task) -> RunOutcome:
+        if task.kind == "latents":
+            try:
+                _run_latents(self)
+            except Exception as exc:  # noqa: BLE001 - one task's failure must not crash the schedule
+                return RunOutcome(task=task.name, ok=False, detail=f"{type(exc).__name__}: {exc}")
+            n = len(self.joint_latents) if self.joint_latents is not None else 0
+            return RunOutcome(task=task.name, ok=True, detail=f"extracted {n} joint latent samples")
+
         if task.kind != "train":
             return RunOutcome(
                 task=task.name, ok=False,
@@ -140,6 +211,11 @@ class RealOrchestratorRunner:
         self.curriculum_runs[task.name] = run
         self.val_metrics[task.name] = val_metrics
 
+        sig: str | None = None
+        if task.name in DERIVED_MODELS:
+            group1_versions = {m: self.registry.latest(m).version for m in GROUP1_MODELS}
+            sig = latent_signature(group1_versions)
+
         existing = self.registry.versions(task.name)
         incumbent = (
             MetricSet(split="val", flavor=existing[-1].input_flavor, values=existing[-1].metrics)
@@ -151,6 +227,7 @@ class RealOrchestratorRunner:
             run_id=f"orchestrator-{datetime.now(UTC):%Y%m%dT%H%M%S}",
             input_flavor=Flavor.GDAS_FINETUNE,
             metrics=val_metrics.values,
+            latent_signature=sig,
         )
         decision = evaluate_promotion(task.name, run, val_metrics, incumbent_val_metrics=incumbent)
         self.promotions[task.name] = decision
