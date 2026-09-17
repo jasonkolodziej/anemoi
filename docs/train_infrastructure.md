@@ -163,6 +163,45 @@ doesn't change with location; `eccodes` (needed for GDAS) confirmed working
 after `libeccodes0` install, version 2.24.2 -- older than the 2.42.0
 `gribapi` recommends, but functional for this module's message parsing.
 
+### `loginctl enable-linger` -- required, or background jobs silently die
+
+Real incident (2026-09-17): a multi-hour `era5-cache` fetch job and a
+separate real `anemoi train --model pinn` verification run, both launched
+via `slurm/run_local.sh`'s detached tmux sessions, were **silently killed
+mid-run** with no error, no traceback, nothing in their log files -- the
+tmux *server* itself vanished. Root-caused via `journalctl`, not guessed:
+
+```
+systemd[1]: Stopped User Runtime Directory /run/user/1001.
+systemd[1]: Removed slice User Slice of UID 1001.
+```
+
+`loginctl show-user <user> --property=Linger` was `no`. Without lingering
+enabled, systemd-logind's default `KillUserProcesses=yes` tears down
+**every process owned by that user** -- by UID/session-scope membership,
+not by terminal/tmux attachment -- the moment the user's last active SSH
+session closes. A detached tmux session surviving SSH disconnects is a
+tmux-level guarantee, not a systemd one; it does nothing to stop
+`KillUserProcesses` from reaping the whole user slice once zero login
+sessions remain. Both real jobs above happened to survive for hours
+purely because near-continuous SSH monitoring (checking job status every
+20-30s) kept re-opening a session before systemd's cleanup could complete
+-- the first real gap in connections let the teardown finish, killing
+everything.
+
+**Fix, once per VM (survives reboots):**
+
+```bash
+sudo loginctl enable-linger $(whoami)
+loginctl show-user $(whoami) --property=Linger  # must read "yes"
+```
+
+Do this immediately after VM creation, before launching anything with
+`run_local.sh` -- every earlier real run on this VM (including the
+successful LSTM/CNN/Transformer/GNN streaming runs, #60-#64) was exposed
+to this risk the whole time and simply got lucky on SSH connection timing,
+not protected by anything in the code.
+
 ## Real ERA5/GDAS fetch/cache (#22 Stage A/B)
 
 `data.era5_cache` / `data.gdas_cache` (`anemoi era5-cache` / `anemoi
