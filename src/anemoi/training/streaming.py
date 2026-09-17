@@ -135,18 +135,20 @@ class WindowDataset:
     data (cached `GriddedFields`, track sequences) un-materialized until
     the item is actually requested by a `DataLoader` worker.
 
-    ``build_x(window) -> np.ndarray | None`` returns ``None`` to skip a
-    window (e.g. no cached field file yet for it -- the same "skip, don't
-    error" contract `real_run_cnn.build_cnn_samples` etc. already use);
-    skipped windows are filtered out of the index up front so
-    ``__len__``/``__getitem__`` stay consistent with a real
-    `torch.utils.data.Sampler`.
+    ``build_x`` must return a real array for every window in ``windows`` --
+    a window with no cached field file yet (the same case
+    `real_run_cnn.build_cnn_samples` etc. skip) must be filtered out of
+    ``windows`` by the caller *before* constructing this dataset, not
+    signalled some other way from inside ``build_x``: `DataLoader`
+    workers pull items by a fixed-length index (`__len__`), so there's no
+    well-defined place to drop an item once construction has already
+    committed to a length.
     """
 
     def __init__(
         self,
         windows: list[StageWindow],
-        build_x: Callable[[StageWindow], np.ndarray | None],
+        build_x: Callable[[StageWindow], np.ndarray],
         *,
         x_mean: np.ndarray | None = None,
         x_std: np.ndarray | None = None,
@@ -187,3 +189,29 @@ def iter_dataset_in_batches(dataset: WindowDataset, batch_size: int):
         idx = range(start, min(start + batch_size, n))
         xs, ys, masks = zip(*(dataset[i] for i in idx), strict=True)
         yield np.stack(xs), np.stack(ys), np.stack(masks)
+
+
+def filter_windows_with_cache(windows: list[StageWindow], cache_dir) -> list[StageWindow]:
+    """Real windows filtered down to the ones with an actual cached
+    `GriddedFields` file on disk -- the same "skip, don't error" contract
+    `real_run_cnn.build_cnn_samples`/`real_run_transformer
+    .build_transformer_samples`/`real_run_gnn.build_gnn_samples`/
+    `real_run_pinn.build_pinn_samples` already use for a fix the cache
+    jobs haven't reached yet, applied up front so `WindowDataset`'s
+    fixed-length index only ever contains windows `build_x` can actually
+    build from (see that class's own docstring for why the filtering has
+    to happen here and not inside `build_x`)."""
+    from pathlib import Path
+
+    from ..data.gridded_cache import FetchTask, cache_path
+
+    cache_dir = Path(cache_dir)
+    kept = []
+    for sw in windows:
+        task = FetchTask(
+            storm_id=sw.storm_id, valid_time=sw.current.valid_time,
+            lat=sw.current.lat, lon=sw.current.lon,
+        )
+        if cache_path(cache_dir, task).exists():
+            kept.append(sw)
+    return kept
