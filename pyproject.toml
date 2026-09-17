@@ -64,6 +64,7 @@ markers = [
     "storage: requires the optional storage extra, boto3 (skipped automatically if absent)",
     "tracking: requires the optional tracking extra, mlflow (skipped automatically if absent)",
     "network: makes a real network call to a public data source (skipped by default; run with -m network)",
+    "mlflow_live: makes a real network call to a configured MLflow tracking server (skipped automatically unless MLFLOW_TRACKING_URI is set)",
 ]
 filterwarnings = ["error::DeprecationWarning"]
 
