@@ -1,10 +1,21 @@
-# Streaming DataLoader: scope for a future fix (not yet built)
+# Streaming DataLoader: the durable fix for the full-batch OOM
 
-PLAN.md §5 "Sample size" / #22. Recorded here because it's real, scoped
-design work discovered during a real production run, not because any of
-it exists yet -- **nothing in this document is implemented**. See
-`docs/train_infrastructure.md`'s training-run sections for what *is* real
-today.
+PLAN.md §5 "Sample size" / #22. Originally recorded as scoped design work
+before any of it existed; **as of 2026-09-16 all five models have a real,
+tested, opt-in streaming training path** -- `training.streaming` (the
+shared `OnlineMeanStd`/`OnlineMaskedLeadMeanStd`/`WindowDataset` infra) plus
+`train_lstm_stage_streaming` (#60), `train_cnn_stage_streaming`/
+`train_transformer_stage_streaming` (#61), `train_gnn_stage_streaming`
+(#62), and `train_pinn_stage_streaming`/`_train_candidate_lstm_streaming`
+(#63). Each `run_*_curriculum` takes `streaming: bool = False, batch_size:
+int` -- default unchanged (the existing full-batch path is still there,
+untouched, still what CI and small real runs use); pass `streaming=True`
+for the durable, `O(batch_size)`-VRAM path. See `docs/train_infrastructure.md`'s
+training-run sections for what's actually running on the VM at any given
+time.
+
+Only §6 (`real_latents.py`) below remains full-batch -- explicitly lower
+urgency (see that section for why) and not yet converted.
 
 ## The problem this solves
 
@@ -48,9 +59,9 @@ the next wall, just measured in host RAM instead of VRAM. A true
 "never revisit this regardless of archive size" architecture needs both
 layers to stop materializing the whole dataset at once.
 
-## What actually needs to change, file by file
+## What changed, file by file
 
-### 1. Standardization statistics (all five `_standardize_x`/`_standardize_y` pairs)
+### 1. Standardization statistics (all five `_standardize_x`/`_standardize_y` pairs) -- done
 
 `real_run.py`, `real_run_cnn.py`, `real_run_gnn.py`,
 `real_run_transformer.py` each compute `x.mean(axis=...)`/`x.std(axis=...)`
@@ -63,109 +74,132 @@ contract (`x_mean`/`x_std`/`y_mean`/`y_std` arrays of the same shapes,
 what `real_run.RunArtifacts` already carries and `real_latents.py` already
 consumes) doesn't need to change -- only how they get computed.
 
-PINN additionally standardizes its environment vector the same
-single-pass way in `train_pinn_stage` -- same fix needed there.
+PINN additionally standardizes its environment vector the same way;
+`train_pinn_stage_streaming` fits it with the same `OnlineMeanStd`.
 
-### 2. A real `torch.utils.data.Dataset`/`IterableDataset`, one per model family
+Built as `training.streaming.OnlineMeanStd`/`OnlineMaskedLeadMeanStd` --
+Chan's parallel-batch generalization of Welford's algorithm, verified in
+`tests/test_streaming.py` to match each real `_standardize_x`/
+`_standardize_y` function to float32 precision, not just assumed correct.
+The output contract (`x_mean`/`x_std`/`y_mean`/`y_std`, what
+`RunArtifacts`/`real_latents.py` already consume) is unchanged.
 
-Replace "build the whole array, then slice it" with a dataset object whose
-`__getitem__`/iteration loads **one window's** real cached fields from
-disk on demand:
+### 2. A real `torch.utils.data.Dataset`, one per model family -- done
 
-- CNN/Transformer: look up the cached `.npz` (`data.gridded_cache
-  .cache_path`/`load_cached_fields`, exactly what `build_cnn_samples`/
-  `build_transformer_samples` already do per-row), stack the channel/crop
-  for that one window, standardize with precomputed stats, return the
-  tensor.
-- GNN: same real cached fields, but node-featurized
-  (`real_run_gnn._node_features`) per window. `batch_graph`'s
-  block-diagonal batching (concatenate node blocks, offset edge indices)
-  already operates on an arbitrary-sized `x` array against a shared
-  `MeshTopology` -- it doesn't need to change, just needs to be called
-  per-`DataLoader`-batch instead of once over the whole dataset. This is
-  the one piece of the whole design that's already shaped right.
-- PINN: needs both the real environment vector
-  (`data.features.compute_environment_features`) and a candidate
-  trajectory from the candidate-generator LSTM per window -- see #4 below,
-  since the candidate model itself has the same full-batch problem.
-- LSTM: `storm_relative_sequence` per window; no gridded cache read at
-  all, so this is the cheapest of the five to convert, but still trains
-  full-batch today (`train_lstm_stage`) and would still hit the same wall
-  eventually against a large enough real track archive, independent of
-  gridded-field size.
+Each streaming `train_*_stage_streaming` builds a dataset whose
+`__getitem__` loads **one window's** real cached fields from disk on
+demand, instead of one materialized array:
 
-True random-access `__getitem__` needs an *indexable* enumeration of
-windows (storm, augmentation variant, window start) rather than
-`iter_stage_windows`'s current plain generator -- either materialize just
-that lightweight index (storm_id/timestamp tuples, not field data) or use
-`IterableDataset` with a bounded shuffle buffer, the standard pattern for
-"can't fully randomize a stream, but don't want strict sequential order
-either."
+- CNN/Transformer: `training.streaming.WindowDataset`, `build_x` looks up
+  the cached `.npz` (`data.gridded_cache.cache_path`/`load_cached_fields`)
+  and stacks the channel/crop for that one window. Windows with no cached
+  file yet are dropped up front by `filter_windows_with_cache`, since
+  `DataLoader` needs a fixed-length index.
+- LSTM: also `WindowDataset`, `build_x` is `storm_relative_sequence` --
+  no gridded cache read, so no filtering needed.
+- GNN: also `WindowDataset` (module-shared, not GNN-specific), node-
+  featurized (`real_run_gnn._node_features`) per window against a
+  `MeshTopology` built once, lazily, on the first window loaded.
+  `batch_graph`'s block-diagonal batching turned out to need no changes
+  at all, as predicted below -- it's called per-`DataLoader`-batch inside
+  the training loop instead of once over the whole dataset.
+- PINN: needed its own `_PinnWindowDataset` rather than `WindowDataset`
+  -- each item needs the environment vector, the raw track window (for
+  the candidate LSTM), and the window's base `(lat, lon)` the absolute-
+  coordinate conversion is anchored to, three things `WindowDataset`'s
+  single-array contract can't carry together.
 
-### 3. `torch.utils.data.DataLoader` wiring
+One correction found the hard way, not anticipated by the original scope
+below: `OnlineMeanStd` fit with `keepdims=True` over a *batched* array
+(e.g. CNN's `(N, C, H, W)`) returns stats shaped for broadcasting against
+another batched array -- but `WindowDataset` standardizes one *unbatched*
+item `(C, H, W)` at a time, and numpy silently left-pads the mismatch
+into a wrong result instead of raising. Fixed by squeezing the batch axis
+off the stats specifically for `WindowDataset` construction (see
+`real_run_cnn.train_cnn_stage_streaming`'s comment); pinned with a
+regression test in `test_streaming.py` at the shared-infrastructure level
+so it can't recur silently for a model added later.
 
-`DataLoader(dataset, batch_size=N, shuffle=True, num_workers=k)` for real
-batched loading with prefetch -- also gets multi-worker parallelism on the
-disk I/O (reading cached `.npz` files) essentially for free, which today's
-single-threaded `build_*_samples` loop doesn't have.
+Windows are still enumerated up front as a plain Python list (each one
+cheap -- a handful of `Fix` objects plus small arrays, not field data),
+not a true `IterableDataset` with a shuffle buffer -- the simpler
+approach the original scope flagged as an alternative turned out to be
+sufficient; the CPU-side win (§ below) doesn't require windows themselves
+to stream, only the heavy per-window data they reference.
 
-### 4. Every `train_*_stage`'s training loop
+### 3. `torch.utils.data.DataLoader` wiring -- done
 
-Currently: one `masked_mse(model(xt), yt, mt)` call per "epoch" against
-the whole materialized tensor. Needs: a real per-batch loop
-(zero_grad/forward/backward/step per batch, loss accumulated/averaged
-across batches per epoch). The validation pass and the
-`metrics.track.verify` pair-building loop (currently iterating the fully
-materialized `val_samples` array) need the same treatment -- accumulate
-predictions across val batches rather than one val forward pass.
+Every streaming stage function uses a real `DataLoader(ds, batch_size=N,
+shuffle=True)` for train (`shuffle=False` for val, so batch order matches
+`val_windows` order for verification-pair building). `num_workers` is left
+at the default (0, main-process loading) -- real batching/shuffling was
+the actual OOM fix; worker parallelism is a separate, later optimization
+if disk I/O becomes the bottleneck, not needed to close this out.
 
-### 5. PINN's candidate-generator LSTM (`real_run_pinn._train_candidate_lstm`)
+### 4. Every `train_*_stage`'s training loop -- done
 
-Trains full-batch against `build_stage_samples`' fully-materialized output
-today -- the same problem, one level removed. `_candidate_and_true_absolute`
-also runs the already-trained candidate over the *whole* train/val array
-in one forward call. Both need the same streaming/batching treatment for
-full consistency, or PINN just moves the OOM wall from its main model to
-its candidate generator instead of removing it.
+Each streaming function replaced the single full-batch
+`masked_mse(model(xt), yt, mt)` call with a real per-batch loop
+(zero_grad/forward/backward/step per batch). Epoch-level loss is reported
+as one global `diff2_sum / mask_sum` ratio accumulated across all
+batches, not an average of per-batch ratios -- matching the full-batch
+version's exact semantics rather than introducing a subtly different
+number. Validation predictions are collected across batches via
+`np.concatenate` before building `metrics.track.verify` pairs, same as
+the full-batch path's single pass.
 
-### 6. `training/real_latents.py`'s `_extract_for_tracks`
+### 5. PINN's candidate-generator LSTM -- done
 
-Also a single-pass materialize-everything-then-batch design (collects
-every window's five models' `x`'s into lists, `np.stack`s, then runs each
-model's `.encode()` once over the whole thing). Lower urgency than the
-main training loops -- it runs once per orchestrator schedule, over
-whatever's cached for latent extraction, and each model here is already
-*trained* (frozen, eval-mode, no gradients to hold) so its real memory
-footprint is smaller than a training step's. Still real, still eventually
-a wall at large enough scale, still worth listing for completeness.
+`_train_candidate_lstm_streaming` trains via a real `DataLoader` over a
+`WindowDataset`, same raw (unstandardized) targets the full-batch
+`_train_candidate_lstm` uses. `train_pinn_stage_streaming` runs the
+(already-trained, frozen) candidate once per `DataLoader` batch via a new
+batched `_disp_to_abs_batch` helper -- mirrors the existing per-sample
+`_candidate_and_true_absolute` loop, just batched, instead of running the
+candidate over the whole train/val array in one forward call.
 
-### 7. Tests
+### 6. `training/real_latents.py`'s `_extract_for_tracks` -- not done
 
-`tests/test_real_run*.py` construct small in-memory fixtures and assert
-directly on fully-materialized sample objects (`samples.x.shape`, etc.) --
-this is legitimate, useful, fast test coverage that shouldn't be thrown
-away. The safe path is **additive, not a rewrite**: keep the existing
-`build_*_samples`/`train_*_stage` full-batch path as-is (correct, tested,
-fine for small real runs and for CI), and add a new streaming path
-alongside it, selected explicitly (e.g. a `streaming: bool` /
-`batch_size: int | None` parameter, or a size heuristic) rather than
-silently swapping behavior under existing callers.
+Still a single-pass materialize-everything-then-batch design. Left as
+originally scoped: lower urgency than the main training loops (runs once
+per orchestrator schedule, over already-*trained*, frozen, eval-mode
+models with no gradients to hold, so its real memory footprint is smaller
+than a training step's). Still real, still eventually a wall at large
+enough scale -- revisit if it ever actually OOMs, the way
+`train_transformer_stage` did.
 
-### 8. A real side benefit, not required but worth having in view
+### 7. Tests -- done, additive as planned
 
-A real per-batch loop naturally enables real mid-stage checkpointing
-(save every N batches/epochs, resume from the last checkpoint) --
-independently useful for the Spot-preemption-loses-a-whole-stage problem
-`docs/train_infrastructure.md`'s "Training VM" section already documents
-as the reason this project moved off Spot provisioning. Not part of this
-scope on its own, but the same refactor that fixes the OOM wall is also
-what would make that resumability real, if it's ever wanted.
+Every existing `build_*_samples`/`train_*_stage` full-batch test in
+`tests/test_real_run*.py` is untouched and still passing -- the additive
+design held. Each model's streaming path got its own new tests
+(`*_streaming_runs_and_produces_val_metrics`,
+`*_streaming_raises_on_empty_cache` where cache-dependent,
+`run_*_curriculum_streaming_completes_both_stages`), plus
+`tests/test_streaming.py` for the shared infrastructure (numerical
+equivalence against each real `_standardize_x`/`_standardize_y`, the
+keepdims regression test, `filter_windows_with_cache`). Full suite: 541
+passed, 5 skipped as of #63.
 
-## What this document is not
+### 8. A real side benefit, not required but worth having in view -- not done
 
-Not a commitment to build this now, not a timeline, not a scope
-recommendation on when to do it -- just an accurate record of what
-changes so a future decision to build it starts from a real map of the
-work rather than rediscovering it from scratch. The immediate real fix
-for the 2026-09-17 OOM was `--n-augment 1` (real, working, not covered by
-this document) plus, if needed, #2/#3/#4 above for the durable version.
+Mid-stage checkpointing (save every N batches/epochs, resume from the
+last checkpoint) is still not implemented -- the streaming loops make it
+straightforward to add later (a real per-batch loop is the prerequisite,
+now in place), but nothing in #60-#63 added checkpoint save/resume logic
+itself. Still independently useful for the Spot-preemption-loses-a-whole-
+stage problem `docs/train_infrastructure.md`'s "Training VM" section
+documents; revisit if that becomes a real recurring cost again (this
+project has since moved off Spot provisioning for the training VM, which
+was the original motivation).
+
+## Status
+
+The durable fix is built (§1-5, #60-#63): all five models can train with
+`O(batch_size)` VRAM via `streaming=True`, verified numerically equivalent
+to the full-batch path's standardization and matching its loss/
+verification semantics exactly. The immediate real stopgap for the
+2026-09-17 OOM, `--n-augment 1`, is no longer the only lever -- a real VM
+run can now use `streaming=True` instead, without reducing augmentation.
+Only `real_latents.py` (§6) and mid-stage checkpointing (§8) remain, both
+deliberately deferred as lower urgency, not forgotten.
