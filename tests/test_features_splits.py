@@ -10,6 +10,7 @@ from anemoi.data.features import (
     FlavorMismatchError,
     GriddedFields,
     Normalizer,
+    _saturation_vapor_pressure_hpa,
     apply_cold_wake,
     area_mean,
     assert_flavor,
@@ -21,7 +22,6 @@ from anemoi.data.features import (
     inner_core_moisture,
     potential_intensity,
 )
-from anemoi.data.features import _saturation_vapor_pressure_hpa
 from anemoi.data.sources import Flavor
 from anemoi.data.splits import (
     DEFAULT_BOUNDARIES,
@@ -89,6 +89,76 @@ def test_potential_intensity_falls_as_shear_rises():
         generate_fields(T, Flavor.ERA5_PRETRAIN, seed=0, shear_kt=45.0)
     )
     assert sheared["potential_intensity_kt"] < warm["potential_intensity_kt"]
+
+
+# --- area_mean over land-masked (NaN) real ERA5 SST --------------------------
+#
+# Real bug found training PINN for real on the VM against the actual growing
+# ERA5 cache (#67): real ERA5 sea_surface_temperature is NaN over land, and a
+# storm-centred box near the coast or making landfall routinely overlaps land
+# pixels. area_mean used a plain np.mean, so a single land pixel poisoned the
+# whole box to NaN -- the first real end-to-end run to reach PINN (every
+# earlier one OOM'd at Transformer first) crashed on a genuine near-coast
+# storm with ValueError("non-finite feature value"). These tests pin the
+# nanmean fix's real, deliberate behavior change (area_mean's own docstring
+# has the full physical-meaning discussion).
+
+
+def test_area_mean_ignores_nan_pixels_from_partial_land_coverage():
+    """A storm box straddling the coast must produce a real mean over its
+    ocean pixels, not be poisoned to NaN by the land pixels alongside them."""
+    field = np.full((41, 41), 28.0)
+    field[:20, :] = np.nan  # the box's northern half is "land"
+    result = area_mean(field)
+    assert np.isfinite(result)
+    # area_mean's default radius_frac=0.5 box for a 41x41 field is rows/cols
+    # 10:31 -- partially inside the NaN region, partially not
+    box = field[10:31, 10:31]
+    assert result == pytest.approx(np.nanmean(box))
+
+
+def test_area_mean_matches_plain_mean_when_nothing_is_nan():
+    """The fix must be a no-op for the atmospheric fields (never land-masked
+    in ERA5) -- nanmean over an all-finite array equals mean exactly."""
+    rng = np.random.default_rng(3)
+    field = rng.normal(loc=10.0, scale=3.0, size=(41, 41))
+    box = field[10:31, 10:31]  # area_mean's own default radius_frac=0.5 box
+    assert area_mean(field) == pytest.approx(float(np.mean(box)))
+
+
+def test_area_mean_returns_nan_when_the_whole_box_is_land():
+    """A box entirely over land has no real ocean pixels to average -- NaN
+    is the correct, honest answer (not a fabricated land-SST value), and
+    callers (build_pinn_samples/train_pinn_stage_streaming) must treat this
+    as "skip this window", not crash the whole run."""
+    field = np.full((41, 41), np.nan)
+    assert np.isnan(area_mean(field))
+
+
+def test_compute_environment_features_raises_when_storm_is_entirely_over_land():
+    import dataclasses
+
+    fields = generate_fields(T, Flavor.ERA5_PRETRAIN, seed=0)
+    land_fields = dataclasses.replace(fields, sst=np.full(fields.sst.shape, np.nan))
+    with pytest.raises(ValueError, match="non-finite"):
+        compute_environment_features(land_fields)
+
+
+def test_compute_environment_features_succeeds_with_partial_land_coverage():
+    """The real case the fix closes: a storm near the coast, box only
+    partially over land, must produce a real finite feature vector instead
+    of crashing -- confirms the area_mean fix actually reaches
+    compute_environment_features's real call site, not just area_mean in
+    isolation."""
+    import dataclasses
+
+    fields = generate_fields(T, Flavor.ERA5_PRETRAIN, seed=0)
+    sst = fields.sst.copy()
+    sst[:5, :] = np.nan  # a strip of land at one edge -- box still mostly ocean
+    coastal_fields = dataclasses.replace(fields, sst=sst)
+    fs = compute_environment_features(coastal_fields)  # must not raise
+    assert np.all(np.isfinite(fs.values))
+    assert fs["sst_c"] == pytest.approx(area_mean(sst))
 
 
 def _radial_gradient_fields(*, center_rh: float, edge_rh: float, shape=(41, 41)) -> GriddedFields:
