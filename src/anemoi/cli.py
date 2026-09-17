@@ -232,10 +232,17 @@ def cmd_train(args: argparse.Namespace) -> int:
     training.real_run_cnn/real_run_transformer/real_run_gnn/real_run_pinn's
     module docstrings for why (and, for transformer, the real-crop-size
     trim; for pinn, the candidate-generator design).
+
+    Registers to a real MLflow server, alongside the always-written local
+    JSON store, if MLFLOW_TRACKING_URI is set and the tracking extra
+    (mlflow) is installed -- tracking.mlflow_client.mlflow_client_from_env()
+    returns None otherwise, which ModelRegistry already treats exactly like
+    "no MLflow configured" (Scope v2.1 §10.1: never fails a training run).
     """
     from .data.hurdat2 import parse_hurdat2_file
     from .data.sources import Flavor
     from .tracking.checkpoint_store import CheckpointStore, S3Config
+    from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ModelRegistry
     from .training.promotion import MetricSet, evaluate_promotion
 
@@ -301,7 +308,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     for key in sorted(val_metrics.values):
         print(f"  {key}: {val_metrics.values[key]:.3f}")
 
-    registry = ModelRegistry(args.registry_root)
+    registry = ModelRegistry(args.registry_root, mlflow_client=mlflow_client_from_env())
     existing = registry.versions(args.model)
     incumbent_metrics = (
         MetricSet(split="val", flavor=existing[-1].input_flavor, values=existing[-1].metrics)
@@ -346,13 +353,14 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
     """
     from .data.hurdat2 import parse_hurdat2_file
     from .tracking.checkpoint_store import CheckpointStore, S3Config
+    from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ModelRegistry
     from .training.orchestrator import Mode, build_schedule, run_schedule
     from .training.real_orchestrator import RealOrchestratorRunner
 
     tracks = parse_hurdat2_file(args.hurdat2)
     store = CheckpointStore(S3Config.from_env())
-    registry = ModelRegistry(args.registry_root)
+    registry = ModelRegistry(args.registry_root, mlflow_client=mlflow_client_from_env())
 
     mode = Mode(args.mode)
     default_models = ("lstm", "cnn", "transformer", "gnn", "pinn")

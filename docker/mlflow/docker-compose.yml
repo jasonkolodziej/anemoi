@@ -1,0 +1,85 @@
+# MLflow tracking server for this project (PLAN.md §4 "Models" /
+# tracking.registry.ModelRegistry's optional mlflow_client). Not required to
+# run anything here -- ModelRegistry already degrades to a local JSON store
+# when MLflow is absent or unreachable (Scope v2.1 §10.1) -- this is what
+# turns that "optional mirror" into a real, running server instead of a
+# duck-typed stub.
+#
+# Two services:
+#   - postgres: backend store (experiment/run metadata, params, metrics,
+#     tags) -- the wiki's Storage-and-Versioning.md names Postgres
+#     specifically for this.
+#   - mlflow: the tracking server itself, proxying artifact reads/writes to
+#     the SAME Cloudflare R2 bucket tracking.checkpoint_store already uses
+#     (S3_ARTIFACT_* in the repo root .env), under its own
+#     mlflow-artifacts/ prefix -- reused as-is rather than a new bucket,
+#     the same convention data.gridded_cache's --sync-archive already
+#     established for era5_archive/ and gdas_archive/.
+#
+# Usage (from this directory):
+#   docker compose --env-file ../../.env up -d
+#   open http://localhost:5000
+#
+# --env-file is not optional: `${VAR}` interpolation in THIS file (image
+# tags, the command: string, POSTGRES_PASSWORD, etc.) is resolved by
+# docker compose itself at parse time, from whatever --env-file/.env it's
+# pointed at -- NOT from the env_file: lines below, which only inject
+# variables into the running CONTAINER, too late to affect interpolation
+# in this file. Both are needed: --env-file for this file's own `${VAR}`s,
+# env_file: so mlflow/postgres actually see them at runtime too.
+#
+# Reads secrets from the repo root .env (../../.env) -- both the existing
+# S3_ARTIFACT_* vars and the two new ones this needs (MLFLOW_DB_PASSWORD,
+# and optionally MLFLOW_TRACKING_PORT). Copy example.env's new entries in
+# if you haven't already.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: anemoi-mlflow-postgres
+    restart: unless-stopped
+    env_file:
+      - ../../.env
+    environment:
+      POSTGRES_USER: ${MLFLOW_DB_USER:-mlflow}
+      POSTGRES_PASSWORD: ${MLFLOW_DB_PASSWORD:?set MLFLOW_DB_PASSWORD in the repo root .env}
+      POSTGRES_DB: ${MLFLOW_DB_NAME:-mlflow}
+    volumes:
+      - mlflow-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MLFLOW_DB_USER:-mlflow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: anemoi-mlflow-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${MLFLOW_TRACKING_PORT:-5000}:5000"
+    env_file:
+      - ../../.env
+    environment:
+      # S3-compatible artifact store -- points boto3 at R2 instead of AWS.
+      # Same three vars tracking.checkpoint_store.S3Config.from_env() reads;
+      # nothing new to configure if .env is already set up for checkpoints.
+      MLFLOW_S3_ENDPOINT_URL: ${S3_ARTIFACT_API_ENDPOINT:?set S3_ARTIFACT_API_ENDPOINT in the repo root .env}
+      AWS_ACCESS_KEY_ID: ${S3_ARTIFACT_ACCESS_KEYID:?set S3_ARTIFACT_ACCESS_KEYID in the repo root .env}
+      AWS_SECRET_ACCESS_KEY: ${S3_ARTIFACT_SECRET_ACCESS_KEY:?set S3_ARTIFACT_SECRET_ACCESS_KEY in the repo root .env}
+      AWS_DEFAULT_REGION: auto  # matches S3Config.region's own default for R2
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://${MLFLOW_DB_USER:-mlflow}:${MLFLOW_DB_PASSWORD}@postgres:5432/${MLFLOW_DB_NAME:-mlflow}
+      --artifacts-destination s3://${S3_ARTIFACT_BUCKET}/mlflow-artifacts
+      --serve-artifacts
+      --host 0.0.0.0
+      --port 5000
+
+volumes:
+  mlflow-postgres-data:
