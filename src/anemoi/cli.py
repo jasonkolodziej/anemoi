@@ -238,6 +238,11 @@ def cmd_train(args: argparse.Namespace) -> int:
     (mlflow) is installed -- tracking.mlflow_client.mlflow_client_from_env()
     returns None otherwise, which ModelRegistry already treats exactly like
     "no MLflow configured" (Scope v2.1 §10.1: never fails a training run).
+
+    --streaming trains via a real per-batch torch DataLoader instead of
+    the default full-batch path (docs/streaming_dataloader.md) -- durable
+    fix for a real CUDA OOM training against a large enough cached
+    dataset (per-step VRAM becomes O(batch_size), not O(dataset size)).
     """
     from .data.hurdat2 import parse_hurdat2_file
     from .data.sources import Flavor
@@ -250,11 +255,16 @@ def cmd_train(args: argparse.Namespace) -> int:
     tracks = parse_hurdat2_file(args.hurdat2)
     store = CheckpointStore(S3Config.from_env())
 
+    streaming_kwargs: dict = {"streaming": args.streaming}
+    if args.batch_size is not None:
+        streaming_kwargs["batch_size"] = args.batch_size
+
     if args.model == "lstm":
         from .training.real_run import run_lstm_curriculum
 
         run, val_metrics, _artifacts = run_lstm_curriculum(
             tracks, store, seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
+            **streaming_kwargs,
         )
     elif args.model == "cnn":
         from .training.real_run_cnn import run_cnn_curriculum
@@ -264,7 +274,7 @@ def cmd_train(args: argparse.Namespace) -> int:
             return 1
         run, val_metrics, _artifacts = run_cnn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
-            seed=args.seed, n_augment=args.n_augment,
+            seed=args.seed, n_augment=args.n_augment, **streaming_kwargs,
         )
     elif args.model == "transformer":
         from .training.real_run_transformer import run_transformer_curriculum
@@ -274,7 +284,7 @@ def cmd_train(args: argparse.Namespace) -> int:
             return 1
         run, val_metrics, _artifacts = run_transformer_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
-            seed=args.seed, n_augment=args.n_augment,
+            seed=args.seed, n_augment=args.n_augment, **streaming_kwargs,
         )
     elif args.model == "gnn":
         from .training.real_run_gnn import run_gnn_curriculum
@@ -285,6 +295,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         run, val_metrics, _artifacts = run_gnn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
+            **streaming_kwargs,
         )
     elif args.model == "pinn":
         from .training.real_run_pinn import run_pinn_curriculum
@@ -295,6 +306,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         run, val_metrics, _artifacts = run_pinn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
+            **streaming_kwargs,
         )
     else:
         print(f"no real training runner yet for {args.model!r} -- see cmd_train's docstring")
@@ -357,6 +369,12 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
     Needs the torch and storage extras and real R2/S3 credentials
     (S3_ARTIFACT_* in .env), same as `anemoi train`; cnn/transformer/gnn/
     pinn additionally need --era5-cache-dir/--gdas-cache-dir.
+
+    --streaming applies to the five Group 1 models only (same durable
+    full-batch-OOM fix as `anemoi train --streaming`,
+    docs/streaming_dataloader.md); diffusion/fusion have no streaming path
+    since they train against small in-memory joint latents, not the
+    growing gridded cache.
     """
     from .data.hurdat2 import parse_hurdat2_file
     from .tracking.checkpoint_store import CheckpointStore, S3Config
@@ -382,6 +400,8 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
         registry=registry,
         seed=args.seed,
         n_augment=args.n_augment,
+        streaming=args.streaming,
+        batch_size=args.batch_size,
     )
     result = run_schedule(schedule, runner)
 
@@ -493,6 +513,17 @@ def main(argv: list[str] | None = None) -> int:
         "--registry-root", dest="registry_root",
         default=str(Path.home() / ".anemoi" / "registry"),
     )
+    p.add_argument(
+        "--streaming", action="store_true",
+        help=(
+            "train via a real per-batch DataLoader (O(batch_size) VRAM) instead of the "
+            "default full-batch path (O(dataset size) VRAM) -- docs/streaming_dataloader.md"
+        ),
+    )
+    p.add_argument(
+        "--batch-size", dest="batch_size", type=int, default=None,
+        help="--streaming only; default: each model's own tuned default if unset",
+    )
     p.set_defaults(func=cmd_train)
 
     p = sub.add_parser(
@@ -513,6 +544,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--registry-root", dest="registry_root",
         default=str(Path.home() / ".anemoi" / "registry"),
+    )
+    p.add_argument(
+        "--streaming", action="store_true",
+        help=(
+            "train the five Group 1 models via a real per-batch DataLoader "
+            "(O(batch_size) VRAM) instead of the default full-batch path -- "
+            "docs/streaming_dataloader.md. Diffusion/fusion are unaffected (no "
+            "streaming path -- they train against small in-memory joint latents)."
+        ),
+    )
+    p.add_argument(
+        "--batch-size", dest="batch_size", type=int, default=None,
+        help="--streaming only; default: each model's own tuned default if unset",
     )
     p.set_defaults(func=cmd_train_schedule)
 
