@@ -43,6 +43,7 @@ from .device import get_device
 from .promotion import MetricSet
 from .real_run import (
     LEAD_STEPS,
+    RunArtifacts,
     boundaries_for_flavor,
     displacement_to_latlon,
     freeze_encoder,
@@ -168,11 +169,12 @@ def train_transformer_stage(
     *,
     n_augment: int = 3,
     device=None,
-) -> tuple[object, float, float, MetricSet]:
+) -> tuple[object, float, float, MetricSet, tuple]:
     """Transformer analog of `real_run.train_lstm_stage` -- see that
-    function for the loss/verification design this mirrors. ``model(x)``
-    returns ``(track, regime)``; only ``track`` is supervised here (see
-    module docstring)."""
+    function for the loss/verification design this mirrors, including the
+    extra ``(x_mean, x_std, y_mean, y_std)`` returned alongside the usual
+    four values. ``model(x)`` returns ``(track, regime)``; only ``track``
+    is supervised here (see module docstring)."""
     if not train_tracks or not val_tracks:
         raise ValueError(f"stage {stage.name}: empty train or val storm set")
 
@@ -252,7 +254,7 @@ def train_transformer_stage(
     if not pairs:
         raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
     val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
-    return model, train_loss, val_loss, val_metrics
+    return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 
 def run_transformer_curriculum(
@@ -266,11 +268,14 @@ def run_transformer_curriculum(
     d_model: int = 256,
     dropout: float = 0.1,
     curriculum_kwargs: dict | None = None,
-) -> tuple[CurriculumRun, MetricSet]:
+) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the Transformer
     baseline against real cached GriddedFields. See `run_cnn_curriculum`
     (same shape) and this module's docstring (grid-size trim, unsupervised
-    regime head) for what's specific to Transformer.
+    regime head) for what's specific to Transformer. Also returns a
+    ``RunArtifacts`` bundling the trained Stage B model with its
+    standardisation stats (see `real_run.run_lstm_curriculum`'s docstring
+    for why).
 
     ``dropout`` defaults to the architecture's own default (0.1); exposed
     mainly because torch's MPS backend can't run
@@ -301,7 +306,7 @@ def run_transformer_curriculum(
                 d_model=d_model, dropout=dropout, lead_hours=DEFAULT_LEADS,
             )
 
-        model, train_loss, val_loss, val_metrics = train_transformer_stage(
+        model, train_loss, val_loss, val_metrics, stats = train_transformer_stage(
             model, stage, train_tracks, val_tracks, cache_dir, rng, n_augment=n_augment,
         )
 
@@ -325,4 +330,6 @@ def run_transformer_curriculum(
         )
 
     assert val_metrics is not None
-    return run, val_metrics
+    x_mean, x_std, y_mean, y_std = stats
+    artifacts = RunArtifacts(model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std)
+    return run, val_metrics, artifacts

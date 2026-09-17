@@ -57,7 +57,12 @@ from .capacity_ablation import SEQUENCE_LENGTH
 from .curriculum import Curriculum, CurriculumRun, StageResult, StageSpec
 from .device import get_device
 from .promotion import MetricSet
-from .real_run import boundaries_for_flavor, displacement_to_latlon, iter_stage_windows
+from .real_run import (
+    RunArtifacts,
+    boundaries_for_flavor,
+    displacement_to_latlon,
+    iter_stage_windows,
+)
 
 #: Weights on each physics_residuals term in the training loss -- small
 #: relative to the track/intensity MSE, so physics acts as a soft
@@ -232,11 +237,14 @@ def train_pinn_stage(
     *,
     n_augment: int = 3,
     device=None,
-) -> tuple[object, float, float, MetricSet]:
+) -> tuple[object, float, float, MetricSet, tuple]:
     """PINN analog of `real_run.train_lstm_stage`. Loss is masked
     track/intensity MSE (absolute-coordinate space) plus a small weighted
     `models.pinn.physics_residuals` penalty over the leads it's valid for
-    (see module docstring)."""
+    (see module docstring). Also returns ``(env_mean, env_std)`` -- the
+    environment vector's standardisation stats, needed to correctly
+    reproduce this exact model's input space later (`training
+    .real_latents`)."""
     if not train_tracks or not val_tracks:
         raise ValueError(f"stage {stage.name}: empty train or val storm set")
 
@@ -322,7 +330,7 @@ def train_pinn_stage(
     if not pairs:
         raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
     val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
-    return model, train_loss, val_loss, val_metrics
+    return model, train_loss, val_loss, val_metrics, (env_mean, env_std)
 
 
 def run_pinn_curriculum(
@@ -336,11 +344,21 @@ def run_pinn_curriculum(
     hidden_dim: int = 128,
     candidate_hidden_dim: int = 64,
     curriculum_kwargs: dict | None = None,
-) -> tuple[CurriculumRun, MetricSet]:
+) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the PINN baseline.
     A fresh candidate-generator LSTM is trained per stage (see module
     docstring) on that stage's own train tracks before PINN is trained
     against its output.
+
+    The returned ``RunArtifacts`` carries TWO trained models -- the Stage B
+    ``PhysicsCorrector`` (``.model``) and the Stage B candidate-generator
+    LSTM it corrects (``.candidate_model``), since `models.pinn
+    .PhysicsCorrector.encode` needs both (`encode(environment, candidate)`)
+    and the candidate LSTM is never persisted to checkpoint storage (module
+    docstring) -- plus the environment vector's standardisation stats
+    (``.env_mean``/``.env_std``). See `real_run.run_lstm_curriculum`'s
+    docstring for why a ``RunArtifacts`` is returned at all (#22, `training
+    .real_latents`).
     """
     from ..models.pinn import build_pinn
 
@@ -368,7 +386,7 @@ def run_pinn_curriculum(
                 input_dim=len(FEATURE_NAMES), hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
             )
 
-        model, train_loss, val_loss, val_metrics = train_pinn_stage(
+        model, train_loss, val_loss, val_metrics, env_stats = train_pinn_stage(
             model, candidate_model, stage, train_tracks, val_tracks, cache_dir, rng,
             n_augment=n_augment, device=device,
         )
@@ -393,4 +411,8 @@ def run_pinn_curriculum(
         )
 
     assert val_metrics is not None
-    return run, val_metrics
+    env_mean, env_std = env_stats
+    artifacts = RunArtifacts(
+        model=model, candidate_model=candidate_model, env_mean=env_mean, env_std=env_std,
+    )
+    return run, val_metrics, artifacts
