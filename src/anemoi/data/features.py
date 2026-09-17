@@ -12,6 +12,7 @@ is called at every boundary where a flavor mismatch would be silent.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, replace
 from datetime import datetime
 
@@ -149,7 +150,51 @@ def assert_flavor(obj: FeatureSet | GriddedFields, expected: Flavor) -> None:
 
 
 def area_mean(field: np.ndarray, radius_frac: float = 0.5) -> float:
-    """Mean over a centred sub-box, used for environmental sampling (§4.3)."""
+    """Mean over a centred sub-box, used for environmental sampling (§4.3).
+
+    Uses ``np.nanmean``, not ``np.mean`` -- real ERA5's ``sea_surface_
+    temperature`` is NaN over land (GDAS's sst/ohc are constant placeholders,
+    never NaN -- see ``real_gridded.gdas_to_gridded_fields``, so this only
+    matters for Stage A / ``ERA5_PRETRAIN``). A storm-centred box near the
+    coast or making landfall routinely overlaps land pixels; with a plain
+    ``mean`` a single land pixel poisons the whole box to NaN, which is what
+    surfaced this (a real ``non-finite feature value`` failure training
+    PINN, the only model that calls ``compute_environment_features`` --
+    CNN/Transformer/GNN consume raw field pixels directly and never hit this
+    validation, LSTM never touches gridded fields at all).
+
+    **This is a real, deliberate change to what "SST near this storm"
+    physically means, not a value-neutral bug fix** -- worth understanding
+    before trusting a PINN environment vector for a landfalling or
+    near-coast storm:
+
+    - For a box that is PARTIALLY land, the returned mean is now over
+      *whatever fraction of the box is ocean* -- not the full box's
+      footprint. As land coverage grows, the effective sampling area
+      shrinks and drifts toward whatever ocean remains, and that drift is
+      invisible in the returned scalar: two boxes with very different
+      ocean fractions can return numbers of similar magnitude, one a mean
+      over most of the box, the other over a sliver of it near one edge.
+    - For a box that is ENTIRELY land, ``nanmean`` itself returns NaN (its
+      documented behaviour on an all-NaN slice; the resulting
+      "Mean of empty slice" ``RuntimeWarning`` is expected here and
+      suppressed, not a bug). ``FeatureSet.__post_init__`` still catches
+      that as non-finite, and callers (``real_run_pinn.build_pinn_samples``/
+      ``train_pinn_stage_streaming``) skip that window entirely -- the same
+      "skip, don't crash" contract already used for a window with no
+      cached file, not a fabricated land-SST value standing in for open
+      water.
+    - Atmospheric fields (u200/v200/u850/v850/z500/rh700/t700/mslp) are not
+      land-masked in ERA5, so ``nanmean`` is numerically identical to
+      ``mean`` for them -- this only changes behaviour for sst/ohc.
+
+    Net effect: PINN training loses some real windows for storms very close
+    to or over land (where the box is entirely land), and for storms with
+    partial land coverage, its SST/OHC-derived features are computed over a
+    smaller, ocean-only footprint whose exact extent isn't recorded
+    anywhere -- a real, accepted limitation of not having a true land/sea
+    mask to reason about coverage fraction explicitly, not a hidden one.
+    """
     if not 0.0 < radius_frac <= 1.0:
         raise ValueError("radius_frac must be in (0, 1]")
     nlat, nlon = field.shape
@@ -160,7 +205,9 @@ def area_mean(field: np.ndarray, radius_frac: float = 0.5) -> float:
         max(clat - hlat, 0) : clat + hlat + 1,
         max(clon - hlon, 0) : clon + hlon + 1,
     ]
-    return float(np.mean(box))
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Mean of empty slice")
+        return float(np.nanmean(box))
 
 
 def deep_layer_shear(fields: GriddedFields) -> tuple[float, float]:
@@ -306,7 +353,9 @@ def potential_intensity(sst_c: float, ohc: float, shear_kt: float) -> float:
     return float(np.clip(35.0 + base + ohc_bonus - shear_penalty, 0.0, 200.0))
 
 
-def compare_potential_intensity_estimates(fields: GriddedFields, shear_kt: float) -> dict[str, float]:
+def compare_potential_intensity_estimates(
+    fields: GriddedFields, shear_kt: float
+) -> dict[str, float]:
     """Run both PI estimates on the same case, for inspection and testing.
 
     The closed-form estimate approximates the boundary layer GriddedFields

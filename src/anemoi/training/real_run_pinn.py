@@ -97,7 +97,11 @@ def build_pinn_samples(
 ) -> PinnStageSamples:
     """Same windows/targets as `real_run.build_stage_samples`, plus the
     real environment vector for the window's current fix (from cached
-    `GriddedFields`). A fix with no cached file yet is skipped."""
+    `GriddedFields`). A fix with no cached file yet is skipped, and so is
+    one whose environment features come back non-finite -- a storm-centred
+    box entirely over land has no real ERA5 SST to average
+    (`data.features.area_mean`'s docstring has the full story on why this
+    is a real, physical limitation and not a bug to paper over)."""
     cache_dir = Path(cache_dir)
     x_track_rows: list[np.ndarray] = []
     env_rows: list[np.ndarray] = []
@@ -115,7 +119,10 @@ def build_pinn_samples(
         if not path.exists():
             continue
         fields = load_cached_fields(path)
-        env = compute_environment_features(fields).values
+        try:
+            env = compute_environment_features(fields).values
+        except ValueError:
+            continue  # non-finite feature (box entirely over land) -- skip
 
         x_track_rows.append(storm_relative_sequence(sw.window))
         env_rows.append(env)
@@ -336,6 +343,29 @@ def _disp_to_abs_batch(disp: np.ndarray, base: np.ndarray) -> np.ndarray:
     return out
 
 
+def _filter_windows_with_finite_env(windows: list, cache_dir: Path) -> list:
+    """Drop windows whose real environment features come back non-finite --
+    a storm-centred box entirely over land has no real ERA5 SST to average
+    (`data.features.area_mean`'s docstring has the full story on this real
+    physical limitation). Same "skip, don't crash" contract
+    `build_pinn_samples` and `streaming.filter_windows_with_cache` already
+    use, applied here *before* `_PinnWindowDataset` construction so its
+    fixed-length index (`DataLoader` needs one) never contains a window
+    `__getitem__` can't actually build from."""
+    kept = []
+    for sw in windows:
+        fields = load_cached_fields(cache_path(cache_dir, FetchTask(
+            storm_id=sw.storm_id, valid_time=sw.current.valid_time,
+            lat=sw.current.lat, lon=sw.current.lon,
+        )))
+        try:
+            compute_environment_features(fields)
+        except ValueError:
+            continue
+        kept.append(sw)
+    return kept
+
+
 def train_pinn_stage_streaming(
     model,
     candidate_model,
@@ -366,11 +396,13 @@ def train_pinn_stage_streaming(
     torch = require_torch()
     device = device or get_device()
 
-    train_windows = filter_windows_with_cache(
-        list(iter_stage_windows(train_tracks, rng, n_augment)), cache_dir,
+    train_stage_windows = list(iter_stage_windows(train_tracks, rng, n_augment))
+    train_windows = _filter_windows_with_finite_env(
+        filter_windows_with_cache(train_stage_windows, cache_dir), cache_dir,
     )
-    val_windows = filter_windows_with_cache(
-        list(iter_stage_windows(val_tracks, rng, 1)), cache_dir,
+    val_stage_windows = list(iter_stage_windows(val_tracks, rng, 1))
+    val_windows = _filter_windows_with_finite_env(
+        filter_windows_with_cache(val_stage_windows, cache_dir), cache_dir,
     )
     if not train_windows or not val_windows:
         raise ValueError(

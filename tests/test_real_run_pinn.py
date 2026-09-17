@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -91,6 +92,75 @@ def test_build_pinn_samples_empty_when_nothing_cached(tmp_path):
     samples = build_pinn_samples([track], tmp_path, rng, n_augment=1)
     assert len(samples) == 0
     assert samples.environment.shape[-1] == len(FEATURE_NAMES)
+
+
+def test_build_pinn_samples_skips_windows_with_non_finite_environment_features(tmp_path):
+    """Real bug found training PINN for real on the VM against the actual
+    growing ERA5 cache (#67): real ERA5 SST is NaN over land, and a
+    storm-centred box entirely over land has no real ocean pixels to
+    average -- data.features.area_mean's nanmean fix makes PARTIAL land
+    coverage work, but a box that's entirely land still can't produce a
+    finite feature vector. build_pinn_samples must skip that one window,
+    not crash the whole curriculum run the way the real VM run did."""
+    track = make_track("AL011985", season=1985, n=26)
+    for i, fix in enumerate(track.fixes):
+        task = _task_for(track, fix)
+        shape = (41, 41)
+        fields = make_fields(fix.valid_time, Flavor.ERA5_PRETRAIN, shape)
+        if i == len(track.fixes) - 1:  # one storm-entirely-over-land fix
+            fields = replace(fields, sst=np.full(shape, np.nan))
+        save_cached_fields(cache_path(tmp_path, task), fields, task)
+    rng = np.random.default_rng(7)
+
+    samples = build_pinn_samples([track], tmp_path, rng, n_augment=1)  # must not raise
+    assert len(samples) > 0
+    assert np.all(np.isfinite(samples.environment))
+
+
+def test_filter_windows_with_finite_env_drops_only_the_land_covered_window(tmp_path):
+    """Direct test of the streaming-path filter (`train_pinn_stage_streaming`
+    uses this, not build_pinn_samples's inline try/except) -- same real bug
+    as the build_pinn_samples test above, exercised at the function that
+    actually guards `_PinnWindowDataset`'s fixed-length index."""
+    from anemoi.training.real_run import StageWindow
+    from anemoi.training.real_run_pinn import _filter_windows_with_finite_env
+
+    ok_fix = Fix(
+        storm_id="AL011985", valid_time=datetime(1985, 8, 1, tzinfo=UTC),
+        lat=20.0, lon=-60.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+        quality=TrackQuality.FINAL,
+    )
+    land_fix = Fix(
+        storm_id="AL011985", valid_time=datetime(1985, 8, 1, 6, tzinfo=UTC),
+        lat=20.0, lon=-60.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+        quality=TrackQuality.FINAL,
+    )
+    shape = (41, 41)
+    ok_fields = make_fields(ok_fix.valid_time, Flavor.ERA5_PRETRAIN, shape)
+    land_fields = replace(ok_fields, sst=np.full(shape, np.nan), valid_time=land_fix.valid_time)
+    ok_task = FetchTask(
+        storm_id="AL011985", valid_time=ok_fix.valid_time, lat=ok_fix.lat, lon=ok_fix.lon,
+    )
+    land_task = FetchTask(
+        storm_id="AL011985", valid_time=land_fix.valid_time, lat=land_fix.lat, lon=land_fix.lon,
+    )
+    save_cached_fields(cache_path(tmp_path, ok_task), ok_fields, ok_task)
+    save_cached_fields(cache_path(tmp_path, land_task), land_fields, land_task)
+
+    windows = [
+        StageWindow(
+            storm_id="AL011985", window=(ok_fix,), current=ok_fix,
+            y=np.zeros((1, 3)), mask=np.array([True]),
+        ),
+        StageWindow(
+            storm_id="AL011985", window=(land_fix,), current=land_fix,
+            y=np.zeros((1, 3)), mask=np.array([True]),
+        ),
+    ]
+
+    kept = _filter_windows_with_finite_env(windows, tmp_path)
+    assert len(kept) == 1
+    assert kept[0].current.valid_time == ok_fix.valid_time
 
 
 # --- torch-dependent -------------------------------------------------------
