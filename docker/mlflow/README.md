@@ -14,18 +14,15 @@ alongside the local JSON store it always writes regardless (Scope v2.1
 fail a training run -- `mlflow_client_from_env()` returns `None` in all
 three cases, which `ModelRegistry` already treats identically).
 
-**One real, pre-existing gap this surfaces rather than causes:**
-`ModelRegistry._mirror`'s calls don't match the real `MlflowClient` API --
-e.g. `create_model_version(name, version.version)` passes a local integer
-version number where the real client expects `source` (an artifact URI
-string). Harmless today only because `mlflow_client` was never actually
-constructed anywhere before this; the broad `except Exception: self._mlflow
-= None` in `_mirror` means a real server won't crash a training run over
-this, but it also means nothing meaningful actually lands in MLflow's
-model registry yet (metrics/params/tags logging, if added separately,
-would be unaffected -- this specifically affects the model-*version*
-mirror calls). Worth fixing before relying on this for real, not done
-here.
+`tracking.experiment_tracking` closes the rest of the loop: every real
+training run now builds a real, validated `RunTags` (real git commit,
+storm split, GPU type -- see wiki Experiment-Tracking.md) and, when a
+client is configured, logs one real MLflow run per completed curriculum
+stage under the correct wind-god experiment name. `ModelRegistry`'s
+Model Registry mirror was also fixed to match the real `MlflowClient` API
+(`create_registered_model` called first, a real artifact-URI `source`,
+TitleCase stage strings) -- the mismatch noted in an earlier version of
+this file is resolved.
 
 ## Setup
 
