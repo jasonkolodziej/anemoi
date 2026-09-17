@@ -131,10 +131,62 @@ to stream, only the heavy per-window data they reference.
 
 Every streaming stage function uses a real `DataLoader(ds, batch_size=N,
 shuffle=True)` for train (`shuffle=False` for val, so batch order matches
-`val_windows` order for verification-pair building). `num_workers` is left
-at the default (0, main-process loading) -- real batching/shuffling was
-the actual OOM fix; worker parallelism is a separate, later optimization
-if disk I/O becomes the bottleneck, not needed to close this out.
+`val_windows` order for verification-pair building). Built via the shared
+`streaming.make_dataloader` helper, which takes a `num_workers: int = 0`
+parameter -- left at 0 (main-process loading) by default, since real
+batching/shuffling was the actual OOM fix. **Update, PR #70 (2026-09-17):**
+worker parallelism, originally scoped above as "a separate, later
+optimization... not needed to close this out," turned out to matter for
+real once the VM's cache grew large enough that per-batch disk
+read+decompress cost became comparable to the GPU step itself (confirmed
+via `/proc/<pid>/io`: high `rchar`/`syscr`, flat `read_bytes` --
+CPU/decompression-bound, served from the OS page cache, not disk-I/O-
+bound). `num_workers>0` now spawns real forked worker *processes*
+(`multiprocessing_context="fork"`, forced regardless of platform --
+`make_dataloader`'s own docstring has the fork-vs-spawn reasoning) that
+prefetch batches ahead of the training loop, so CPU-side loading and
+GPU-side compute genuinely overlap instead of alternating:
+
+```text
+Phase 1 -- online stats fit (per stage, once): single-threaded, CPU only
+  main process ── reads each cached window's .npz sequentially from disk ──▶ OnlineMeanStd.update()
+  (deliberately not parallelized -- iter_dataset_in_batches is a one-pass
+   sweep; not worth the worker overhead for something run once)
+
+Phase 2 -- the real per-batch training loop: CPU workers ∥ GPU compute, overlapped
+
+  local disk cache (~/era5_cache, ~/gdas_cache -- already-fetched .npz
+                     GriddedFields; the training loop only ever reads
+                     from here, never fetches live)
+        │            │            │            │
+        ▼            ▼            ▼            ▼
+   worker 0      worker 1     worker 2     worker 3     ← num_workers=4: real forked
+   build_x()     build_x()    build_x()    build_x()      OS processes, each running the
+   decompress+   decompress+  decompress+  decompress+    model's own build_x/collate_fn
+   featurize     featurize    featurize    featurize      closure via copy-on-write fork
+        │            │            │            │
+        └────────────┴─────┬──────┴────────────┘
+                    shared-memory IPC, batched by collate_fn
+                            ▼
+                 ┌────────────────────┐
+                 │  main process      │  DataLoader.__next__() pulls a batch
+                 │  (holds CUDA ctx)  │  the workers have already prefetched
+                 └────────────────────┘
+                            │  batch.to(device)
+                            ▼
+                 ┌────────────────────┐
+                 │  GPU (CUDA/MPS)    │  forward → loss → backward → optimizer.step()
+                 └────────────────────┘
+                            │  (repeat per batch × epoch; workers keep
+                            ▼   prefetching the next batches meanwhile)
+```
+
+Verified for real on the VM (`anemoi-train-1`, single L4): CNN's real
+Stage A+B wall-clock dropped from ~94 min (`num_workers=0`) to ~48 min
+(`num_workers=4`); Transformer from ~158 min to ~75 min. `persistent_workers
+=True` follows automatically when `num_workers>0` so workers aren't
+re-spawned every epoch. `--num-workers` is wired into both CLI
+subcommands and all six sbatch scripts.
 
 ### 4. Every `train_*_stage`'s training loop -- done
 

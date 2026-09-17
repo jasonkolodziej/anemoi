@@ -420,6 +420,40 @@ fails (e.g. an empty val split, see above), the `latents` task depending
 on it is skipped, and `diffusion`/`fusion` depending on `latents` are
 skipped in turn, while every model that *can* train still does.
 
+```text
+GCP VM anemoi-train-1 (1x NVIDIA L4, ~23GB VRAM, us-central1-b)
+tmux session: train-schedule-<id>
+  └─ uv run anemoi train-schedule --streaming --num-workers N   (one process, one GPU)
+        │
+        ▼
+  Group 1 -- sequential in "sequential" mode, one model on the GPU at a time
+  ┌────────┐   ┌────────┐   ┌─────────────┐   ┌────────┐   ┌────────┐
+  │  LSTM  │──▶│  CNN   │──▶│ Transformer │──▶│  GNN   │──▶│  PINN  │
+  └────────┘   └────────┘   └─────────────┘   └────────┘   └────────┘
+       │             │              │              │             │
+       └─────────────┴──────────────┴──────────────┴─────────────┘
+                          all 5 must succeed (trained_artifacts
+                          only lives in-memory for this one process)
+                                          │
+                                          ▼
+                                 ┌─────────────┐
+                                 │   latents   │  extract_joint_latents()
+                                 └─────────────┘  needs all 5 above
+                                          │ skipped if latents fails/is skipped
+                                          ▼
+                                 ┌─────────────┐
+                                 │  diffusion  │  TrajectoryDenoiser (DDPM)
+                                 └─────────────┘
+                                          ▼
+                                 ┌─────────────┐
+                                 │   fusion    │  ConsensusFusion
+                                 └─────────────┘
+```
+
+Each model box above is itself Stage A (ERA5) then Stage B (GDAS); see
+`docs/streaming_dataloader.md` §3 for how one stage's `DataLoader` moves
+data from the local cache through CPU worker processes onto the GPU.
+
 ## Real latent extraction and the two derived models (#22, §5.7)
 
 Anemoi-Spread (diffusion) and the fusion consensus model don't read tracks
