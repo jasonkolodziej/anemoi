@@ -257,6 +257,157 @@ def train_transformer_stage(
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 
+def train_transformer_stage_streaming(
+    model,
+    stage: StageSpec,
+    train_tracks: list[Track],
+    val_tracks: list[Track],
+    cache_dir: Path | str,
+    rng: np.random.Generator,
+    *,
+    n_augment: int = 3,
+    batch_size: int = 16,
+    device=None,
+) -> tuple[object, float, float, MetricSet, tuple]:
+    """`train_transformer_stage`'s streaming analog
+    (`docs/streaming_dataloader.md`) -- same return contract, real
+    per-batch training via a `torch.utils.data.DataLoader` and online
+    standardisation statistics instead of one full-dataset GPU tensor.
+    This is the model that actually hit a real CUDA OOM training
+    full-batch against the real, growing cache -- see
+    `real_run.train_lstm_stage_streaming` for the reference implementation
+    this follows.
+    """
+    from .streaming import (
+        OnlineMaskedLeadMeanStd,
+        OnlineMeanStd,
+        WindowDataset,
+        filter_windows_with_cache,
+    )
+
+    if not train_tracks or not val_tracks:
+        raise ValueError(f"stage {stage.name}: empty train or val storm set")
+
+    torch = require_torch()
+    device = device or get_device()
+    gh, gw = GRID_SIZE
+
+    train_windows = filter_windows_with_cache(
+        list(iter_stage_windows(train_tracks, rng, n_augment)), cache_dir,
+    )
+    val_windows = filter_windows_with_cache(
+        list(iter_stage_windows(val_tracks, rng, 1)), cache_dir,
+    )
+    if not train_windows or not val_windows:
+        raise ValueError(
+            f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
+            f"{cache_dir} -- has data.era5_cache/data.gdas_cache fetched anything yet?"
+        )
+
+    def build_x(sw):
+        fields = load_cached_fields(cache_path(cache_dir, FetchTask(
+            storm_id=sw.storm_id, valid_time=sw.current.valid_time,
+            lat=sw.current.lat, lon=sw.current.lon,
+        )))
+        stack = np.stack([getattr(fields, name) for name in TRANSFORMER_FIELD_NAMES])
+        return stack[:, :gh, :gw]
+
+    n_leads = len(LEAD_STEPS)
+    raw_train_ds = WindowDataset(train_windows, build_x)
+    x_acc = OnlineMeanStd(reduce_axes=(0, 2, 3), keepdims=True)
+    y_acc = OnlineMaskedLeadMeanStd(n_leads=n_leads)
+    for i in range(len(raw_train_ds)):
+        x, y, mask = raw_train_ds[i]
+        x_acc.update(x[None])
+        y_acc.update(y[None], mask[None].astype(bool))
+    x_mean, x_std = x_acc.finalize()
+    y_mean, y_std = y_acc.finalize()
+    item_x_mean, item_x_std = x_mean[0], x_std[0]  # see real_run_cnn's same fix for why
+
+    train_ds = WindowDataset(
+        train_windows, build_x, x_mean=item_x_mean, x_std=item_x_std, y_mean=y_mean, y_std=y_std,
+    )
+    val_ds = WindowDataset(
+        val_windows, build_x, x_mean=item_x_mean, x_std=item_x_std, y_mean=y_mean, y_std=y_std,
+    )
+    train_loader = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader = torch.utils.data.DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+
+    freeze_encoder(model, stage.frozen_modules)
+    model.to(device)
+
+    def masked_mse_sums(pred, target, mask3):
+        diff2 = (pred - target) ** 2 * mask3
+        return diff2.sum(), mask3.sum()
+
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    opt = torch.optim.Adam(trainable, lr=stage.learning_rate)
+
+    model.train()
+    for _ in range(stage.epochs):
+        for xb, yb, mb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            mb = mb.to(device).unsqueeze(-1)
+            opt.zero_grad()
+            pred, _regime = model(xb)
+            diff2_sum, mask_sum = masked_mse_sums(pred, yb, mb)
+            loss = diff2_sum / mask_sum.clamp(min=1.0)
+            loss.backward()
+            opt.step()
+
+    model.eval()
+    with torch.no_grad():
+        train_diff2, train_mask = 0.0, 0.0
+        for xb, yb, mb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            mb = mb.to(device).unsqueeze(-1)
+            pred, _regime = model(xb)
+            d, m = masked_mse_sums(pred, yb, mb)
+            train_diff2 += float(d.item())
+            train_mask += float(m.item())
+        train_loss = train_diff2 / max(train_mask, 1.0)
+
+        val_diff2, val_mask = 0.0, 0.0
+        pred_val_rows: list[np.ndarray] = []
+        for xb, yb, mb in val_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            mb3 = mb.to(device).unsqueeze(-1)
+            pred, _regime = model(xb)
+            d, m = masked_mse_sums(pred, yb, mb3)
+            val_diff2 += float(d.item())
+            val_mask += float(m.item())
+            pred_val_rows.append(pred.cpu().numpy())
+        val_loss = val_diff2 / max(val_mask, 1.0)
+        pred_val = np.concatenate(pred_val_rows, axis=0) * y_std + y_mean
+
+    pairs: list[VerificationPair] = []
+    for si, sw in enumerate(val_windows):
+        base_lat, base_lon = sw.current.lat, sw.current.lon
+        for li, lead_hours in enumerate(DEFAULT_LEADS):
+            if not sw.mask[li]:
+                continue
+            pred_dx, pred_dy, pred_wind = pred_val[si, li]
+            pred_lat, pred_lon = displacement_to_latlon(base_lat, base_lon, pred_dx, pred_dy)
+            obs_dx, obs_dy, obs_wind = sw.y[li]
+            obs_lat, obs_lon = displacement_to_latlon(base_lat, base_lon, obs_dx, obs_dy)
+            pairs.append(
+                VerificationPair(
+                    forecast=ForecastPoint(
+                        lead_hours=lead_hours, lat=pred_lat, lon=pred_lon,
+                        max_wind_kt=float(pred_wind),
+                    ),
+                    obs_lat=obs_lat,
+                    obs_lon=obs_lon,
+                    obs_wind_kt=float(obs_wind),
+                )
+            )
+
+    if not pairs:
+        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
+    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
+    return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
+
+
 def run_transformer_curriculum(
     tracks: list[Track],
     checkpoint_store: CheckpointStore,
@@ -268,6 +419,8 @@ def run_transformer_curriculum(
     d_model: int = 256,
     dropout: float = 0.1,
     curriculum_kwargs: dict | None = None,
+    streaming: bool = False,
+    batch_size: int = 16,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the Transformer
     baseline against real cached GriddedFields. See `run_cnn_curriculum`
@@ -283,6 +436,12 @@ def run_transformer_curriculum(
     an architecture concern) -- CUDA (the real training VM) has no such
     restriction, but local development/tests on Apple Silicon need
     ``dropout=0.0`` to run at all.
+
+    ``streaming=True`` uses `train_transformer_stage_streaming` instead of
+    the default full-batch `train_transformer_stage` -- real per-batch
+    training, `O(batch_size)` VRAM instead of `O(dataset size)`
+    (`docs/streaming_dataloader.md`; this is the model that actually hit a
+    real CUDA OOM training full-batch against the real, growing cache).
     """
     from ..models.transformer import build_transformer
 
@@ -306,8 +465,11 @@ def run_transformer_curriculum(
                 d_model=d_model, dropout=dropout, lead_hours=DEFAULT_LEADS,
             )
 
-        model, train_loss, val_loss, val_metrics, stats = train_transformer_stage(
-            model, stage, train_tracks, val_tracks, cache_dir, rng, n_augment=n_augment,
+        stage_fn = train_transformer_stage_streaming if streaming else train_transformer_stage
+        stage_kwargs = {"batch_size": batch_size} if streaming else {}
+        model, train_loss, val_loss, val_metrics, stats = stage_fn(
+            model, stage, train_tracks, val_tracks, cache_dir, rng,
+            n_augment=n_augment, **stage_kwargs,
         )
 
         torch = require_torch()

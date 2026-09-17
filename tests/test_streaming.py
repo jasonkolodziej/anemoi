@@ -19,6 +19,7 @@ from anemoi.training.streaming import (
     OnlineMaskedLeadMeanStd,
     OnlineMeanStd,
     WindowDataset,
+    filter_windows_with_cache,
     iter_dataset_in_batches,
 )
 
@@ -150,6 +151,28 @@ class _FakeWindow:
         self.mask = mask
 
 
+def test_window_dataset_standardization_must_match_unbatched_item_shape():
+    """Real bug caught building CNN's streaming path: a keepdims=True
+    OnlineMeanStd fit over BATCHED (N, C, H, W) arrays produces (1, C, 1,
+    1) mean/std -- correct for standardizing another batched array, but
+    WindowDataset standardizes one UNBATCHED (C, H, W) item at a time, and
+    (C, H, W) broadcast against (1, C, 1, 1) silently produces a wrong
+    (1, C, H, W) result (numpy left-pads the smaller-rank array) instead
+    of raising. Callers must pass the batch axis already squeezed off
+    (e.g. `x_mean[0]`, not `x_mean`) -- this pins that contract."""
+    x_mean = np.array([[[[2.0]], [[4.0]]]])  # shape (1, 2, 1, 1) -- batched convention
+    assert x_mean.shape == (1, 2, 1, 1)
+
+    windows = [_FakeWindow(1.0, y=np.zeros((1, 3)), mask=np.array([True]))]
+    ds = WindowDataset(
+        windows,
+        lambda sw: np.ones((2, 3, 3)),  # one unbatched (C, H, W) item
+        x_mean=x_mean[0], x_std=np.ones((2, 1, 1)),  # correctly squeezed
+    )
+    x, _y, _mask = ds[0]
+    assert x.shape == (2, 3, 3)  # not (1, 2, 3, 3)
+
+
 def test_window_dataset_applies_standardization_lazily():
     windows = [
         _FakeWindow(v, y=np.array([[1.0, 2.0, 3.0]]), mask=np.array([True])) for v in range(5)
@@ -195,3 +218,72 @@ def test_iter_dataset_in_batches_covers_every_item_exactly_once():
         seen.extend(xb[:, 0].tolist())
 
     assert sorted(seen) == [float(v) for v in range(23)]
+
+
+# --- filter_windows_with_cache -----------------------------------------------
+
+
+def test_filter_windows_with_cache_keeps_only_real_cached_windows(tmp_path):
+    from datetime import UTC, datetime
+
+    from anemoi.data.besttrack import Fix, TrackQuality
+    from anemoi.data.features import GriddedFields
+    from anemoi.data.gridded_cache import FetchTask, cache_path, save_cached_fields
+    from anemoi.data.sources import Flavor
+    from anemoi.training.real_run import StageWindow
+
+    def make_fix(hour: int) -> Fix:
+        return Fix(
+            storm_id="AL011985", valid_time=datetime(1985, 8, 1, hour, tzinfo=UTC),
+            lat=20.0, lon=-60.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+            quality=TrackQuality.FINAL,
+        )
+
+    cached_fix = make_fix(0)
+    uncached_fix = make_fix(6)
+    grid = lambda v: np.full((5, 5), v)  # noqa: E731
+    fields = GriddedFields(
+        valid_time=cached_fix.valid_time, flavor=Flavor.ERA5_PRETRAIN,
+        u200=grid(1.0), v200=grid(1.0), u850=grid(1.0), v850=grid(1.0), z500=grid(1.0),
+        rh700=grid(1.0), t700=grid(1.0), mslp=grid(1.0), sst=grid(1.0), ohc=grid(1.0),
+    )
+    task = FetchTask(
+        storm_id=cached_fix.storm_id, valid_time=cached_fix.valid_time,
+        lat=cached_fix.lat, lon=cached_fix.lon,
+    )
+    save_cached_fields(cache_path(tmp_path, task), fields, task)
+
+    windows = [
+        StageWindow(
+            storm_id="AL011985", window=(cached_fix,), current=cached_fix,
+            y=np.zeros((1, 3)), mask=np.array([True]),
+        ),
+        StageWindow(
+            storm_id="AL011985", window=(uncached_fix,), current=uncached_fix,
+            y=np.zeros((1, 3)), mask=np.array([True]),
+        ),
+    ]
+
+    kept = filter_windows_with_cache(windows, tmp_path)
+    assert len(kept) == 1
+    assert kept[0].current.valid_time == cached_fix.valid_time
+
+
+def test_filter_windows_with_cache_empty_when_nothing_cached(tmp_path):
+    from datetime import UTC, datetime
+
+    from anemoi.data.besttrack import Fix, TrackQuality
+    from anemoi.training.real_run import StageWindow
+
+    fix = Fix(
+        storm_id="AL011985", valid_time=datetime(1985, 8, 1, tzinfo=UTC),
+        lat=20.0, lon=-60.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+        quality=TrackQuality.FINAL,
+    )
+    windows = [
+        StageWindow(
+            storm_id="AL011985", window=(fix,), current=fix,
+            y=np.zeros((1, 3)), mask=np.array([True]),
+        ),
+    ]
+    assert filter_windows_with_cache(windows, tmp_path) == []
