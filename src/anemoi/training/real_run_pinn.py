@@ -226,6 +226,273 @@ def _freeze_pinn_trunk(model, frozen_modules: tuple[str, ...]) -> None:
             param.requires_grad = False
 
 
+def _train_candidate_lstm_streaming(
+    train_tracks: list[Track],
+    rng: np.random.Generator,
+    *,
+    n_augment: int = 3,
+    batch_size: int = 64,
+    device=None,
+    hidden_dim: int = 64,
+    epochs: int = 30,
+    lr: float = 1e-3,
+):
+    """Streaming analog of `_train_candidate_lstm` -- same raw
+    (unstandardized) displacement targets (module docstring's reasoning
+    still applies unchanged), real per-batch training via a
+    `torch.utils.data.DataLoader` over a `streaming.WindowDataset` instead
+    of one full-dataset GPU tensor of every training window's track
+    sequence."""
+    from ..models.lstm import build_lstm
+    from .streaming import WindowDataset
+
+    torch = require_torch()
+    device = device or get_device()
+
+    windows = list(iter_stage_windows(train_tracks, rng, n_augment))
+    if not windows:
+        raise ValueError("no track samples to train the PINN candidate generator on")
+
+    def build_x(sw):
+        return storm_relative_sequence(sw.window)
+
+    ds = WindowDataset(windows, build_x)
+    loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=True)
+
+    model, _spec = build_lstm(
+        input_dim=len(STORM_RELATIVE_COLUMNS), hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
+    )
+    model.to(device)
+
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    model.train()
+    for _ in range(epochs):
+        for xb, yb, mb in loader:
+            xb, yb = xb.to(device), yb.to(device)
+            mb = mb.to(device).unsqueeze(-1)
+            opt.zero_grad()
+            diff2 = (model(xb) - yb) ** 2 * mb
+            loss = diff2.sum() / mb.sum().clamp(min=1.0)
+            loss.backward()
+            opt.step()
+    model.eval()
+    return model
+
+
+class _PinnWindowDataset:
+    """PINN-specific analog of `streaming.WindowDataset`: each item needs
+    THREE things that dataset's single-array contract can't carry -- the
+    real environment vector (from cached `GriddedFields`), the raw track
+    window (for the candidate LSTM), and the window's base (lat, lon) the
+    absolute-coordinate conversion (module docstring) is anchored to -- so
+    this stays a small dataset of its own, duck-typed as a real
+    ``torch.utils.data.Dataset`` the same way `WindowDataset` is, rather
+    than forcing that shared class's single-``x`` shape onto PINN.
+    """
+
+    def __init__(
+        self,
+        windows: list,
+        cache_dir: Path,
+        *,
+        env_mean: np.ndarray | None = None,
+        env_std: np.ndarray | None = None,
+    ) -> None:
+        self._windows = windows
+        self._cache_dir = cache_dir
+        self.env_mean = env_mean
+        self.env_std = env_std
+
+    def __len__(self) -> int:
+        return len(self._windows)
+
+    def __getitem__(self, idx: int):
+        sw = self._windows[idx]
+        fields = load_cached_fields(cache_path(self._cache_dir, FetchTask(
+            storm_id=sw.storm_id, valid_time=sw.current.valid_time,
+            lat=sw.current.lat, lon=sw.current.lon,
+        )))
+        env = compute_environment_features(fields).values.astype(np.float32)
+        if self.env_mean is not None:
+            env = (env - self.env_mean) / self.env_std
+        x_track = storm_relative_sequence(sw.window).astype(np.float32)
+        base = np.array([sw.current.lat, sw.current.lon], dtype=np.float32)
+        return env, x_track, base, sw.y.astype(np.float32), sw.mask.astype(np.float32)
+
+
+def _disp_to_abs_batch(disp: np.ndarray, base: np.ndarray) -> np.ndarray:
+    """Batched `_candidate_and_true_absolute`-style conversion: ``disp`` is
+    ``(batch, n_leads, 3)`` raw (dx_east_nm, dy_north_nm, wind_kt), ``base``
+    is ``(batch, 2)`` (lat, lon) -- returns ``(batch, n_leads, 3)`` absolute
+    (lat, lon, wind_kt), PINN's own coordinate convention (module
+    docstring)."""
+    n, n_leads, _ = disp.shape
+    out = np.zeros_like(disp)
+    for si in range(n):
+        base_lat, base_lon = base[si]
+        for li in range(n_leads):
+            lat, lon = displacement_to_latlon(base_lat, base_lon, *disp[si, li, :2])
+            out[si, li] = [lat, lon, disp[si, li, 2]]
+    return out
+
+
+def train_pinn_stage_streaming(
+    model,
+    candidate_model,
+    stage: StageSpec,
+    train_tracks: list[Track],
+    val_tracks: list[Track],
+    cache_dir: Path | str,
+    rng: np.random.Generator,
+    *,
+    n_augment: int = 3,
+    batch_size: int = 32,
+    device=None,
+) -> tuple[object, float, float, MetricSet, tuple]:
+    """`train_pinn_stage`'s streaming analog (`docs/streaming_dataloader.md`) --
+    same return contract, same masked track/intensity loss plus physics
+    penalty, real per-batch training via a `torch.utils.data.DataLoader`
+    (using `_PinnWindowDataset`, see its docstring for why PINN needs its
+    own rather than the shared `streaming.WindowDataset`) and online
+    environment-vector standardisation instead of one full-dataset GPU
+    tensor and a single `.mean()`/`.std()` call.
+    """
+    from ..models.pinn import physics_residuals
+    from .streaming import OnlineMeanStd, filter_windows_with_cache
+
+    if not train_tracks or not val_tracks:
+        raise ValueError(f"stage {stage.name}: empty train or val storm set")
+
+    torch = require_torch()
+    device = device or get_device()
+
+    train_windows = filter_windows_with_cache(
+        list(iter_stage_windows(train_tracks, rng, n_augment)), cache_dir,
+    )
+    val_windows = filter_windows_with_cache(
+        list(iter_stage_windows(val_tracks, rng, 1)), cache_dir,
+    )
+    if not train_windows or not val_windows:
+        raise ValueError(
+            f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
+            f"{cache_dir} -- has data.era5_cache/data.gdas_cache fetched anything yet?"
+        )
+
+    cache_dir = Path(cache_dir)
+    raw_ds = _PinnWindowDataset(train_windows, cache_dir)
+    env_acc = OnlineMeanStd(reduce_axes=(0,))
+    for i in range(len(raw_ds)):
+        env, _track, _base, _y, _mask = raw_ds[i]
+        env_acc.update(env[None])
+    env_mean, env_std = env_acc.finalize()
+
+    train_ds = _PinnWindowDataset(train_windows, cache_dir, env_mean=env_mean, env_std=env_std)
+    val_ds = _PinnWindowDataset(val_windows, cache_dir, env_mean=env_mean, env_std=env_std)
+
+    def collate(batch):
+        envs, tracks_, bases, ys, masks = zip(*batch, strict=True)
+        return np.stack(envs), np.stack(tracks_), np.stack(bases), np.stack(ys), np.stack(masks)
+
+    train_loader = torch.utils.data.DataLoader(
+        train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate,
+    )
+    val_loader = torch.utils.data.DataLoader(
+        val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate,
+    )
+
+    _freeze_pinn_trunk(model, stage.frozen_modules)
+    model.to(device)
+    candidate_model.to(device)
+    candidate_model.eval()
+
+    def masked_mse_sums(pred, target, mask3):
+        diff2 = (pred - target) ** 2 * mask3
+        return diff2.sum(), mask3.sum()
+
+    def forward_batch(env_b: np.ndarray, track_b: np.ndarray, base_b: np.ndarray):
+        envt = torch.as_tensor(env_b, dtype=torch.float32, device=device)
+        trackt = torch.as_tensor(track_b, dtype=torch.float32, device=device)
+        with torch.no_grad():
+            pred_disp = candidate_model(trackt).cpu().numpy()
+        candidate_abs = _disp_to_abs_batch(pred_disp, base_b)
+        candt = torch.as_tensor(candidate_abs, dtype=torch.float32, device=device)
+        return model(envt, candt)
+
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    opt = torch.optim.Adam(trainable, lr=stage.learning_rate)
+
+    model.train()
+    for _ in range(stage.epochs):
+        for env_b, track_b, base_b, y_b, mask_b in train_loader:
+            true_abs = _disp_to_abs_batch(y_b, base_b)
+            truet = torch.as_tensor(true_abs, dtype=torch.float32, device=device)
+            mt = torch.as_tensor(mask_b, dtype=torch.float32, device=device).unsqueeze(-1)
+            opt.zero_grad()
+            pred = forward_batch(env_b, track_b, base_b)
+            diff2_sum, mask_sum = masked_mse_sums(pred, truet, mt)
+            track_loss = diff2_sum / mask_sum.clamp(min=1.0)
+            residuals = physics_residuals(
+                pred[:, :_PHYSICS_LEAD_COUNT, :], dt_hours=_PHYSICS_DT_HOURS,
+            )
+            phys_loss = sum(PHYSICS_LOSS_WEIGHTS[k] * v for k, v in residuals.items())
+            loss = track_loss + phys_loss
+            loss.backward()
+            opt.step()
+
+    model.eval()
+    with torch.no_grad():
+        train_diff2, train_mask = 0.0, 0.0
+        for env_b, track_b, base_b, y_b, mask_b in train_loader:
+            true_abs = _disp_to_abs_batch(y_b, base_b)
+            truet = torch.as_tensor(true_abs, dtype=torch.float32, device=device)
+            mt = torch.as_tensor(mask_b, dtype=torch.float32, device=device).unsqueeze(-1)
+            d, m = masked_mse_sums(forward_batch(env_b, track_b, base_b), truet, mt)
+            train_diff2 += float(d.item())
+            train_mask += float(m.item())
+        train_loss = train_diff2 / max(train_mask, 1.0)
+
+        val_diff2, val_mask = 0.0, 0.0
+        pred_val_rows: list[np.ndarray] = []
+        true_val_rows: list[np.ndarray] = []
+        for env_b, track_b, base_b, y_b, mask_b in val_loader:
+            true_abs = _disp_to_abs_batch(y_b, base_b)
+            truet = torch.as_tensor(true_abs, dtype=torch.float32, device=device)
+            mt = torch.as_tensor(mask_b, dtype=torch.float32, device=device).unsqueeze(-1)
+            pred = forward_batch(env_b, track_b, base_b)
+            d, m = masked_mse_sums(pred, truet, mt)
+            val_diff2 += float(d.item())
+            val_mask += float(m.item())
+            pred_val_rows.append(pred.cpu().numpy())
+            true_val_rows.append(true_abs)
+        val_loss = val_diff2 / max(val_mask, 1.0)
+        pred_val = np.concatenate(pred_val_rows, axis=0)
+        true_val = np.concatenate(true_val_rows, axis=0)
+
+    pairs: list[VerificationPair] = []
+    for si, sw in enumerate(val_windows):
+        for li, lead_hours in enumerate(DEFAULT_LEADS):
+            if not sw.mask[li]:
+                continue
+            plat, plon, pwind = pred_val[si, li]
+            tlat, tlon, twind = true_val[si, li]
+            pairs.append(
+                VerificationPair(
+                    forecast=ForecastPoint(
+                        lead_hours=lead_hours, lat=float(plat), lon=float(plon),
+                        max_wind_kt=float(pwind),
+                    ),
+                    obs_lat=float(tlat),
+                    obs_lon=float(tlon),
+                    obs_wind_kt=float(twind),
+                )
+            )
+
+    if not pairs:
+        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
+    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
+    return model, train_loss, val_loss, val_metrics, (env_mean, env_std)
+
+
 def train_pinn_stage(
     model,
     candidate_model,
@@ -344,6 +611,8 @@ def run_pinn_curriculum(
     hidden_dim: int = 128,
     candidate_hidden_dim: int = 64,
     curriculum_kwargs: dict | None = None,
+    streaming: bool = False,
+    batch_size: int = 32,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the PINN baseline.
     A fresh candidate-generator LSTM is trained per stage (see module
@@ -359,6 +628,13 @@ def run_pinn_curriculum(
     (``.env_mean``/``.env_std``). See `real_run.run_lstm_curriculum`'s
     docstring for why a ``RunArtifacts`` is returned at all (#22, `training
     .real_latents`).
+
+    ``streaming=True`` uses `_train_candidate_lstm_streaming` and
+    `train_pinn_stage_streaming` instead of the default full-batch pair
+    (`docs/streaming_dataloader.md`) -- the last of the five models that
+    doc scopes; PINN's candidate-generator LSTM has the same full-batch
+    OOM shape one level removed, so it's streamed too, not just the outer
+    PINN stage.
     """
     from ..models.pinn import build_pinn
 
@@ -377,18 +653,27 @@ def run_pinn_curriculum(
         train_tracks = filter_tracks(tracks, assignment, Split.TRAIN)
         val_tracks = filter_tracks(tracks, assignment, Split.VAL)
 
-        candidate_model = _train_candidate_lstm(
-            train_tracks, rng, n_augment=n_augment, device=device, hidden_dim=candidate_hidden_dim,
-        )
+        if streaming:
+            candidate_model = _train_candidate_lstm_streaming(
+                train_tracks, rng, n_augment=n_augment, device=device,
+                hidden_dim=candidate_hidden_dim, batch_size=batch_size,
+            )
+        else:
+            candidate_model = _train_candidate_lstm(
+                train_tracks, rng, n_augment=n_augment, device=device,
+                hidden_dim=candidate_hidden_dim,
+            )
 
         if model is None:
             model, _spec = build_pinn(
                 input_dim=len(FEATURE_NAMES), hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
             )
 
-        model, train_loss, val_loss, val_metrics, env_stats = train_pinn_stage(
+        stage_fn = train_pinn_stage_streaming if streaming else train_pinn_stage
+        stage_kwargs = {"batch_size": batch_size} if streaming else {}
+        model, train_loss, val_loss, val_metrics, env_stats = stage_fn(
             model, candidate_model, stage, train_tracks, val_tracks, cache_dir, rng,
-            n_augment=n_augment, device=device,
+            n_augment=n_augment, device=device, **stage_kwargs,
         )
 
         torch = require_torch()
