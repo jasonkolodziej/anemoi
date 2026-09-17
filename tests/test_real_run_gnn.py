@@ -201,6 +201,60 @@ def test_train_gnn_stage_runs_and_produces_val_metrics(tmp_path):
     assert "track_error_12h_nm" in val_metrics.values
 
 
+@pytest.mark.torch
+def test_train_gnn_stage_streaming_runs_and_produces_val_metrics(tmp_path):
+    from anemoi.models.gnn import build_gnn
+    from anemoi.training.curriculum import stage_a
+    from anemoi.training.real_run_gnn import train_gnn_stage_streaming
+
+    train_tracks = [make_track("AL011985", season=1985, n=26, seed=0)]
+    val_tracks = [make_track("AL012020", season=2020, n=26, seed=1)]
+    for t in train_tracks + val_tracks:
+        cache_all_fixes(tmp_path, t, Flavor.ERA5_PRETRAIN)
+
+    leads = (12, 24, 36, 48, 72, 96, 120)
+    model, _spec = build_gnn(
+        node_features=NODE_FEATURES, edge_features=EDGE_FEATURES,
+        hidden_dim=16, n_layers=2, lead_hours=leads,
+    )
+    stage = stage_a(epochs=2, learning_rate=1e-2)
+    rng = np.random.default_rng(5)
+
+    trained_model, train_loss, val_loss, val_metrics, stats = train_gnn_stage_streaming(
+        model, stage, train_tracks, val_tracks, tmp_path, rng, n_augment=1, batch_size=4,
+    )
+    assert trained_model is model
+    assert train_loss >= 0.0
+    assert val_loss >= 0.0
+    assert "track_error_12h_nm" in val_metrics.values
+    x_mean, x_std, _y_mean, _y_std = stats
+    assert x_mean.shape == (1, 1, NODE_FEATURES)
+
+
+@pytest.mark.torch
+def test_train_gnn_stage_streaming_raises_on_empty_cache(tmp_path):
+    from anemoi.models.gnn import build_gnn
+    from anemoi.training.curriculum import stage_a
+    from anemoi.training.real_run_gnn import train_gnn_stage_streaming
+
+    train_tracks = [make_track("AL011985", season=1985, n=26, seed=0)]
+    val_tracks = [make_track("AL012020", season=2020, n=26, seed=1)]
+    # deliberately no cache_all_fixes call -- nothing cached
+
+    leads = (12, 24, 36, 48, 72, 96, 120)
+    model, _spec = build_gnn(
+        node_features=NODE_FEATURES, edge_features=EDGE_FEATURES,
+        hidden_dim=16, n_layers=2, lead_hours=leads,
+    )
+    stage = stage_a(epochs=1, learning_rate=1e-2)
+    rng = np.random.default_rng(5)
+
+    with pytest.raises(ValueError, match="no cached GriddedFields matched"):
+        train_gnn_stage_streaming(
+            model, stage, train_tracks, val_tracks, tmp_path, rng, n_augment=1,
+        )
+
+
 class _FakeS3Client:
     """Same duck-typed surface tests/test_checkpoint_store.py uses."""
 
@@ -252,4 +306,37 @@ def test_run_gnn_curriculum_completes_both_stages(tmp_path):
     assert run.results[-1].flavor is Flavor.GDAS_FINETUNE
     for result in run.results:
         assert result.checkpoint_uri.startswith("s3://anemoi-test/checkpoints/gnn/")
+    assert "track_error_12h_nm" in val_metrics.values
+
+
+@pytest.mark.torch
+def test_run_gnn_curriculum_streaming_completes_both_stages(tmp_path):
+    from anemoi.tracking.checkpoint_store import CheckpointStore, S3Config
+    from anemoi.training.real_run_gnn import run_gnn_curriculum
+
+    era5_dir = tmp_path / "era5_cache"
+    gdas_dir = tmp_path / "gdas_cache"
+    tracks = [
+        make_track("AL011985", season=1985, n=26, seed=0),
+        make_track("AL012021", season=2021, n=26, seed=1),
+        make_track("AL022021", season=2021, n=26, seed=2),
+        make_track("AL012023", season=2023, n=26, seed=3),
+    ]
+    for t in tracks:
+        cache_all_fixes(era5_dir, t, Flavor.ERA5_PRETRAIN)
+        cache_all_fixes(gdas_dir, t, Flavor.GDAS_FINETUNE)
+
+    config = S3Config(
+        endpoint_url="https://example.r2.cloudflarestorage.com",
+        bucket="anemoi-test", access_key_id="key", secret_access_key="secret",
+    )
+    store = CheckpointStore(config, client=_FakeS3Client())
+
+    run, val_metrics, _artifacts = run_gnn_curriculum(
+        tracks, store, era5_dir, gdas_dir, seed=42, n_augment=1, hidden_dim=16,
+        streaming=True, batch_size=4,
+    )
+
+    assert run.complete
+    assert [r.stage_name for r in run.results] == ["A", "B"]
     assert "track_error_12h_nm" in val_metrics.values
