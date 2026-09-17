@@ -220,6 +220,75 @@ def test_iter_dataset_in_batches_covers_every_item_exactly_once():
     assert sorted(seen) == [float(v) for v in range(23)]
 
 
+# --- make_dataloader ----------------------------------------------------------
+
+torch_installed = pytest.importorskip("torch", reason="needs the torch extra")
+
+
+@pytest.mark.torch
+def test_make_dataloader_num_workers_zero_covers_every_item_exactly_once():
+    from anemoi.training.streaming import make_dataloader
+
+    windows = [
+        _FakeWindow(float(v), y=np.array([[float(v)]]), mask=np.array([True])) for v in range(11)
+    ]
+    ds = WindowDataset(windows, lambda sw: np.array([sw.value]))
+    loader = make_dataloader(ds, batch_size=4, shuffle=False, num_workers=0)
+
+    assert loader.num_workers == 0
+    seen = []
+    for xb, _yb, _mb in loader:
+        seen.extend(xb[:, 0].tolist())
+    assert sorted(seen) == [float(v) for v in range(11)]
+
+
+@pytest.mark.torch
+def test_make_dataloader_num_workers_positive_forks_real_worker_processes():
+    """Real functional check, not just an attribute check -- confirms
+    num_workers>0 actually produces correct results through real forked
+    worker processes (docs/streaming.make_dataloader's docstring explains
+    why `multiprocessing_context="fork"` is forced explicitly), the exact
+    path that was all-serial (`num_workers=0`) before this existed."""
+    from anemoi.training.streaming import make_dataloader
+
+    windows = [
+        _FakeWindow(float(v), y=np.array([[float(v)]]), mask=np.array([True])) for v in range(11)
+    ]
+    ds = WindowDataset(windows, lambda sw: np.array([sw.value]))
+    loader = make_dataloader(ds, batch_size=4, shuffle=False, num_workers=2)
+
+    assert loader.num_workers == 2
+    assert loader.persistent_workers is True
+    seen = []
+    for xb, _yb, _mb in loader:
+        seen.extend(xb[:, 0].tolist())
+    assert sorted(seen) == [float(v) for v in range(11)]
+
+
+@pytest.mark.torch
+def test_make_dataloader_passes_through_a_custom_collate_fn():
+    """GNN's streaming path needs its own collate_fn (block-diagonal batch
+    assembly) -- confirms make_dataloader forwards it rather than only
+    supporting the default collation `WindowDataset`'s other callers use."""
+    from anemoi.training.streaming import make_dataloader
+
+    windows = [
+        _FakeWindow(float(v), y=np.array([[float(v)]]), mask=np.array([True])) for v in range(6)
+    ]
+    ds = WindowDataset(windows, lambda sw: np.array([sw.value]))
+    calls = []
+
+    def collate(batch):
+        calls.append(len(batch))
+        xs, ys, masks = zip(*batch, strict=True)
+        return np.stack(xs), np.stack(ys), np.stack(masks)
+
+    loader = make_dataloader(ds, batch_size=3, shuffle=False, num_workers=0, collate_fn=collate)
+    batches = list(loader)
+    assert calls == [3, 3]
+    assert len(batches) == 2
+
+
 # --- filter_windows_with_cache -----------------------------------------------
 
 

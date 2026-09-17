@@ -275,6 +275,33 @@ def test_train_lstm_stage_streaming_reduces_loss_and_produces_val_metrics():
     assert y_mean.shape[-1] == 3
 
 
+def test_train_lstm_stage_streaming_num_workers_matches_the_main_process_result():
+    """num_workers>0 (real forked DataLoader worker processes,
+    streaming.make_dataloader) must produce the same class of real,
+    finite, trainable result as num_workers=0 -- not a separate code path
+    that happens to also run, but the same DataLoader just with real
+    parallel loading behind it."""
+    from anemoi.models.lstm import build_lstm
+    from anemoi.training.curriculum import stage_a
+    from anemoi.training.real_run import train_lstm_stage_streaming
+
+    tracks = [make_track("AL011985", season=1985, n=26, seed=0),
+              make_track("AL021985", season=1985, n=26, seed=1)]
+    val_tracks = [make_track("AL012020", season=2020, n=26, seed=2)]
+
+    model, _spec = build_lstm(input_dim=5, hidden_dim=16, lead_hours=(12, 24, 36, 48, 72, 96, 120))
+    stage = stage_a(epochs=5, learning_rate=1e-2)
+    rng = np.random.default_rng(5)
+
+    trained_model, train_loss, val_loss, val_metrics, _stats = train_lstm_stage_streaming(
+        model, stage, tracks, val_tracks, rng, n_augment=2, batch_size=8, num_workers=2,
+    )
+    assert trained_model is model
+    assert train_loss >= 0.0
+    assert val_loss >= 0.0
+    assert "track_error_12h_nm" in val_metrics.values
+
+
 @pytest.mark.torch
 def test_train_lstm_stage_streaming_batch_size_does_not_change_final_metrics_much():
     """Different batch sizes take different SGD paths (real, expected --

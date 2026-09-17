@@ -37,13 +37,14 @@ from .promotion import MetricSet, PromotionDecision, evaluate_promotion
 
 
 def _streaming_kwargs(r: RealOrchestratorRunner) -> dict:
-    """``streaming=False`` is always passed explicitly (matches each
-    `run_*_curriculum`'s own default). ``batch_size`` is only passed when
-    the caller set one -- otherwise each model keeps its own tuned default
-    (`train_lstm_stage_streaming`'s 64 vs. `train_transformer_stage
-    _streaming`'s 16, etc.) instead of every model in a schedule silently
-    collapsing onto one shared number."""
-    kwargs: dict = {"streaming": r.streaming}
+    """``streaming=False`` and ``num_workers`` are always passed explicitly
+    (``num_workers=0`` matches every `run_*_curriculum`'s own default, so
+    this is a no-op unless the caller set one). ``batch_size`` is only
+    passed when the caller set one -- otherwise each model keeps its own
+    tuned default (`train_lstm_stage_streaming`'s 64 vs.
+    `train_transformer_stage_streaming`'s 16, etc.) instead of every model
+    in a schedule silently collapsing onto one shared number."""
+    kwargs: dict = {"streaming": r.streaming, "num_workers": r.num_workers}
     if r.batch_size is not None:
         kwargs["batch_size"] = r.batch_size
     return kwargs
@@ -190,6 +191,11 @@ class RealOrchestratorRunner:
     #: model's own tuned default (see `_streaming_kwargs`).
     streaming: bool = False
     batch_size: int | None = None
+    #: Real `DataLoader` worker processes (streaming only, default 0 --
+    #: matches every `run_*_curriculum`'s own default). See
+    #: `streaming.make_dataloader`'s docstring for what this actually does
+    #: and why it forces `multiprocessing_context="fork"`.
+    num_workers: int = 0
 
     curriculum_runs: dict[str, CurriculumRun] = field(default_factory=dict, init=False)
     val_metrics: dict[str, MetricSet] = field(default_factory=dict, init=False)

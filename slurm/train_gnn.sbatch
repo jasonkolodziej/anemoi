@@ -28,12 +28,26 @@ REGISTRY_ROOT="${REGISTRY_ROOT:-$HOME/.anemoi/registry}"
 SEED="${SEED:-20260806}"
 N_AUGMENT="${N_AUGMENT:-3}"
 HIDDEN_DIM="${HIDDEN_DIM:-128}"
+# Streaming training (docs/streaming_dataloader.md, #60-#64): real
+# per-batch DataLoader training instead of the default full-batch path.
+# STREAMING=1 opts in; BATCH_SIZE left unset keeps the model's own tuned
+# default; NUM_WORKERS spawns real DataLoader worker processes to overlap
+# batch loading with GPU compute (training.streaming.make_dataloader) --
+# left unset keeps the default of 0.
+STREAMING="${STREAMING:-}"
+BATCH_SIZE="${BATCH_SIZE:-}"
+NUM_WORKERS="${NUM_WORKERS:-}"
 
 if [ ! -f "$HURDAT2" ]; then
   echo "HURDAT2 archive not found at $HURDAT2 -- fetch it first:" >&2
   echo "  curl -o $HURDAT2 https://www.nhc.noaa.gov/data/hurdat/hurdat2-atl-1851-2023-042624.txt" >&2
   exit 1
 fi
+
+EXTRA_ARGS=()
+if [ -n "$STREAMING" ]; then EXTRA_ARGS+=(--streaming); fi
+if [ -n "$BATCH_SIZE" ]; then EXTRA_ARGS+=(--batch-size "$BATCH_SIZE"); fi
+if [ -n "$NUM_WORKERS" ]; then EXTRA_ARGS+=(--num-workers "$NUM_WORKERS"); fi
 
 uv run anemoi train \
   --model gnn \
@@ -43,4 +57,5 @@ uv run anemoi train \
   --registry-root "$REGISTRY_ROOT" \
   --seed "$SEED" \
   --n-augment "$N_AUGMENT" \
-  --hidden-dim "$HIDDEN_DIM"
+  --hidden-dim "$HIDDEN_DIM" \
+  "${EXTRA_ARGS[@]}"

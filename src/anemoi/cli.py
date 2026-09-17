@@ -243,6 +243,12 @@ def cmd_train(args: argparse.Namespace) -> int:
     the default full-batch path (docs/streaming_dataloader.md) -- durable
     fix for a real CUDA OOM training against a large enough cached
     dataset (per-step VRAM becomes O(batch_size), not O(dataset size)).
+
+    --num-workers (--streaming only) spawns real DataLoader worker
+    processes to overlap cached-field disk reads with GPU compute instead
+    of blocking each training step on them -- see
+    training.streaming.make_dataloader's docstring for why it defaults to
+    0 and forces "fork" when set.
     """
     from .data.hurdat2 import parse_hurdat2_file
     from .data.sources import Flavor
@@ -255,7 +261,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     tracks = parse_hurdat2_file(args.hurdat2)
     store = CheckpointStore(S3Config.from_env())
 
-    streaming_kwargs: dict = {"streaming": args.streaming}
+    streaming_kwargs: dict = {"streaming": args.streaming, "num_workers": args.num_workers}
     if args.batch_size is not None:
         streaming_kwargs["batch_size"] = args.batch_size
 
@@ -374,7 +380,8 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
     full-batch-OOM fix as `anemoi train --streaming`,
     docs/streaming_dataloader.md); diffusion/fusion have no streaming path
     since they train against small in-memory joint latents, not the
-    growing gridded cache.
+    growing gridded cache. --num-workers (--streaming only) is the same
+    real DataLoader worker-process option as `anemoi train`'s.
     """
     from .data.hurdat2 import parse_hurdat2_file
     from .tracking.checkpoint_store import CheckpointStore, S3Config
@@ -402,6 +409,7 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
         n_augment=args.n_augment,
         streaming=args.streaming,
         batch_size=args.batch_size,
+        num_workers=args.num_workers,
     )
     result = run_schedule(schedule, runner)
 
@@ -524,6 +532,13 @@ def main(argv: list[str] | None = None) -> int:
         "--batch-size", dest="batch_size", type=int, default=None,
         help="--streaming only; default: each model's own tuned default if unset",
     )
+    p.add_argument(
+        "--num-workers", dest="num_workers", type=int, default=0,
+        help=(
+            "--streaming only; real DataLoader worker processes (default: 0, "
+            "main-process loading) -- training.streaming.make_dataloader"
+        ),
+    )
     p.set_defaults(func=cmd_train)
 
     p = sub.add_parser(
@@ -557,6 +572,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--batch-size", dest="batch_size", type=int, default=None,
         help="--streaming only; default: each model's own tuned default if unset",
+    )
+    p.add_argument(
+        "--num-workers", dest="num_workers", type=int, default=0,
+        help=(
+            "--streaming only; real DataLoader worker processes (default: 0, "
+            "main-process loading) -- training.streaming.make_dataloader"
+        ),
     )
     p.set_defaults(func=cmd_train_schedule)
 

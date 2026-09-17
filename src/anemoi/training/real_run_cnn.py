@@ -259,19 +259,23 @@ def train_cnn_stage_streaming(
     *,
     n_augment: int = 3,
     batch_size: int = 32,
+    num_workers: int = 0,
     device=None,
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_cnn_stage`'s streaming analog (`docs/streaming_dataloader.md`) --
     same return contract, real per-batch training via a `torch.utils.data
     .DataLoader` and online standardisation statistics instead of one
     full-dataset GPU tensor. See `real_run.train_lstm_stage_streaming` for
-    the reference implementation this follows.
+    the reference implementation this follows. ``num_workers`` (default 0)
+    forwards to `streaming.make_dataloader` -- see that function's
+    docstring.
     """
     from .streaming import (
         OnlineMaskedLeadMeanStd,
         OnlineMeanStd,
         WindowDataset,
         filter_windows_with_cache,
+        make_dataloader,
     )
 
     if not train_tracks or not val_tracks:
@@ -323,8 +327,12 @@ def train_cnn_stage_streaming(
     val_ds = WindowDataset(
         val_windows, build_x, x_mean=item_x_mean, x_std=item_x_std, y_mean=y_mean, y_std=y_std,
     )
-    train_loader = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    val_loader = torch.utils.data.DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+    train_loader = make_dataloader(
+        train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers,
+    )
+    val_loader = make_dataloader(
+        val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers,
+    )
 
     freeze_encoder(model, stage.frozen_modules)
     model.to(device)
@@ -411,6 +419,7 @@ def run_cnn_curriculum(
     curriculum_kwargs: dict | None = None,
     streaming: bool = False,
     batch_size: int = 32,
+    num_workers: int = 0,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the CNN baseline
     against real cached GriddedFields.
@@ -429,6 +438,8 @@ def run_cnn_curriculum(
     `O(batch_size)` VRAM instead of `O(dataset size)`
     (`docs/streaming_dataloader.md`; this is the model that actually hit a
     real CUDA OOM training full-batch against the real, growing cache).
+    ``num_workers`` (streaming only, default 0) forwards to
+    `streaming.make_dataloader` -- see that function's docstring.
     """
     from ..models.cnn import build_cnn
 
@@ -452,7 +463,7 @@ def run_cnn_curriculum(
             )
 
         stage_fn = train_cnn_stage_streaming if streaming else train_cnn_stage
-        stage_kwargs = {"batch_size": batch_size} if streaming else {}
+        stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
         model, train_loss, val_loss, val_metrics, stats = stage_fn(
             model, stage, train_tracks, val_tracks, cache_dir, rng,
             n_augment=n_augment, **stage_kwargs,

@@ -384,6 +384,7 @@ def train_lstm_stage_streaming(
     *,
     n_augment: int = 3,
     batch_size: int = 64,
+    num_workers: int = 0,
     device=None,
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_lstm_stage`'s streaming analog (`docs/streaming_dataloader.md`) --
@@ -399,7 +400,7 @@ def train_lstm_stage_streaming(
     are still fully listed in memory -- cheap, since each is a handful of
     `Fix` objects plus small arrays, not the real per-window track data.
     """
-    from .streaming import OnlineMaskedLeadMeanStd, OnlineMeanStd, WindowDataset
+    from .streaming import OnlineMaskedLeadMeanStd, OnlineMeanStd, WindowDataset, make_dataloader
 
     if not train_tracks or not val_tracks:
         raise ValueError(f"stage {stage.name}: empty train or val storm set")
@@ -432,8 +433,12 @@ def train_lstm_stage_streaming(
     val_ds = WindowDataset(
         val_windows, build_x, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
     )
-    train_loader = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    val_loader = torch.utils.data.DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+    train_loader = make_dataloader(
+        train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers,
+    )
+    val_loader = make_dataloader(
+        val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers,
+    )
 
     freeze_encoder(model, stage.frozen_modules)
     model.to(device)
@@ -518,6 +523,7 @@ def run_lstm_curriculum(
     curriculum_kwargs: dict | None = None,
     streaming: bool = False,
     batch_size: int = 64,
+    num_workers: int = 0,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the LSTM baseline
     against real HURDAT2 tracks, uploading each stage's checkpoint to
@@ -540,6 +546,12 @@ def run_lstm_curriculum(
     `O(dataset size)` (`docs/streaming_dataloader.md`). Off by default:
     the full-batch path is simpler and fine at small real scale; opt in
     once the cached dataset is large enough that full-batch risks OOM.
+
+    ``num_workers`` (streaming only, default 0) forwards to
+    `streaming.make_dataloader` -- real DataLoader worker processes that
+    overlap batch loading with GPU compute instead of blocking the
+    training step on it. See that function's docstring for why it forces
+    ``fork`` explicitly and defaults to 0.
     """
     from ..models.lstm import build_lstm
 
@@ -563,7 +575,7 @@ def run_lstm_curriculum(
             )
 
         stage_fn = train_lstm_stage_streaming if streaming else train_lstm_stage
-        stage_kwargs = {"batch_size": batch_size} if streaming else {}
+        stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
         model, train_loss, val_loss, val_metrics, stats = stage_fn(
             model, stage, train_tracks, val_tracks, rng, n_augment=n_augment, **stage_kwargs,
         )
