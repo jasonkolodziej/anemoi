@@ -38,11 +38,11 @@ can use.
 | Setting | Value |
 |---|---|
 | Name | `anemoi-train-1` |
-| Zone | `us-central1-a` (co-located with ARCO-ERA5) |
+| Zone | `us-central1-b` (moved from `us-central1-a` 2026-09-17 -- see "GPU capacity" below; co-location with ARCO-ERA5 is a **region**-level benefit, so any `us-central1` zone is equally close) |
 | Machine type | `g2-standard-4` (4 vCPU / 16GB, pairs with 1× L4) |
 | GPU | 1× NVIDIA L4 |
 | Image | `pytorch-2-9-cu129-ubuntu-2204-nvidia-580` (project `deeplearning-platform-release`) -- PyTorch + CUDA preinstalled, no manual driver setup |
-| Provisioning | Spot -- cheaper, and pairs with `tracking.checkpoint_store` (already built, #32): a preemption just resumes from the last uploaded checkpoint instead of losing the run |
+| Provisioning | **On-demand** (`STANDARD`) -- moved off Spot 2026-09-17. Spot's preemption risk is a bad trade for this workload specifically: `train_*_stage` only checkpoints at the end of a completed curriculum *stage*, not per-epoch, so a mid-stage preemption loses that whole stage's progress (hours, for Transformer/diffusion), not just resumes from `tracking.checkpoint_store` as originally assumed. Two preemptions in one real session, one of which required a full zone migration (below), made the actual cost of that risk concrete rather than theoretical |
 | Boot disk | 100GB, `pd-balanced` |
 | Monitoring | GCP Ops Agent installed and active (`google-cloud-ops-agent.service`) -- system metrics/logs into Cloud Monitoring/Logging. Per-VM install for now; if a second VM joins the project, prefer an OS Config Ops Agent *policy* (`gcloud compute instances ops-agents policies create`) so new VMs auto-enroll instead of a manual install each time |
 
@@ -51,17 +51,76 @@ Create with:
 ```bash
 gcloud compute instances create anemoi-train-1 \
   --project=anemoi-training \
-  --zone=us-central1-a \
+  --zone=us-central1-b \
   --machine-type=g2-standard-4 \
   --accelerator=type=nvidia-l4,count=1 \
   --image-family=pytorch-2-9-cu129-ubuntu-2204-nvidia-580 \
   --image-project=deeplearning-platform-release \
   --maintenance-policy=TERMINATE \
-  --provisioning-model=SPOT \
-  --instance-termination-action=STOP \
+  --provisioning-model=STANDARD \
   --boot-disk-size=100GB \
   --boot-disk-type=pd-balanced
 ```
+
+`--maintenance-policy=TERMINATE` is mandatory regardless of provisioning model -- GCP cannot live-migrate a VM with an attached GPU. `--provisioning-model=STANDARD` (or omitting the flag; STANDARD is the default) is the only line that actually changed from the original Spot setup.
+
+## GPU capacity: zone stockouts, and moving zones without losing the disk
+
+L4 capacity in `us-central1` is genuinely tight and moves fast: in one real
+session, `us-central1-a` returned `ZONE_RESOURCE_POOL_EXHAUSTED_WITH_DETAILS`
+(`reason: resource_availability`, `sub-state: STOCKOUT`) for a fresh
+**on-demand** create, not just a Spot preemption -- the error's own
+`zonesAvailable` hint named `us-central1-c` as having room; by the time the
+create was retried there, capacity had already moved to naming
+`us-central1-a, us-central1-b` instead. This is live marketplace-style
+flapping, not a one-time fluke -- don't trust a stockout error's
+`zonesAvailable` field to still be true a few seconds later.
+
+**The boot disk is zonal** -- it cannot attach to an instance in a different
+zone directly, which is what actually blocks a same-zone restart-and-hope
+retry loop from ever resolving a zone-wide stockout. The real fix is a
+disk migration:
+
+```bash
+# 1. Snapshot the existing disk (from whichever zone it's currently in)
+gcloud compute disks snapshot anemoi-train-1 \
+  --project=anemoi-training --zone=us-central1-a \
+  --snapshot-names=anemoi-train-1-migrate-YYYYMMDD
+
+# 2. Create a disk copy from that snapshot in each zone worth trying --
+#    cheap (a few GB-months of storage) and means the actual instance
+#    create isn't blocked waiting on a fresh disk copy once a zone opens up
+for zone in us-central1-a us-central1-b us-central1-c; do
+  gcloud compute disks create anemoi-train-1 \
+    --project=anemoi-training --zone=$zone \
+    --source-snapshot=anemoi-train-1-migrate-YYYYMMDD \
+    --type=pd-balanced --size=100GB
+done
+
+# 3. Race the create across zones -- whichever succeeds first wins;
+#    the network/subnet are region-level so no other flag needs to change
+for zone in us-central1-b us-central1-c us-central1-a; do
+  gcloud compute instances create anemoi-train-1 \
+    --project=anemoi-training --zone=$zone \
+    --machine-type=g2-standard-4 --accelerator=type=nvidia-l4,count=1 \
+    --maintenance-policy=TERMINATE --provisioning-model=STANDARD \
+    --disk=name=anemoi-train-1,boot=yes,mode=rw,device-name=persistent-disk-0,auto-delete=yes \
+    --network-interface=network=default,subnet=default,network-tier=PREMIUM \
+    --service-account=<compute-service-account> --scopes=<same scopes as before> \
+    --no-shielded-secure-boot --shielded-vtpm --shielded-integrity-monitoring \
+    && break
+done
+
+# 4. Once one succeeds, delete the now-unused disk copies in the other
+#    zones (the snapshot itself is worth keeping as a rollback point --
+#    a couple dollars a month for a real disaster-recovery point)
+gcloud compute disks delete anemoi-train-1 --zone=<losing-zone> --quiet
+```
+
+Deleting a *running instance* is treated as an irreversible action by this
+project's usual tooling guardrails (even with `--keep-disks=all` preserving
+the data) and needs a human to run that specific step directly -- disk
+snapshot/create/delete on an unattached disk is not similarly gated.
 
 ## Checkpoint storage
 
@@ -92,7 +151,7 @@ Copy `.env` over from a local machine rather than retyping R2 credentials
 (goes through the encrypted SSH tunnel, never printed):
 
 ```bash
-gcloud compute scp .env anemoi-train-1:~/anemoi/.env --project=anemoi-training --zone=us-central1-a
+gcloud compute scp .env anemoi-train-1:~/anemoi/.env --project=anemoi-training --zone=us-central1-b
 ```
 
 Verified on the real VM (2026-09-16): `uv run pytest` -- 405 passed, 4
@@ -377,3 +436,74 @@ both) and real `S3_ARTIFACT_*` credentials -- unlike the two ingest jobs,
 this one always uploads (no local-only fallback), since a multi-hour GPU
 run losing its result to a preemption is a real cost this project already
 built `CheckpointStore` to avoid.
+
+## Alternative: vast.ai, if GCP L4 capacity stays unreliable
+
+Recorded here as a real fallback option, not (yet) adopted -- the current
+VM above is still GCP. Worth having ready given `us-central1`'s repeated
+L4 stockouts (previous section): vast.ai is a peer-to-peer GPU marketplace
+(many independent hosts, not one hyperscaler's capacity pool), so a
+region-wide stockout on one platform doesn't imply the same on the other.
+
+**The real trade-off, not just a cheaper price.** Moving off GCP loses the
+region co-location with ARCO-ERA5 this doc opens with -- real ERA5 fetch
+measured **~6.7-9s/sample** from the GCP VM vs **~13-15s/sample** from
+outside GCP (this doc's "On the VM" section). A vast.ai host fetches Stage
+A data at the slower, outside-GCP rate regardless of which host -- none of
+them peer with Google's network the way a GCP VM does. GDAS/Stage B (AWS
+`noaa-gfs-bdp-pds`) was never GCP-local either way, so that fetch is
+unaffected. This is a real cost of moving, to weigh against the price
+difference below -- not a reason to dismiss it outright, since fetch is a
+one-time cost per fix (`skip_existing=True`) while GPU-hours recur every
+training run.
+
+### Template
+
+vast.ai instances are Docker containers (`docs.vast.ai/creating-a-custom-template`),
+not full VMs -- a template sets the image, launch mode, and an on-start
+script; disk size is chosen separately per-instance when picking an offer.
+
+| Field | Value |
+|---|---|
+| Docker image | `pytorch/pytorch:2.9.0-cuda12.8-cudnn9-runtime` (or vast.ai's own PyTorch template as a base -- pin to torch 2.9 either way, matching the GCP image's `pytorch-2-9-cu129` so `uv.lock`'s resolved torch build is the one actually exercised) |
+| Launch mode | SSH (this project's whole workflow -- `slurm/run_local.sh`, tmux sessions, log tailing -- assumes an interactive shell, not a Jupyter-only or entrypoint-only container) |
+| Disk space | 100GB minimum (matches the GCP boot disk; current real usage is ~34GB with ERA5/GDAS caches partially filled -- give headroom, this only grows) |
+| On-start script | Same commands as this doc's "On the VM" section: |
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh && source $HOME/.local/bin/env
+git clone https://github.com/jasonkolodziej/anemoi.git anemoi && cd anemoi
+uv sync --all-extras
+apt-get update -qq && apt-get install -y libeccodes0 tmux
+curl -o ~/hurdat2-atl.txt https://www.nhc.noaa.gov/data/hurdat/hurdat2-atl-1851-2023-042624.txt
+# .env (S3_ARTIFACT_* for CheckpointStore) still needs copying in separately --
+# never bake real credentials into a template, especially a public one.
+```
+
+### GPU options
+
+`docs/capacity_ablation.md`'s real finding matters here: these models are
+small (a few thousand parameters up to ~4.8M for the Transformer) and
+train full-batch against a thin (~16k-fix) archive. The GCP L4's 24GB is
+already far more headroom than any of these five models uses -- so the
+selection criterion for a marketplace GPU is "enough VRAM to be safe,
+cheap and not chronically out of stock," not raw throughput.
+
+Live pricing is marketplace-set and moves constantly (`vast.ai/pricing`) --
+the ranges below are what a real search returned 2026-09-16, not a fixed
+quote; check the console at time of use.
+
+| GPU | VRAM | Typical vast.ai range (2026-09-16) | Notes |
+|---|---|---|---|
+| RTX 3090 | 24GB | as low as ~$0.07-0.08/hr | Cheapest real option with L4-equal VRAM; older architecture (Ampere, no FP8), irrelevant for these model sizes |
+| RTX 4090 | 24GB | roughly $0.14/hr (rock-bottom listings) to ~$0.29-0.50/hr (typical, on-demand/reliable hosts) | Best default pick -- comparable price band to 3090's higher end, meaningfully faster, still far more VRAM than needed |
+| L4 | 24GB | listed as available; specific rate not returned by this search | Would match the GCP setup exactly (same architecture); fewer vast.ai hosts carry data-center cards vs. consumer RTX, so availability is the real risk here, the same failure mode this section exists to avoid |
+| A100 (40/80GB) | 40-80GB | ~$0.60-0.92/hr | Overkill -- 3-6x the RTX price for VRAM/throughput this workload has no use for. Only worth it if a host's *price* happens to undercut a 3090/4090 listing, not for the extra capacity itself |
+
+Recommendation: **RTX 4090** as the default search filter, **RTX 3090** as
+the cost-optimized fallback if 4090 availability/price is bad at the
+moment -- both give the same 24GB this project's models have never come
+close to filling, at a fraction of GCP on-demand L4 pricing, from a
+capacity pool that fails independently of GCP's.
+
+Sources: [Vast.ai GPU Pricing — Live Platform Rates](https://vast.ai/pricing), [RTX 4090 pricing](https://vast.ai/pricing/gpu/RTX-4090), [RTX 3090 pricing](https://vast.ai/pricing/gpu/RTX-3090), [Vast.ai GPU Pricing comparison](https://computeprices.com/providers/vast), [Creating Templates — Vast.ai Documentation](https://docs.vast.ai/creating-a-custom-template)
