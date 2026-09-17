@@ -351,7 +351,15 @@ def _filter_windows_with_finite_env(windows: list, cache_dir: Path) -> list:
     `build_pinn_samples` and `streaming.filter_windows_with_cache` already
     use, applied here *before* `_PinnWindowDataset` construction so its
     fixed-length index (`DataLoader` needs one) never contains a window
-    `__getitem__` can't actually build from."""
+    `__getitem__` can't actually build from.
+
+    Used for VAL windows only -- val needs no stats fit (env normalisation
+    is fit on train alone, matching `train_pinn_stage`'s full-batch
+    behaviour), so a plain filter is all it needs. TRAIN windows use
+    `_filter_and_fit_env_stats` instead, which folds this same check into
+    the stats-fitting pass so every cached file is read once during setup,
+    not twice (a real, measured cost against the VM's real, growing cache
+    -- see that function's docstring)."""
     kept = []
     for sw in windows:
         fields = load_cached_fields(cache_path(cache_dir, FetchTask(
@@ -364,6 +372,44 @@ def _filter_windows_with_finite_env(windows: list, cache_dir: Path) -> list:
             continue
         kept.append(sw)
     return kept
+
+
+def _filter_and_fit_env_stats(
+    windows: list, cache_dir: Path
+) -> tuple[list, np.ndarray | None, np.ndarray | None]:
+    """TRAIN-only combined pass: drop windows whose environment features
+    come back non-finite (same real land-coverage limitation
+    `_filter_windows_with_finite_env`/`data.features.area_mean` document)
+    *and* fit `OnlineMeanStd` over the finite ones, in one loop instead of
+    two. A separate filter-then-fit (this function's earlier, simpler
+    shape) reads and decompresses every cached field file TWICE before
+    training even starts -- once to check finiteness, once more to
+    accumulate stats -- on top of `_PinnWindowDataset`'s own per-epoch
+    `DataLoader` reads. Against the VM's real, growing ERA5 cache this
+    doubled setup cost was measured, not just theorised: confirmed via
+    real end-to-end verification of #67's fix taking far longer than the
+    other four streaming models' comparable stages. Returns
+    ``(kept_windows, env_mean, env_std)`` -- ``env_mean``/``env_std`` are
+    ``None`` if every window was dropped (caller must check)."""
+    from .streaming import OnlineMeanStd
+
+    kept: list = []
+    acc = OnlineMeanStd(reduce_axes=(0,))
+    for sw in windows:
+        fields = load_cached_fields(cache_path(cache_dir, FetchTask(
+            storm_id=sw.storm_id, valid_time=sw.current.valid_time,
+            lat=sw.current.lat, lon=sw.current.lon,
+        )))
+        try:
+            env = compute_environment_features(fields).values
+        except ValueError:
+            continue
+        acc.update(env[None])
+        kept.append(sw)
+    if not kept:
+        return kept, None, None
+    env_mean, env_std = acc.finalize()
+    return kept, env_mean, env_std
 
 
 def train_pinn_stage_streaming(
@@ -388,7 +434,7 @@ def train_pinn_stage_streaming(
     tensor and a single `.mean()`/`.std()` call.
     """
     from ..models.pinn import physics_residuals
-    from .streaming import OnlineMeanStd, filter_windows_with_cache
+    from .streaming import filter_windows_with_cache
 
     if not train_tracks or not val_tracks:
         raise ValueError(f"stage {stage.name}: empty train or val storm set")
@@ -397,26 +443,24 @@ def train_pinn_stage_streaming(
     device = device or get_device()
 
     train_stage_windows = list(iter_stage_windows(train_tracks, rng, n_augment))
-    train_windows = _filter_windows_with_finite_env(
-        filter_windows_with_cache(train_stage_windows, cache_dir), cache_dir,
-    )
+    train_windows_cached = filter_windows_with_cache(train_stage_windows, cache_dir)
     val_stage_windows = list(iter_stage_windows(val_tracks, rng, 1))
     val_windows = _filter_windows_with_finite_env(
         filter_windows_with_cache(val_stage_windows, cache_dir), cache_dir,
     )
-    if not train_windows or not val_windows:
+    if not train_windows_cached or not val_windows:
         raise ValueError(
             f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
             f"{cache_dir} -- has data.era5_cache/data.gdas_cache fetched anything yet?"
         )
 
     cache_dir = Path(cache_dir)
-    raw_ds = _PinnWindowDataset(train_windows, cache_dir)
-    env_acc = OnlineMeanStd(reduce_axes=(0,))
-    for i in range(len(raw_ds)):
-        env, _track, _base, _y, _mask = raw_ds[i]
-        env_acc.update(env[None])
-    env_mean, env_std = env_acc.finalize()
+    train_windows, env_mean, env_std = _filter_and_fit_env_stats(train_windows_cached, cache_dir)
+    if not train_windows:
+        raise ValueError(
+            f"stage {stage.name}: every cached window's environment features were "
+            "non-finite (storms entirely over land?) -- nothing left to train on"
+        )
 
     train_ds = _PinnWindowDataset(train_windows, cache_dir, env_mean=env_mean, env_std=env_std)
     val_ds = _PinnWindowDataset(val_windows, cache_dir, env_mean=env_mean, env_std=env_std)
