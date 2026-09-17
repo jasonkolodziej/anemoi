@@ -165,6 +165,78 @@ def test_cmd_train_unpacks_the_real_three_tuple_for_every_model(
     args = argparse.Namespace(
         model=model_name, hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
         era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
-        registry_root=str(tmp_path / "registry"),
+        registry_root=str(tmp_path / "registry"), streaming=False, batch_size=None,
     )
     assert cli.cmd_train(args) == 0
+
+
+@pytest.mark.parametrize(
+    ("model_name", "module"),
+    [
+        ("lstm", "anemoi.training.real_run"),
+        ("cnn", "anemoi.training.real_run_cnn"),
+        ("transformer", "anemoi.training.real_run_transformer"),
+        ("gnn", "anemoi.training.real_run_gnn"),
+        ("pinn", "anemoi.training.real_run_pinn"),
+    ],
+)
+def test_cmd_train_passes_streaming_and_batch_size_through(
+    tmp_path, monkeypatch, model_name, module
+):
+    """--streaming/--batch-size (docs/streaming_dataloader.md) must reach
+    the real run_*_curriculum call, not silently stay full-batch."""
+    captured: dict = {}
+
+    def fake_curriculum(*args, **kwargs):
+        captured.update(kwargs)
+        return _fake_curriculum_run(model_name)
+
+    monkeypatch.setattr(f"{module}.run_{model_name}_curriculum", fake_curriculum)
+    _fake_checkpoint_store(monkeypatch)
+    monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [])
+
+    args = argparse.Namespace(
+        model=model_name, hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
+        era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
+        registry_root=str(tmp_path / "registry"), streaming=True, batch_size=8,
+    )
+    assert cli.cmd_train(args) == 0
+    assert captured["streaming"] is True
+    assert captured["batch_size"] == 8
+
+
+# --- cmd_train_schedule dispatch ---------------------------------------------
+
+
+def test_cmd_train_schedule_passes_streaming_and_batch_size_to_runner(tmp_path, monkeypatch):
+    """--streaming/--batch-size (docs/streaming_dataloader.md) must reach
+    RealOrchestratorRunner's construction, not silently stay full-batch."""
+    captured: dict = {}
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    class FakeResult:
+        outcomes: list = []
+        skipped: list = []
+        succeeded: list = []
+        failed: list = []
+
+    monkeypatch.setattr("anemoi.training.real_orchestrator.RealOrchestratorRunner", FakeRunner)
+    monkeypatch.setattr(
+        "anemoi.training.orchestrator.run_schedule", lambda schedule, runner: FakeResult()
+    )
+    monkeypatch.setattr("anemoi.tracking.registry.ModelRegistry", lambda *a, **k: object())
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+    monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [])
+
+    args = argparse.Namespace(
+        mode="sequential", hurdat2="unused.txt", models=None, seed=1, n_augment=1,
+        era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
+        registry_root=str(tmp_path / "registry"), streaming=True, batch_size=16,
+    )
+    assert cli.cmd_train_schedule(args) == 0
+    assert captured["streaming"] is True
+    assert captured["batch_size"] == 16

@@ -36,11 +36,25 @@ from .orchestrator import OrchestrationError, RunOutcome, Task
 from .promotion import MetricSet, PromotionDecision, evaluate_promotion
 
 
+def _streaming_kwargs(r: RealOrchestratorRunner) -> dict:
+    """``streaming=False`` is always passed explicitly (matches each
+    `run_*_curriculum`'s own default). ``batch_size`` is only passed when
+    the caller set one -- otherwise each model keeps its own tuned default
+    (`train_lstm_stage_streaming`'s 64 vs. `train_transformer_stage
+    _streaming`'s 16, etc.) instead of every model in a schedule silently
+    collapsing onto one shared number."""
+    kwargs: dict = {"streaming": r.streaming}
+    if r.batch_size is not None:
+        kwargs["batch_size"] = r.batch_size
+    return kwargs
+
+
 def _run_lstm(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]:
     from .real_run import run_lstm_curriculum
 
     run, val_metrics, artifacts = run_lstm_curriculum(
         r.tracks, r.checkpoint_store, seed=r.seed, n_augment=r.n_augment,
+        **_streaming_kwargs(r),
     )
     r.trained_artifacts["lstm"] = artifacts
     return run, val_metrics
@@ -51,7 +65,7 @@ def _run_cnn(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]:
 
     run, val_metrics, artifacts = run_cnn_curriculum(
         r.tracks, r.checkpoint_store, r.era5_cache_dir, r.gdas_cache_dir,
-        seed=r.seed, n_augment=r.n_augment,
+        seed=r.seed, n_augment=r.n_augment, **_streaming_kwargs(r),
     )
     r.trained_artifacts["cnn"] = artifacts
     return run, val_metrics
@@ -62,7 +76,7 @@ def _run_transformer(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSe
 
     run, val_metrics, artifacts = run_transformer_curriculum(
         r.tracks, r.checkpoint_store, r.era5_cache_dir, r.gdas_cache_dir,
-        seed=r.seed, n_augment=r.n_augment,
+        seed=r.seed, n_augment=r.n_augment, **_streaming_kwargs(r),
     )
     r.trained_artifacts["transformer"] = artifacts
     return run, val_metrics
@@ -73,7 +87,7 @@ def _run_gnn(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]:
 
     run, val_metrics, artifacts = run_gnn_curriculum(
         r.tracks, r.checkpoint_store, r.era5_cache_dir, r.gdas_cache_dir,
-        seed=r.seed, n_augment=r.n_augment,
+        seed=r.seed, n_augment=r.n_augment, **_streaming_kwargs(r),
     )
     r.trained_artifacts["gnn"] = artifacts
     return run, val_metrics
@@ -84,7 +98,7 @@ def _run_pinn(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]:
 
     run, val_metrics, artifacts = run_pinn_curriculum(
         r.tracks, r.checkpoint_store, r.era5_cache_dir, r.gdas_cache_dir,
-        seed=r.seed, n_augment=r.n_augment,
+        seed=r.seed, n_augment=r.n_augment, **_streaming_kwargs(r),
     )
     r.trained_artifacts["pinn"] = artifacts
     return run, val_metrics
@@ -167,6 +181,15 @@ class RealOrchestratorRunner:
     registry: ModelRegistry
     seed: int = 20260806
     n_augment: int = 3
+    #: Opt-in streaming training (`docs/streaming_dataloader.md`, #60-#63)
+    #: -- real per-batch DataLoader training with O(batch_size) VRAM
+    #: instead of one full-dataset GPU tensor, for the five Group 1
+    #: models. Diffusion/fusion train against already-small in-memory
+    #: joint latents, not the growing gridded cache, so they have no
+    #: streaming path and ignore this. ``batch_size=None`` keeps each
+    #: model's own tuned default (see `_streaming_kwargs`).
+    streaming: bool = False
+    batch_size: int | None = None
 
     curriculum_runs: dict[str, CurriculumRun] = field(default_factory=dict, init=False)
     val_metrics: dict[str, MetricSet] = field(default_factory=dict, init=False)
