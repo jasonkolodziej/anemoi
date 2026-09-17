@@ -163,6 +163,87 @@ def test_filter_windows_with_finite_env_drops_only_the_land_covered_window(tmp_p
     assert kept[0].current.valid_time == ok_fix.valid_time
 
 
+def test_filter_and_fit_env_stats_drops_land_window_and_fits_over_the_rest(tmp_path):
+    """`train_pinn_stage_streaming`'s combined train-side pass: must drop
+    the same land-covered window `_filter_windows_with_finite_env` does,
+    AND fit real OnlineMeanStd stats over only the kept (finite) windows,
+    in one read per cached file instead of two (this function replaced a
+    separate filter-then-fit that read every file twice -- see its
+    docstring for the real, measured cost that mattered on the VM)."""
+    from anemoi.data.features import compute_environment_features
+    from anemoi.training.real_run import StageWindow
+    from anemoi.training.real_run_pinn import _filter_and_fit_env_stats
+
+    ok_fix = Fix(
+        storm_id="AL011985", valid_time=datetime(1985, 8, 1, tzinfo=UTC),
+        lat=20.0, lon=-60.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+        quality=TrackQuality.FINAL,
+    )
+    ok_fix2 = Fix(
+        storm_id="AL011985", valid_time=datetime(1985, 8, 1, 12, tzinfo=UTC),
+        lat=20.0, lon=-60.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+        quality=TrackQuality.FINAL,
+    )
+    land_fix = Fix(
+        storm_id="AL011985", valid_time=datetime(1985, 8, 1, 6, tzinfo=UTC),
+        lat=20.0, lon=-60.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+        quality=TrackQuality.FINAL,
+    )
+    shape = (41, 41)
+    ok_fields = make_fields(ok_fix.valid_time, Flavor.ERA5_PRETRAIN, shape)
+    ok_fields2 = replace(ok_fields, valid_time=ok_fix2.valid_time)
+    land_fields = replace(ok_fields, sst=np.full(shape, np.nan), valid_time=land_fix.valid_time)
+
+    for fix, fields in ((ok_fix, ok_fields), (ok_fix2, ok_fields2), (land_fix, land_fields)):
+        task = FetchTask(storm_id="AL011985", valid_time=fix.valid_time, lat=fix.lat, lon=fix.lon)
+        save_cached_fields(cache_path(tmp_path, task), fields, task)
+
+    windows = [
+        StageWindow(
+            storm_id="AL011985", window=(fix,), current=fix,
+            y=np.zeros((1, 3)), mask=np.array([True]),
+        )
+        for fix in (ok_fix, land_fix, ok_fix2)
+    ]
+
+    kept, env_mean, env_std = _filter_and_fit_env_stats(windows, tmp_path)
+    assert len(kept) == 2
+    assert {sw.current.valid_time for sw in kept} == {ok_fix.valid_time, ok_fix2.valid_time}
+    expected_env = compute_environment_features(ok_fields).values  # identical for both ok fixes
+    assert env_mean == pytest.approx(expected_env, rel=1e-5, abs=1e-5)
+    assert np.all(env_std >= 1e-8)
+
+
+def test_filter_and_fit_env_stats_returns_none_stats_when_everything_is_dropped(tmp_path):
+    from anemoi.training.real_run import StageWindow
+    from anemoi.training.real_run_pinn import _filter_and_fit_env_stats
+
+    land_fix = Fix(
+        storm_id="AL011985", valid_time=datetime(1985, 8, 1, tzinfo=UTC),
+        lat=20.0, lon=-60.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+        quality=TrackQuality.FINAL,
+    )
+    land_fields = replace(
+        make_fields(land_fix.valid_time, Flavor.ERA5_PRETRAIN, (41, 41)),
+        sst=np.full((41, 41), np.nan),
+    )
+    task = FetchTask(
+        storm_id="AL011985", valid_time=land_fix.valid_time, lat=land_fix.lat, lon=land_fix.lon,
+    )
+    save_cached_fields(cache_path(tmp_path, task), land_fields, task)
+
+    windows = [
+        StageWindow(
+            storm_id="AL011985", window=(land_fix,), current=land_fix,
+            y=np.zeros((1, 3)), mask=np.array([True]),
+        ),
+    ]
+    kept, env_mean, env_std = _filter_and_fit_env_stats(windows, tmp_path)
+    assert kept == []
+    assert env_mean is None
+    assert env_std is None
+
+
 # --- torch-dependent -------------------------------------------------------
 
 torch_installed = pytest.importorskip("torch", reason="needs the torch extra")
