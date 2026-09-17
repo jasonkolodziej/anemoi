@@ -191,6 +191,61 @@ def iter_dataset_in_batches(dataset: WindowDataset, batch_size: int):
         yield np.stack(xs), np.stack(ys), np.stack(masks)
 
 
+def make_dataloader(
+    dataset,
+    *,
+    batch_size: int,
+    shuffle: bool,
+    num_workers: int = 0,
+    collate_fn=None,
+):
+    """Real ``torch.utils.data.DataLoader`` over a `WindowDataset` (or a
+    model-specific analog, e.g. `real_run_pinn._PinnWindowDataset`), shared
+    across every ``train_*_stage_streaming`` function so the real fix for
+    the ``num_workers=0`` cost stays in one place.
+
+    ``num_workers=0`` (the default, matching every ``DataLoader`` call this
+    module's callers made before this function existed) loads every batch
+    serially in the main process -- real, measured overhead found verifying
+    #67's PINN fix on the training VM: no parallelism between disk I/O
+    (`load_cached_fields` per window, no memoization) and GPU compute, so a
+    batch's field reads block the training step that needs them instead of
+    overlapping with the previous step's forward/backward.
+    `docs/streaming_dataloader.md` originally scoped this as a "free" win
+    from wiring up a real `DataLoader` at all; it wasn't actually delivered
+    until now.
+
+    ``num_workers > 0`` spawns real worker *processes* (not threads --
+    Python's GIL would serialize threaded workers anyway), each running
+    `build_x`/`collate_fn` independently and prefetching ahead of the
+    training loop. This forces ``multiprocessing_context="fork"``
+    deliberately, not the platform default: Linux (the training VM this is
+    designed for) already defaults to ``fork``, but macOS (this project's
+    local/MPS dev target) defaults to ``spawn`` since Python 3.8, which
+    requires every worker-process argument -- including each model's
+    ``build_x``/``collate_fn`` closures, which capture real local state
+    like ``cache_dir`` or (GNN) a lazily-built mesh topology -- to be
+    picklable. Forking instead of spawning means those closures work
+    as-is via copy-on-write memory inheritance, with no need to redesign
+    them into module-level picklable callables just to support workers.
+    ``persistent_workers=True`` follows automatically when
+    ``num_workers > 0``, so workers aren't re-spawned every epoch (these
+    loaders get iterated once per epoch, `stage.epochs` times, plus final
+    train/val eval passes).
+    """
+    import torch
+
+    kwargs: dict = {}
+    if collate_fn is not None:
+        kwargs["collate_fn"] = collate_fn
+    if num_workers > 0:
+        kwargs["multiprocessing_context"] = "fork"
+        kwargs["persistent_workers"] = True
+    return torch.utils.data.DataLoader(
+        dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers, **kwargs
+    )
+
+
 def filter_windows_with_cache(windows: list[StageWindow], cache_dir) -> list[StageWindow]:
     """Real windows filtered down to the ones with an actual cached
     `GriddedFields` file on disk -- the same "skip, don't error" contract

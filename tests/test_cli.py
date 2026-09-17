@@ -166,6 +166,7 @@ def test_cmd_train_unpacks_the_real_three_tuple_for_every_model(
         model=model_name, hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
         era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
         registry_root=str(tmp_path / "registry"), streaming=False, batch_size=None,
+        num_workers=0,
     )
     assert cli.cmd_train(args) == 0
 
@@ -180,11 +181,12 @@ def test_cmd_train_unpacks_the_real_three_tuple_for_every_model(
         ("pinn", "anemoi.training.real_run_pinn"),
     ],
 )
-def test_cmd_train_passes_streaming_and_batch_size_through(
+def test_cmd_train_passes_streaming_batch_size_and_num_workers_through(
     tmp_path, monkeypatch, model_name, module
 ):
-    """--streaming/--batch-size (docs/streaming_dataloader.md) must reach
-    the real run_*_curriculum call, not silently stay full-batch."""
+    """--streaming/--batch-size/--num-workers (docs/streaming_dataloader.md)
+    must reach the real run_*_curriculum call, not silently stay
+    full-batch or single-process."""
     captured: dict = {}
 
     def fake_curriculum(*args, **kwargs):
@@ -199,18 +201,23 @@ def test_cmd_train_passes_streaming_and_batch_size_through(
         model=model_name, hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
         era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
         registry_root=str(tmp_path / "registry"), streaming=True, batch_size=8,
+        num_workers=2,
     )
     assert cli.cmd_train(args) == 0
     assert captured["streaming"] is True
     assert captured["batch_size"] == 8
+    assert captured["num_workers"] == 2
 
 
 # --- cmd_train_schedule dispatch ---------------------------------------------
 
 
-def test_cmd_train_schedule_passes_streaming_and_batch_size_to_runner(tmp_path, monkeypatch):
-    """--streaming/--batch-size (docs/streaming_dataloader.md) must reach
-    RealOrchestratorRunner's construction, not silently stay full-batch."""
+def test_cmd_train_schedule_passes_streaming_batch_size_and_num_workers_to_runner(
+    tmp_path, monkeypatch
+):
+    """--streaming/--batch-size/--num-workers (docs/streaming_dataloader.md)
+    must reach RealOrchestratorRunner's construction, not silently stay
+    full-batch or single-process."""
     captured: dict = {}
 
     class FakeRunner:
@@ -236,7 +243,9 @@ def test_cmd_train_schedule_passes_streaming_and_batch_size_to_runner(tmp_path, 
         mode="sequential", hurdat2="unused.txt", models=None, seed=1, n_augment=1,
         era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
         registry_root=str(tmp_path / "registry"), streaming=True, batch_size=16,
+        num_workers=3,
     )
     assert cli.cmd_train_schedule(args) == 0
     assert captured["streaming"] is True
     assert captured["batch_size"] == 16
+    assert captured["num_workers"] == 3

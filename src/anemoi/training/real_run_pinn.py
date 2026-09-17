@@ -239,6 +239,7 @@ def _train_candidate_lstm_streaming(
     *,
     n_augment: int = 3,
     batch_size: int = 64,
+    num_workers: int = 0,
     device=None,
     hidden_dim: int = 64,
     epochs: int = 30,
@@ -249,9 +250,10 @@ def _train_candidate_lstm_streaming(
     still applies unchanged), real per-batch training via a
     `torch.utils.data.DataLoader` over a `streaming.WindowDataset` instead
     of one full-dataset GPU tensor of every training window's track
-    sequence."""
+    sequence. ``num_workers`` (default 0) forwards to
+    `streaming.make_dataloader` -- see that function's docstring."""
     from ..models.lstm import build_lstm
-    from .streaming import WindowDataset
+    from .streaming import WindowDataset, make_dataloader
 
     torch = require_torch()
     device = device or get_device()
@@ -264,7 +266,7 @@ def _train_candidate_lstm_streaming(
         return storm_relative_sequence(sw.window)
 
     ds = WindowDataset(windows, build_x)
-    loader = torch.utils.data.DataLoader(ds, batch_size=batch_size, shuffle=True)
+    loader = make_dataloader(ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
     model, _spec = build_lstm(
         input_dim=len(STORM_RELATIVE_COLUMNS), hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
@@ -423,6 +425,7 @@ def train_pinn_stage_streaming(
     *,
     n_augment: int = 3,
     batch_size: int = 32,
+    num_workers: int = 0,
     device=None,
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_pinn_stage`'s streaming analog (`docs/streaming_dataloader.md`) --
@@ -431,10 +434,12 @@ def train_pinn_stage_streaming(
     (using `_PinnWindowDataset`, see its docstring for why PINN needs its
     own rather than the shared `streaming.WindowDataset`) and online
     environment-vector standardisation instead of one full-dataset GPU
-    tensor and a single `.mean()`/`.std()` call.
+    tensor and a single `.mean()`/`.std()` call. ``num_workers`` (default
+    0) forwards to `streaming.make_dataloader` -- see that function's
+    docstring.
     """
     from ..models.pinn import physics_residuals
-    from .streaming import filter_windows_with_cache
+    from .streaming import filter_windows_with_cache, make_dataloader
 
     if not train_tracks or not val_tracks:
         raise ValueError(f"stage {stage.name}: empty train or val storm set")
@@ -469,11 +474,11 @@ def train_pinn_stage_streaming(
         envs, tracks_, bases, ys, masks = zip(*batch, strict=True)
         return np.stack(envs), np.stack(tracks_), np.stack(bases), np.stack(ys), np.stack(masks)
 
-    train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate,
+    train_loader = make_dataloader(
+        train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers, collate_fn=collate,
     )
-    val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate,
+    val_loader = make_dataloader(
+        val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=collate,
     )
 
     _freeze_pinn_trunk(model, stage.frozen_modules)
@@ -689,6 +694,7 @@ def run_pinn_curriculum(
     curriculum_kwargs: dict | None = None,
     streaming: bool = False,
     batch_size: int = 32,
+    num_workers: int = 0,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the PINN baseline.
     A fresh candidate-generator LSTM is trained per stage (see module
@@ -710,7 +716,8 @@ def run_pinn_curriculum(
     (`docs/streaming_dataloader.md`) -- the last of the five models that
     doc scopes; PINN's candidate-generator LSTM has the same full-batch
     OOM shape one level removed, so it's streamed too, not just the outer
-    PINN stage.
+    PINN stage. ``num_workers`` (streaming only, default 0) forwards to
+    `streaming.make_dataloader` -- see that function's docstring.
     """
     from ..models.pinn import build_pinn
 
@@ -732,7 +739,7 @@ def run_pinn_curriculum(
         if streaming:
             candidate_model = _train_candidate_lstm_streaming(
                 train_tracks, rng, n_augment=n_augment, device=device,
-                hidden_dim=candidate_hidden_dim, batch_size=batch_size,
+                hidden_dim=candidate_hidden_dim, batch_size=batch_size, num_workers=num_workers,
             )
         else:
             candidate_model = _train_candidate_lstm(
@@ -746,7 +753,7 @@ def run_pinn_curriculum(
             )
 
         stage_fn = train_pinn_stage_streaming if streaming else train_pinn_stage
-        stage_kwargs = {"batch_size": batch_size} if streaming else {}
+        stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
         model, train_loss, val_loss, val_metrics, env_stats = stage_fn(
             model, candidate_model, stage, train_tracks, val_tracks, cache_dir, rng,
             n_augment=n_augment, device=device, **stage_kwargs,

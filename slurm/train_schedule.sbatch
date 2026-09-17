@@ -33,9 +33,13 @@ N_AUGMENT="${N_AUGMENT:-3}"
 # per-batch DataLoader training, O(batch_size) VRAM instead of
 # O(dataset size) -- the durable fix for a real CUDA OOM training
 # full-batch against a large enough cached dataset. STREAMING=1 opts in;
-# BATCH_SIZE left unset keeps each model's own tuned default.
+# BATCH_SIZE left unset keeps each model's own tuned default. NUM_WORKERS
+# spawns real DataLoader worker processes to overlap cached-field disk
+# reads with GPU compute (training.streaming.make_dataloader) -- left
+# unset keeps the default of 0 (main-process loading, no parallelism).
 STREAMING="${STREAMING:-}"
 BATCH_SIZE="${BATCH_SIZE:-}"
+NUM_WORKERS="${NUM_WORKERS:-}"
 
 if [ ! -f "$HURDAT2" ]; then
   echo "HURDAT2 archive not found at $HURDAT2 -- fetch it first:" >&2
@@ -46,6 +50,7 @@ fi
 EXTRA_ARGS=()
 if [ -n "$STREAMING" ]; then EXTRA_ARGS+=(--streaming); fi
 if [ -n "$BATCH_SIZE" ]; then EXTRA_ARGS+=(--batch-size "$BATCH_SIZE"); fi
+if [ -n "$NUM_WORKERS" ]; then EXTRA_ARGS+=(--num-workers "$NUM_WORKERS"); fi
 
 uv run anemoi train-schedule \
   --mode "$MODE" \

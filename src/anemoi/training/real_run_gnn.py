@@ -369,6 +369,7 @@ def train_gnn_stage_streaming(
     *,
     n_augment: int = 3,
     batch_size: int = 32,
+    num_workers: int = 0,
     stride: int = GNN_STRIDE,
     device=None,
 ) -> tuple[object, float, float, MetricSet, tuple]:
@@ -382,13 +383,20 @@ def train_gnn_stage_streaming(
     fitting pass, which visits every window in order before training
     starts), then reused to `batch_graph` each `DataLoader` batch right
     before the forward pass, same as the full-batch path does for the
-    whole dataset at once.
+    whole dataset at once. ``num_workers`` (default 0) forwards to
+    `streaming.make_dataloader` -- safe here specifically because the
+    stats-fitting pass (which populates `mesh_state`, `build_x`'s lazily-
+    built topology cache) always runs synchronously in the main process
+    *before* `train_loader`/`val_loader` are constructed, so every forked
+    worker process inherits an already-populated topology via
+    copy-on-write, never a race to build it themselves.
     """
     from .streaming import (
         OnlineMaskedLeadMeanStd,
         OnlineMeanStd,
         WindowDataset,
         filter_windows_with_cache,
+        make_dataloader,
     )
 
     if not train_tracks or not val_tracks:
@@ -456,11 +464,11 @@ def train_gnn_stage_streaming(
         xs, ys, masks = zip(*batch, strict=True)
         return np.stack(xs), np.stack(ys), np.stack(masks)
 
-    train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate,
+    train_loader = make_dataloader(
+        train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers, collate_fn=collate,
     )
-    val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=batch_size, shuffle=False, collate_fn=collate,
+    val_loader = make_dataloader(
+        val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, collate_fn=collate,
     )
 
     freeze_encoder(model, stage.frozen_modules)
@@ -556,6 +564,7 @@ def run_gnn_curriculum(
     curriculum_kwargs: dict | None = None,
     streaming: bool = False,
     batch_size: int = 32,
+    num_workers: int = 0,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the GNN baseline
     against real cached GriddedFields, treated as a lattice mesh (see
@@ -568,6 +577,8 @@ def run_gnn_curriculum(
 
     ``streaming=True`` uses `train_gnn_stage_streaming` instead of the
     default full-batch `train_gnn_stage` (`docs/streaming_dataloader.md`).
+    ``num_workers`` (streaming only, default 0) forwards to
+    `streaming.make_dataloader` -- see that function's docstring.
     """
     from ..models.gnn import build_gnn
 
@@ -592,7 +603,7 @@ def run_gnn_curriculum(
             )
 
         stage_fn = train_gnn_stage_streaming if streaming else train_gnn_stage
-        stage_kwargs = {"batch_size": batch_size} if streaming else {}
+        stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
         model, train_loss, val_loss, val_metrics, stats = stage_fn(
             model, stage, train_tracks, val_tracks, cache_dir, rng,
             n_augment=n_augment, **stage_kwargs,
