@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -240,6 +241,88 @@ def test_run_lstm_curriculum_completes_both_stages_and_uploads_checkpoints():
         assert result.checkpoint_uri.startswith("s3://anemoi-test/checkpoints/lstm/")
         assert store.exists(result.checkpoint_uri.split("anemoi-test/", 1)[1])
     assert val_metrics.flavor is Flavor.GDAS_FINETUNE
+    assert "track_error_12h_nm" in val_metrics.values
+
+
+# --- streaming (docs/streaming_dataloader.md) -------------------------------
+
+
+@pytest.mark.torch
+def test_train_lstm_stage_streaming_reduces_loss_and_produces_val_metrics():
+    from anemoi.models.lstm import build_lstm
+    from anemoi.training.curriculum import stage_a
+    from anemoi.training.real_run import train_lstm_stage_streaming
+
+    tracks = [make_track("AL011985", season=1985, n=26, seed=0),
+              make_track("AL021985", season=1985, n=26, seed=1)]
+    val_tracks = [make_track("AL012020", season=2020, n=26, seed=2)]
+
+    model, _spec = build_lstm(input_dim=5, hidden_dim=16, lead_hours=(12, 24, 36, 48, 72, 96, 120))
+    stage = stage_a(epochs=5, learning_rate=1e-2)
+    rng = np.random.default_rng(5)
+
+    trained_model, train_loss, val_loss, val_metrics, stats = train_lstm_stage_streaming(
+        model, stage, tracks, val_tracks, rng, n_augment=2, batch_size=8,
+    )
+    assert trained_model is model
+    assert train_loss >= 0.0
+    assert val_loss >= 0.0
+    assert val_metrics.split == "val"
+    assert val_metrics.flavor is Flavor.ERA5_PRETRAIN
+    assert "track_error_12h_nm" in val_metrics.values
+    x_mean, x_std, y_mean, y_std = stats
+    assert x_mean.shape == (5,)
+    assert y_mean.shape[-1] == 3
+
+
+@pytest.mark.torch
+def test_train_lstm_stage_streaming_batch_size_does_not_change_final_metrics_much():
+    """Different batch sizes take different SGD paths (real, expected --
+    mini-batch noise), but both must land in a sane, finite, comparable
+    range against the same real data -- a basic sanity check that batching
+    isn't silently corrupting the loss/metric computation."""
+    from anemoi.models.lstm import build_lstm
+    from anemoi.training.curriculum import stage_a
+    from anemoi.training.real_run import train_lstm_stage_streaming
+
+    tracks = [make_track("AL011985", season=1985, n=26, seed=0),
+              make_track("AL021985", season=1985, n=26, seed=1),
+              make_track("AL031985", season=1985, n=26, seed=6)]
+    val_tracks = [make_track("AL012020", season=2020, n=26, seed=2)]
+    stage = stage_a(epochs=5, learning_rate=1e-2)
+
+    losses = []
+    leads = (12, 24, 36, 48, 72, 96, 120)
+    for batch_size in (4, 64):
+        model, _spec = build_lstm(input_dim=5, hidden_dim=16, lead_hours=leads)
+        rng = np.random.default_rng(7)
+        _m, train_loss, _v, _vm, _s = train_lstm_stage_streaming(
+            model, stage, tracks, val_tracks, rng, n_augment=2, batch_size=batch_size,
+        )
+        assert math.isfinite(train_loss)
+        losses.append(train_loss)
+    assert all(loss < 10.0 for loss in losses)  # not diverged/NaN-adjacent
+
+
+@pytest.mark.torch
+def test_run_lstm_curriculum_streaming_completes_both_stages():
+    tracks = [
+        make_track("AL011985", season=1985, n=26, seed=0),
+        make_track("AL012021", season=2021, n=26, seed=1),
+        make_track("AL022021", season=2021, n=26, seed=2),
+        make_track("AL012023", season=2023, n=26, seed=3),
+    ]
+    store = _fake_checkpoint_store()
+
+    from anemoi.training.real_run import run_lstm_curriculum
+
+    run, val_metrics, _artifacts = run_lstm_curriculum(
+        tracks, store, seed=42, n_augment=1, hidden_dim=8, streaming=True, batch_size=8,
+    )
+
+    assert run.complete
+    assert [r.stage_name for r in run.results] == ["A", "B"]
+    assert run.results[-1].flavor is Flavor.GDAS_FINETUNE
     assert "track_error_12h_nm" in val_metrics.values
 
 
