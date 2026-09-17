@@ -109,6 +109,14 @@ class ModelRegistry:
     def mlflow_available(self) -> bool:
         return self._mlflow is not None
 
+    @property
+    def mlflow_client(self):
+        """The underlying (duck-typed) MLflow client, or None -- for
+        callers that need to pass it on elsewhere (e.g.
+        `tracking.experiment_tracking.log_curriculum_stages`) rather than
+        reach into a private attribute."""
+        return self._mlflow
+
     # ---- registration ----------------------------------------------------
 
     def register(
@@ -120,12 +128,22 @@ class ModelRegistry:
         metrics: dict[str, float],
         tags: dict[str, str] | None = None,
         latent_signature: str | None = None,
+        checkpoint_uri: str | None = None,
+        mlflow_run_id: str | None = None,
     ) -> ModelVersion:
         """Register a new version.
 
         Rejects non-operational-flavor weights outright: per §4.6.1 only Stage B
         output is a candidate for anything, so an ERA5-flavor artifact has no
         business in the registry at all.
+
+        ``checkpoint_uri``/``mlflow_run_id`` are optional and only affect the
+        MLflow mirror (below): the real `create_model_version` API needs a
+        real artifact ``source`` URI, so without one the mirror is skipped
+        rather than sent a fabricated placeholder. ``mlflow_run_id`` (from
+        `tracking.experiment_tracking.log_curriculum_stages`) links the
+        mirrored model version back to the real run that produced it, when
+        one exists.
         """
         if name not in ALL_MODELS:
             raise RegistryError(f"unknown model {name!r}; expected one of {ALL_MODELS}")
@@ -153,7 +171,8 @@ class ModelRegistry:
         )
         versions.append(version)
         self._save()
-        self._mirror("create_model_version", name, version.version)
+        if checkpoint_uri is not None:
+            self._mirror_model_version(name, checkpoint_uri, mlflow_run_id, tags)
         return version
 
     def get(self, name: str, version: int) -> ModelVersion:
@@ -191,7 +210,7 @@ class ModelRegistry:
                 incumbent.stage = Stage.ARCHIVED
         target.stage = stage
         self._save()
-        self._mirror("transition_model_version_stage", name, version, stage.value)
+        self._mirror_stage_transition(name, version, stage)
         return target
 
     def rollback(self, name: str) -> ModelVersion:
@@ -256,15 +275,53 @@ class ModelRegistry:
 
     # ---- mlflow mirror ---------------------------------------------------
 
-    def _mirror(self, method: str, *args) -> None:
-        """Best-effort mirror to MLflow; failures degrade to local-only (§10.1)."""
+    def _mirror_model_version(
+        self,
+        name: str,
+        checkpoint_uri: str,
+        mlflow_run_id: str | None,
+        tags: dict[str, str] | None,
+    ) -> None:
+        """Best-effort mirror of a new version to MLflow's real Model
+        Registry API; failures degrade to local-only (§10.1).
+
+        Real ``create_model_version`` requires the registered model to
+        already exist (``create_registered_model`` first -- a plain lookup
+        get-or-create, not idempotent on its own) and a real ``source``
+        artifact URI as its second argument, not a local version number.
+        """
         if self._mlflow is None:
             return
-        fn = getattr(self._mlflow, method, None)
-        if fn is None:
+        try:
+            try:
+                self._mlflow.get_registered_model(name)
+            except Exception:  # noqa: BLE001 - "doesn't exist yet" is the common case
+                self._mlflow.create_registered_model(name)
+            self._mlflow.create_model_version(
+                name, checkpoint_uri, run_id=mlflow_run_id, tags=dict(tags or {}),
+            )
+        except Exception:  # noqa: BLE001 - tracking must never fail a training run
+            self._mlflow = None
+
+    #: registry.Stage's own lowercase values -> the real MLflow Model
+    #: Registry API's TitleCase stage strings
+    #: (mlflow.entities.model_registry.model_version_stages.ALL_STAGES).
+    _MLFLOW_STAGE_NAMES: dict[Stage, str] = {
+        Stage.NONE: "None",
+        Stage.STAGING: "Staging",
+        Stage.PRODUCTION: "Production",
+        Stage.ARCHIVED: "Archived",
+    }
+
+    def _mirror_stage_transition(self, name: str, version: int, stage: Stage) -> None:
+        """Best-effort mirror of a stage transition; failures degrade to
+        local-only (§10.1)."""
+        if self._mlflow is None:
             return
         try:
-            fn(*args)
+            self._mlflow.transition_model_version_stage(
+                name, str(version), self._MLFLOW_STAGE_NAMES[stage],
+            )
         except Exception:  # noqa: BLE001 - tracking must never fail a training run
             self._mlflow = None
 
