@@ -375,6 +375,139 @@ def train_lstm_stage(
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 
+def train_lstm_stage_streaming(
+    model,
+    stage: StageSpec,
+    train_tracks: list[Track],
+    val_tracks: list[Track],
+    rng: np.random.Generator,
+    *,
+    n_augment: int = 3,
+    batch_size: int = 64,
+    device=None,
+) -> tuple[object, float, float, MetricSet, tuple]:
+    """`train_lstm_stage`'s streaming analog (`docs/streaming_dataloader.md`) --
+    same return contract, same masked multi-lead loss and verification
+    shape, but real per-batch training via a `torch.utils.data.DataLoader`
+    instead of one full-dataset GPU tensor, and online (Welford/Chan)
+    standardisation statistics instead of one `.mean()`/`.std()` call over
+    a fully-materialized array. Per-step VRAM is now `O(batch_size)`, not
+    `O(dataset size)` -- see that doc for why the full-batch version can't
+    just be run on a bigger GPU as a durable fix.
+
+    Windows themselves (`real_run.StageWindow`, from `iter_stage_windows`)
+    are still fully listed in memory -- cheap, since each is a handful of
+    `Fix` objects plus small arrays, not the real per-window track data.
+    """
+    from .streaming import OnlineMaskedLeadMeanStd, OnlineMeanStd, WindowDataset
+
+    if not train_tracks or not val_tracks:
+        raise ValueError(f"stage {stage.name}: empty train or val storm set")
+
+    torch = require_torch()
+    device = device or get_device()
+
+    train_windows = list(iter_stage_windows(train_tracks, rng, n_augment))
+    val_windows = list(iter_stage_windows(val_tracks, rng, 1))
+    if not train_windows or not val_windows:
+        raise ValueError(f"stage {stage.name}: no usable samples built from the given tracks")
+
+    def build_x(sw):
+        return storm_relative_sequence(sw.window)
+
+    n_leads = len(LEAD_STEPS)
+    raw_train_ds = WindowDataset(train_windows, build_x)
+    x_acc = OnlineMeanStd(reduce_axes=(0, 1))
+    y_acc = OnlineMaskedLeadMeanStd(n_leads=n_leads)
+    for i in range(len(raw_train_ds)):
+        x, y, mask = raw_train_ds[i]
+        x_acc.update(x[None])
+        y_acc.update(y[None], mask[None].astype(bool))
+    x_mean, x_std = x_acc.finalize()
+    y_mean, y_std = y_acc.finalize()
+
+    train_ds = WindowDataset(
+        train_windows, build_x, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
+    )
+    val_ds = WindowDataset(
+        val_windows, build_x, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
+    )
+    train_loader = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader = torch.utils.data.DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+
+    freeze_encoder(model, stage.frozen_modules)
+    model.to(device)
+
+    def masked_mse_sums(pred, target, mask3) -> tuple[object, object]:
+        diff2 = (pred - target) ** 2 * mask3
+        return diff2.sum(), mask3.sum()
+
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    opt = torch.optim.Adam(trainable, lr=stage.learning_rate)
+
+    model.train()
+    for _ in range(stage.epochs):
+        for xb, yb, mb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            mb = mb.to(device).unsqueeze(-1)
+            opt.zero_grad()
+            diff2_sum, mask_sum = masked_mse_sums(model(xb), yb, mb)
+            loss = diff2_sum / mask_sum.clamp(min=1.0)
+            loss.backward()
+            opt.step()
+
+    model.eval()
+    with torch.no_grad():
+        train_diff2, train_mask = 0.0, 0.0
+        for xb, yb, mb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            mb = mb.to(device).unsqueeze(-1)
+            d, m = masked_mse_sums(model(xb), yb, mb)
+            train_diff2 += float(d.item())
+            train_mask += float(m.item())
+        train_loss = train_diff2 / max(train_mask, 1.0)
+
+        val_diff2, val_mask = 0.0, 0.0
+        pred_val_rows: list[np.ndarray] = []
+        for xb, yb, mb in val_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            mb3 = mb.to(device).unsqueeze(-1)
+            pred = model(xb)
+            d, m = masked_mse_sums(pred, yb, mb3)
+            val_diff2 += float(d.item())
+            val_mask += float(m.item())
+            pred_val_rows.append(pred.cpu().numpy())
+        val_loss = val_diff2 / max(val_mask, 1.0)
+        pred_val = np.concatenate(pred_val_rows, axis=0) * y_std + y_mean
+
+    pairs: list[VerificationPair] = []
+    for si, sw in enumerate(val_windows):
+        base_lat, base_lon = sw.current.lat, sw.current.lon
+        for li, lead_hours in enumerate(DEFAULT_LEADS):
+            if not sw.mask[li]:
+                continue
+            pred_dx, pred_dy, pred_wind = pred_val[si, li]
+            pred_lat, pred_lon = displacement_to_latlon(base_lat, base_lon, pred_dx, pred_dy)
+            obs_dx, obs_dy, obs_wind = sw.y[li]
+            obs_lat, obs_lon = displacement_to_latlon(base_lat, base_lon, obs_dx, obs_dy)
+            pairs.append(
+                VerificationPair(
+                    forecast=ForecastPoint(
+                        lead_hours=lead_hours, lat=pred_lat, lon=pred_lon,
+                        max_wind_kt=float(pred_wind),
+                    ),
+                    obs_lat=obs_lat,
+                    obs_lon=obs_lon,
+                    obs_wind_kt=float(obs_wind),
+                )
+            )
+
+    if not pairs:
+        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
+    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
+    return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
+
+
 def run_lstm_curriculum(
     tracks: list[Track],
     checkpoint_store: CheckpointStore,
@@ -383,6 +516,8 @@ def run_lstm_curriculum(
     n_augment: int = 3,
     hidden_dim: int = 128,
     curriculum_kwargs: dict | None = None,
+    streaming: bool = False,
+    batch_size: int = 64,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the LSTM baseline
     against real HURDAT2 tracks, uploading each stage's checkpoint to
@@ -398,6 +533,13 @@ def run_lstm_curriculum(
     bundling the trained Stage B model with its standardisation stats --
     needed by ``training.real_latents`` to extract real Anemoi-Spread/fusion
     conditioning latents and un-standardised predictions (#22, §5.7).
+
+    ``streaming=True`` uses `train_lstm_stage_streaming` instead of the
+    default full-batch `train_lstm_stage` -- real per-batch training with
+    online standardisation statistics, `O(batch_size)` VRAM instead of
+    `O(dataset size)` (`docs/streaming_dataloader.md`). Off by default:
+    the full-batch path is simpler and fine at small real scale; opt in
+    once the cached dataset is large enough that full-batch risks OOM.
     """
     from ..models.lstm import build_lstm
 
@@ -420,8 +562,10 @@ def run_lstm_curriculum(
                 lead_hours=DEFAULT_LEADS,
             )
 
-        model, train_loss, val_loss, val_metrics, stats = train_lstm_stage(
-            model, stage, train_tracks, val_tracks, rng, n_augment=n_augment,
+        stage_fn = train_lstm_stage_streaming if streaming else train_lstm_stage
+        stage_kwargs = {"batch_size": batch_size} if streaming else {}
+        model, train_loss, val_loss, val_metrics, stats = stage_fn(
+            model, stage, train_tracks, val_tracks, rng, n_augment=n_augment, **stage_kwargs,
         )
 
         torch = require_torch()
