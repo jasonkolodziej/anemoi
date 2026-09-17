@@ -38,6 +38,14 @@ all = ["anemoi[torch,tracking,dev,api,gridded,storage]"]
 [project.scripts]
 anemoi = "anemoi.cli:main"
 
+# MLflow discovers this automatically (importlib.metadata entry points) once
+# the package is installed with the tracking extra -- adds the Cloudflare
+# Access service-token headers docker/mlflow/'s server needs when deployed
+# behind a Cloudflare Tunnel + Access, to every outgoing MLflow REST request.
+# See anemoi.tracking.cloudflare_access's module docstring.
+[project.entry-points."mlflow.request_header_provider"]
+cloudflare_access = "anemoi.tracking.cloudflare_access:CloudflareAccessRequestHeaderProvider"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -54,6 +62,7 @@ markers = [
     "api: requires the optional api extra, fastapi (skipped automatically if absent)",
     "gridded: requires the optional gridded extra, xarray/zarr/eccodes (skipped automatically if absent)",
     "storage: requires the optional storage extra, boto3 (skipped automatically if absent)",
+    "tracking: requires the optional tracking extra, mlflow (skipped automatically if absent)",
     "network: makes a real network call to a public data source (skipped by default; run with -m network)",
 ]
 filterwarnings = ["error::DeprecationWarning"]
