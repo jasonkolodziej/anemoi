@@ -136,10 +136,102 @@ def test_rollback_without_history_raises(tmp_path):
 
 def test_mlflow_failure_degrades_to_local_only(tmp_path):
     class BrokenClient:
-        def create_model_version(self, *a):
-            raise RuntimeError("mlflow unreachable")
+        def __getattr__(self, name):
+            def raiser(*args, **kwargs):
+                raise RuntimeError("mlflow unreachable")
+
+            return raiser
 
     reg = ModelRegistry(tmp_path, mlflow_client=BrokenClient())
-    reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+    reg.register(
+        "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS,
+        checkpoint_uri="s3://fake/lstm.pt",
+    )
     assert not reg.mlflow_available
     assert len(reg.versions("lstm")) == 1
+
+
+def test_mlflow_mirror_is_skipped_without_a_checkpoint_uri(tmp_path):
+    """No real artifact source -- the real create_model_version API needs
+    one -- so the mirror must not even attempt a call, not fail one."""
+    calls: list[str] = []
+
+    class TrackingClient:
+        def __getattr__(self, name):
+            calls.append(name)
+
+            def noop(*args, **kwargs):
+                return None
+
+            return noop
+
+    reg = ModelRegistry(tmp_path, mlflow_client=TrackingClient())
+    reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+    assert calls == []
+    assert reg.mlflow_available
+
+
+def test_mlflow_mirror_registers_model_then_version_with_a_real_source_uri(tmp_path):
+    calls: list[tuple] = []
+
+    class RecordingClient:
+        def get_registered_model(self, name):
+            calls.append(("get_registered_model", name))
+            raise RuntimeError("does not exist yet")
+
+        def create_registered_model(self, name):
+            calls.append(("create_registered_model", name))
+
+        def create_model_version(self, name, source, run_id=None, tags=None):
+            calls.append(("create_model_version", name, source, run_id, tags))
+
+    reg = ModelRegistry(tmp_path, mlflow_client=RecordingClient())
+    reg.register(
+        "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS,
+        tags={"model_type": "lstm"}, checkpoint_uri="s3://fake/lstm.pt",
+        mlflow_run_id="real-mlflow-run-id",
+    )
+
+    assert calls == [
+        ("get_registered_model", "lstm"),
+        ("create_registered_model", "lstm"),
+        ("create_model_version", "lstm", "s3://fake/lstm.pt", "real-mlflow-run-id",
+         {"model_type": "lstm"}),
+    ]
+    assert reg.mlflow_available
+
+
+def test_mlflow_mirror_skips_create_registered_model_if_it_already_exists(tmp_path):
+    calls: list[str] = []
+
+    class RecordingClient:
+        def get_registered_model(self, name):
+            calls.append("get_registered_model")
+            return object()  # already exists -- no create_registered_model needed
+
+        def create_registered_model(self, name):
+            calls.append("create_registered_model")
+
+        def create_model_version(self, name, source, run_id=None, tags=None):
+            calls.append("create_model_version")
+
+    reg = ModelRegistry(tmp_path, mlflow_client=RecordingClient())
+    reg.register(
+        "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS,
+        checkpoint_uri="s3://fake/lstm.pt",
+    )
+    assert calls == ["get_registered_model", "create_model_version"]
+
+
+def test_mlflow_transition_mirror_uses_real_titlecase_stage_names(tmp_path):
+    calls: list[tuple] = []
+
+    class RecordingClient:
+        def transition_model_version_stage(self, name, version, stage):
+            calls.append((name, version, stage))
+
+    reg = ModelRegistry(tmp_path, mlflow_client=RecordingClient())
+    v = reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+    reg.transition("lstm", v.version, Stage.PRODUCTION)
+
+    assert calls == [("lstm", str(v.version), "Production")]

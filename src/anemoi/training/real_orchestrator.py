@@ -29,6 +29,7 @@ from pathlib import Path
 from ..data.besttrack import Track
 from ..data.sources import Flavor
 from ..tracking.checkpoint_store import CheckpointStore
+from ..tracking.experiment_tracking import build_run_tags, log_curriculum_stages
 from ..tracking.registry import DERIVED_MODELS, GROUP1_MODELS, ModelRegistry, latent_signature
 from .curriculum import CurriculumRun
 from .orchestrator import OrchestrationError, RunOutcome, Task
@@ -222,12 +223,23 @@ class RealOrchestratorRunner:
             if existing
             else None
         )
+
+        tags = build_run_tags(
+            task.name, run.curriculum.stages[-1], execution_mode=task.execution_mode,
+        )
+        mlflow_run_id = log_curriculum_stages(
+            self.registry.mlflow_client, task.name, run, val_metrics,
+            execution_mode=task.execution_mode,
+        )
         version = self.registry.register(
             task.name,
             run_id=f"orchestrator-{datetime.now(UTC):%Y%m%dT%H%M%S}",
             input_flavor=Flavor.GDAS_FINETUNE,
             metrics=val_metrics.values,
+            tags=tags.to_dict() if tags else None,
             latent_signature=sig,
+            checkpoint_uri=run.results[-1].checkpoint_uri,
+            mlflow_run_id=mlflow_run_id,
         )
         decision = evaluate_promotion(task.name, run, val_metrics, incumbent_val_metrics=incumbent)
         self.promotions[task.name] = decision

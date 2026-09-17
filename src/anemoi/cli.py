@@ -242,6 +242,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     from .data.hurdat2 import parse_hurdat2_file
     from .data.sources import Flavor
     from .tracking.checkpoint_store import CheckpointStore, S3Config
+    from .tracking.experiment_tracking import build_run_tags, log_curriculum_stages
     from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ModelRegistry
     from .training.promotion import MetricSet, evaluate_promotion
@@ -315,11 +316,17 @@ def cmd_train(args: argparse.Namespace) -> int:
         if existing
         else None
     )
+
+    tags = build_run_tags(args.model, run.curriculum.stages[-1])
+    mlflow_run_id = log_curriculum_stages(registry.mlflow_client, args.model, run, val_metrics)
     version = registry.register(
         args.model,
         run_id=f"cli-{datetime.now(UTC):%Y%m%dT%H%M%S}",
         input_flavor=Flavor.GDAS_FINETUNE,
         metrics=val_metrics.values,
+        tags=tags.to_dict() if tags else None,
+        checkpoint_uri=run.results[-1].checkpoint_uri,
+        mlflow_run_id=mlflow_run_id,
     )
     print(f"registered {args.model} v{version.version} in {args.registry_root}")
 
