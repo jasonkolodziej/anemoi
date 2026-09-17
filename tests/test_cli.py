@@ -11,10 +11,14 @@ from __future__ import annotations
 import argparse
 from datetime import UTC, datetime
 
+import pytest
+
 from anemoi import cli
 from anemoi.data.besttrack import Fix, Track, TrackQuality
 from anemoi.data.gridded_cache import FetchCacheReport
+from anemoi.data.sources import Flavor
 from anemoi.data.splits import STAGE_B_BOUNDARIES
+from anemoi.training.curriculum import Curriculum, CurriculumRun, StageResult
 
 
 def make_track(storm_id: str, season: int) -> Track:
@@ -85,3 +89,82 @@ def test_cmd_era5_cache_keeps_the_default_boundaries(tmp_path, monkeypatch):
 
     assert cli.cmd_era5_cache(make_args(tmp_path)) == 0
     assert captured["boundaries"] is None  # cmd_era5_cache passes no override
+
+
+# --- cmd_train dispatch -----------------------------------------------------
+#
+# Regression coverage for a real bug: #22's real-latent-extraction work
+# (training.real_run.RunArtifacts) changed every run_*_curriculum from
+# returning (run, val_metrics) to (run, val_metrics, artifacts), but
+# cli.cmd_train's five call sites still unpacked the old 2-tuple -- a
+# ValueError on every real `anemoi train --model X` invocation that no
+# test caught, since cmd_train had no test coverage at all before this.
+
+_FAKE_METRICS_VALUES = {
+    "track_error_48h_nm": 40.0,
+    "track_error_72h_nm": 60.0,
+    "track_error_120h_nm": 100.0,
+    "intensity_error_48h_kt": 5.0,
+    "intensity_error_72h_kt": 6.0,
+    "nhc_consensus_beat_rate_48h": 0.6,
+    "track_error_12h_nm": 10.0,
+}
+
+
+def _fake_curriculum_run(model_name: str):
+    from anemoi.training.promotion import MetricSet
+
+    curriculum = Curriculum.standard(model_name)
+    run = CurriculumRun(curriculum=curriculum)
+    run.record(
+        StageResult(
+            stage_name="A", flavor=Flavor.ERA5_PRETRAIN, epochs_completed=1,
+            final_train_loss=1.0, final_val_loss=1.0, checkpoint_uri="s3://fake/A.pt",
+        )
+    )
+    run.record(
+        StageResult(
+            stage_name="B", flavor=Flavor.GDAS_FINETUNE, epochs_completed=1,
+            final_train_loss=0.5, final_val_loss=0.5, checkpoint_uri="s3://fake/B.pt",
+        )
+    )
+    metrics = MetricSet(split="val", flavor=Flavor.GDAS_FINETUNE, values=dict(_FAKE_METRICS_VALUES))
+    return run, metrics, object()  # 3rd element: RunArtifacts stand-in, unused by cmd_train
+
+
+def _fake_checkpoint_store(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "anemoi.tracking.checkpoint_store.S3Config",
+        type("FakeS3Config", (), {"from_env": staticmethod(lambda: "fake-config")}),
+    )
+    monkeypatch.setattr(
+        "anemoi.tracking.checkpoint_store.CheckpointStore", lambda config: "fake-store"
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_name", "module"),
+    [
+        ("lstm", "anemoi.training.real_run"),
+        ("cnn", "anemoi.training.real_run_cnn"),
+        ("transformer", "anemoi.training.real_run_transformer"),
+        ("gnn", "anemoi.training.real_run_gnn"),
+        ("pinn", "anemoi.training.real_run_pinn"),
+    ],
+)
+def test_cmd_train_unpacks_the_real_three_tuple_for_every_model(
+    tmp_path, monkeypatch, model_name, module
+):
+    monkeypatch.setattr(
+        f"{module}.run_{model_name}_curriculum",
+        lambda *args, **kwargs: _fake_curriculum_run(model_name),
+    )
+    _fake_checkpoint_store(monkeypatch)
+    monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [])
+
+    args = argparse.Namespace(
+        model=model_name, hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
+        era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
+        registry_root=str(tmp_path / "registry"),
+    )
+    assert cli.cmd_train(args) == 0

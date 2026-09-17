@@ -245,7 +245,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     if args.model == "lstm":
         from .training.real_run import run_lstm_curriculum
 
-        run, val_metrics = run_lstm_curriculum(
+        run, val_metrics, _artifacts = run_lstm_curriculum(
             tracks, store, seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
         )
     elif args.model == "cnn":
@@ -254,7 +254,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         if not args.era5_cache_dir or not args.gdas_cache_dir:
             print("cnn needs --era5-cache-dir and --gdas-cache-dir")
             return 1
-        run, val_metrics = run_cnn_curriculum(
+        run, val_metrics, _artifacts = run_cnn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment,
         )
@@ -264,7 +264,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         if not args.era5_cache_dir or not args.gdas_cache_dir:
             print("transformer needs --era5-cache-dir and --gdas-cache-dir")
             return 1
-        run, val_metrics = run_transformer_curriculum(
+        run, val_metrics, _artifacts = run_transformer_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment,
         )
@@ -274,7 +274,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         if not args.era5_cache_dir or not args.gdas_cache_dir:
             print("gnn needs --era5-cache-dir and --gdas-cache-dir")
             return 1
-        run, val_metrics = run_gnn_curriculum(
+        run, val_metrics, _artifacts = run_gnn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
         )
@@ -284,7 +284,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         if not args.era5_cache_dir or not args.gdas_cache_dir:
             print("pinn needs --era5-cache-dir and --gdas-cache-dir")
             return 1
-        run, val_metrics = run_pinn_curriculum(
+        run, val_metrics, _artifacts = run_pinn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
         )
@@ -332,13 +332,13 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
     """Run the full multi-model wave schedule via training.orchestrator,
     backed by the real per-model runners (training.real_orchestrator, #22).
 
-    Only lstm/cnn/transformer/gnn/pinn have real implementations --
-    training.orchestrator.build_schedule always appends latents/diffusion/
-    fusion waves too (Anemoi-Spread diffusion and the fusion consensus
-    have no real runner yet), and those report a clear "not implemented
-    yet" failure rather than silently no-op'ing; run_schedule's own
-    dependency semantics then correctly skip whatever depended on them.
-    Every Group 1 model still trains for real regardless.
+    All seven tasks the schedule can contain have real implementations:
+    the five Group 1 models, real latent extraction for "latents"
+    (training.real_latents), and diffusion/fusion trained against those
+    latents (training.real_run_diffusion/real_run_fusion). run_schedule's
+    own dependency semantics still apply -- if a Group 1 model's real
+    training fails, whatever depends on it is skipped, not silently
+    no-op'd.
 
     Needs the torch and storage extras and real R2/S3 credentials
     (S3_ARTIFACT_* in .env), same as `anemoi train`; cnn/transformer/gnn/
