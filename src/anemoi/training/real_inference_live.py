@@ -1,0 +1,114 @@
+"""Real-time feature building for live inference (#78).
+
+Every existing ``build_<model>_samples``/streaming ``build_x`` function is
+training-oriented: it's built on `real_run.iter_stage_windows`, which
+discards a window whose future target can't be computed at all
+(``if not mask.any(): continue``) -- exactly the situation a live
+inference cycle is always in, since there's no future fix yet by
+definition. The functions here build the same real ``x`` representation
+training used (raw, unstandardized -- the caller applies
+`real_inference.load_standardization_stats`' real mean/std), for the
+current moment, with no target needed or computed at all.
+
+Each takes a real `data.besttrack.Track` (the storm's real known history)
+and its most recent real `Fix` (``current`` -- the same pair
+`inference.cycle.run_cycle`'s ``deterministic_fn(plan, initial_fix)``
+already receives), and returns ``None`` -- not an exception -- exactly
+when the equivalent training-time builder would have skipped the window:
+not enough real history yet, or no cached/live gridded field for the
+current position/time. A real caller (a live inference runner) must
+treat ``None`` as "this model can't contribute to this cycle," the same
+"skip, don't crash" contract used everywhere else in this codebase.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import numpy as np
+
+if TYPE_CHECKING:
+    from ..data.besttrack import Fix, Track
+    from ..data.features import GriddedFields
+    from .real_run_gnn import MeshTopology
+
+
+def _current_window(track: Track, current: Fix, length: int) -> tuple[Fix, ...] | None:
+    return track.window_ending(current.valid_time, length)
+
+
+def _current_fields(track: Track, current: Fix, cache_dir: Path | str) -> GriddedFields | None:
+    """The current fix's cached `GriddedFields`, the same real cache
+    lookup CNN/Transformer/GNN/PINN's training builders already use --
+    real live ingestion (fetching gridded fields for right now, not a
+    historical cached one) is issue #78's own sibling ingestion gap, not
+    solved here; this reads from whatever's already cached, live or not.
+    """
+    from ..data.gridded_cache import FetchTask, cache_path, load_cached_fields
+
+    task = FetchTask(
+        storm_id=track.storm_id, valid_time=current.valid_time, lat=current.lat, lon=current.lon,
+    )
+    path = cache_path(cache_dir, task)
+    if not path.exists():
+        return None
+    return load_cached_fields(path)
+
+
+def build_live_lstm_x(track: Track, current: Fix) -> np.ndarray | None:
+    """LSTM's real input: the storm-relative sequence over its most
+    recent real fixes, no gridded fields needed at all."""
+    from ..data.storm_relative import storm_relative_sequence
+    from .capacity_ablation import SEQUENCE_LENGTH
+
+    window = _current_window(track, current, SEQUENCE_LENGTH + 1)
+    if window is None:
+        return None
+    return storm_relative_sequence(window)
+
+
+def build_live_cnn_x(track: Track, current: Fix, cache_dir: Path | str) -> np.ndarray | None:
+    from .real_run_cnn import _sanitized_channel_stack
+
+    fields = _current_fields(track, current, cache_dir)
+    if fields is None:
+        return None
+    return _sanitized_channel_stack(fields)
+
+
+def build_live_transformer_x(
+    track: Track, current: Fix, cache_dir: Path | str,
+) -> np.ndarray | None:
+    from .real_run_transformer import GRID_SIZE, _sanitized_channel_stack
+
+    fields = _current_fields(track, current, cache_dir)
+    if fields is None:
+        return None
+    stack = _sanitized_channel_stack(fields)
+    if stack is None:
+        return None
+    gh, gw = GRID_SIZE
+    return stack[:, :gh, :gw]
+
+
+def build_live_gnn_x(
+    track: Track, current: Fix, cache_dir: Path | str, stride: int | None = None,
+) -> tuple[np.ndarray, MeshTopology] | None:
+    """GNN needs its mesh topology alongside the node features (`models
+    .gnn.build_gnn`'s ``forward`` takes ``edge_index``/``edge_attr``
+    directly, not baked into the model) -- built fresh from the cached
+    field's own shape, the same cheap "pure function of shape/stride"
+    real_run_gnn's own module docstring already establishes for the
+    training path.
+    """
+    from .real_run_gnn import GNN_STRIDE, _node_features, build_mesh_topology
+
+    fields = _current_fields(track, current, cache_dir)
+    if fields is None:
+        return None
+    topo = build_mesh_topology(fields.shape, stride or GNN_STRIDE)
+    node_features = _node_features(fields, topo)
+    if node_features is None:
+        return None
+    return node_features, topo
