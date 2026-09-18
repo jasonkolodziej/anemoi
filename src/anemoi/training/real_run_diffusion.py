@@ -30,7 +30,7 @@ exercised by this promotion-facing MetricSet).
 from __future__ import annotations
 
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -76,6 +76,10 @@ class DiffusionArtifacts:
     z_std: np.ndarray
     y_mean: np.ndarray
     y_std: np.ndarray
+    #: The real `build_diffusion(...)` kwargs this run used -- see
+    #: `real_run.RunArtifacts.arch_params`'s docstring for why this is the
+    #: only real record of what shape a checkpoint's weights are (#78).
+    arch_params: dict = field(default_factory=dict)
 
 
 def train_diffusion_stage(
@@ -191,8 +195,13 @@ def train_diffusion_stage(
     val_metrics = MetricSet(
         split="val", flavor=Flavor.GDAS_FINETUNE, values=to_metric_dict(verify(pairs)),
     )
+    arch_params = {
+        "latent_dim": train_samples.z.shape[-1], "hidden_dim": hidden_dim, "n_layers": n_layers,
+        "n_timesteps": n_timesteps, "lead_hours": list(DEFAULT_LEADS),
+    }
     artifacts = DiffusionArtifacts(
         model=model, z_mean=z_mean, z_std=z_std, y_mean=y_mean, y_std=y_std,
+        arch_params=arch_params,
     )
     return model, train_loss, val_loss, val_metrics, artifacts
 
@@ -209,17 +218,23 @@ def run_diffusion_curriculum(
     learning_rate: float = 1e-3,
     n_ensemble_eval: int = 20,
     curriculum_kwargs: dict | None = None,
-) -> tuple[CurriculumRun, MetricSet, object]:
+) -> tuple[CurriculumRun, MetricSet, object, DiffusionArtifacts]:
     """Run the real (single-stage) curriculum for Anemoi-Spread against a
     real `JointLatentBundle` (`training.real_latents.extract_joint_latents`'s
     output), uploading the trained checkpoint to durable storage.
+
+    Returns ``(run, val_metrics, model, artifacts)`` -- ``model`` is kept
+    as its own return value for backward compatibility with existing
+    callers; ``artifacts`` (added #78) carries the real standardisation
+    stats and `build_diffusion(...)` kwargs a real inference path needs
+    that ``model``/``run``/``val_metrics`` don't.
     """
     require_torch()
     curriculum = Curriculum(model_name="diffusion", stages=(stage_b(**(curriculum_kwargs or {})),))
     run = CurriculumRun(curriculum=curriculum)
     stage = curriculum.stages[0]
 
-    model, train_loss, val_loss, val_metrics, _artifacts = train_diffusion_stage(
+    model, train_loss, val_loss, val_metrics, artifacts = train_diffusion_stage(
         joint_latents.train, joint_latents.val,
         hidden_dim=hidden_dim, n_layers=n_layers, n_timesteps=n_timesteps,
         epochs=epochs, learning_rate=learning_rate, n_ensemble_eval=n_ensemble_eval, seed=seed,
@@ -239,4 +254,4 @@ def run_diffusion_curriculum(
             completed_at=datetime.now(UTC),
         )
     )
-    return run, val_metrics, model
+    return run, val_metrics, model, artifacts

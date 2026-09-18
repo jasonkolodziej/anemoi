@@ -66,6 +66,30 @@ def test_registry_persists_across_instances(tmp_path):
     assert len(ModelRegistry(tmp_path).versions("lstm")) == 1
 
 
+def test_checkpoint_uri_persists_on_the_version_itself(tmp_path):
+    """Real gap found while wiring real inference (#78): checkpoint_uri
+    was accepted by register() but only ever used for the MLflow mirror,
+    never stored on the ModelVersion itself -- so a real inference process
+    had no way to look up where a version's weights live without an
+    MLflow client configured and reachable."""
+    reg = ModelRegistry(tmp_path)
+    version = reg.register(
+        "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS,
+        checkpoint_uri="s3://fake/lstm.pt",
+    )
+    assert version.checkpoint_uri == "s3://fake/lstm.pt"
+
+    # And it survives a real reload from disk, not just the in-memory object.
+    reloaded = ModelRegistry(tmp_path).get("lstm", 1)
+    assert reloaded.checkpoint_uri == "s3://fake/lstm.pt"
+
+
+def test_checkpoint_uri_defaults_to_none_when_not_given(tmp_path):
+    reg = ModelRegistry(tmp_path)
+    version = reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+    assert version.checkpoint_uri is None
+
+
 def test_pinning_a_full_coherent_set_succeeds(tmp_path):
     reg = ModelRegistry(tmp_path)
     versions = full_set(reg)

@@ -80,6 +80,22 @@ def test_baseline_beaten_matches_promotions_own_threshold():
     assert et.baseline_beaten(below) is False
 
 
+def test_arch_params_tag_json_encodes_a_real_dict():
+    from types import SimpleNamespace
+
+    artifacts = SimpleNamespace(arch_params={"hidden_dim": 128, "lead_hours": [12, 24]})
+    tag = et.arch_params_tag(artifacts)
+    assert tag == '{"hidden_dim": 128, "lead_hours": [12, 24]}'
+
+
+def test_arch_params_tag_is_none_for_empty_or_missing_arch_params():
+    from types import SimpleNamespace
+
+    assert et.arch_params_tag(None) is None
+    assert et.arch_params_tag(SimpleNamespace(arch_params={})) is None
+    assert et.arch_params_tag(SimpleNamespace()) is None  # no arch_params attr at all
+
+
 def test_build_run_tags_constructs_a_real_validated_runtags():
     stage = stage_b()
     tags = et.build_run_tags("lstm", stage, execution_mode=ExecutionMode.PARALLEL_GROUP1)

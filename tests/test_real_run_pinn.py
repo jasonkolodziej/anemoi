@@ -410,7 +410,7 @@ def test_run_pinn_curriculum_completes_both_stages(tmp_path):
     )
     store = CheckpointStore(config, client=_FakeS3Client())
 
-    run, val_metrics, _artifacts = run_pinn_curriculum(
+    run, val_metrics, artifacts = run_pinn_curriculum(
         tracks, store, era5_dir, gdas_dir, seed=42, n_augment=1,
         hidden_dim=8, candidate_hidden_dim=8,
     )
@@ -421,6 +421,21 @@ def test_run_pinn_curriculum_completes_both_stages(tmp_path):
     for result in run.results:
         assert result.checkpoint_uri.startswith("s3://anemoi-test/checkpoints/pinn/")
     assert "track_error_12h_nm" in val_metrics.values
+
+    # #78: PINN is the only model with TWO real architectures to
+    # reconstruct -- the PhysicsCorrector itself and its candidate-
+    # generator LSTM (never checkpointed on its own, module docstring).
+    from anemoi.data.features import FEATURE_NAMES
+    from anemoi.data.storm_relative import STORM_RELATIVE_COLUMNS
+    from anemoi.models.base import DEFAULT_LEADS
+
+    assert artifacts.arch_params == {
+        "input_dim": len(FEATURE_NAMES), "hidden_dim": 8, "lead_hours": list(DEFAULT_LEADS),
+    }
+    assert artifacts.candidate_arch_params == {
+        "input_dim": len(STORM_RELATIVE_COLUMNS), "hidden_dim": 8,
+        "lead_hours": list(DEFAULT_LEADS),
+    }
 
 
 @pytest.mark.torch

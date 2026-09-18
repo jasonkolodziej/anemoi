@@ -253,7 +253,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     from .data.hurdat2 import parse_hurdat2_file
     from .data.sources import Flavor
     from .tracking.checkpoint_store import CheckpointStore, S3Config
-    from .tracking.experiment_tracking import build_run_tags, log_curriculum_stages
+    from .tracking.experiment_tracking import arch_params_tag, build_run_tags, log_curriculum_stages
     from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ModelRegistry
     from .training.promotion import MetricSet, evaluate_promotion
@@ -268,7 +268,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     if args.model == "lstm":
         from .training.real_run import run_lstm_curriculum
 
-        run, val_metrics, _artifacts = run_lstm_curriculum(
+        run, val_metrics, artifacts = run_lstm_curriculum(
             tracks, store, seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
             **streaming_kwargs,
         )
@@ -278,7 +278,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         if not args.era5_cache_dir or not args.gdas_cache_dir:
             print("cnn needs --era5-cache-dir and --gdas-cache-dir")
             return 1
-        run, val_metrics, _artifacts = run_cnn_curriculum(
+        run, val_metrics, artifacts = run_cnn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment, **streaming_kwargs,
         )
@@ -288,7 +288,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         if not args.era5_cache_dir or not args.gdas_cache_dir:
             print("transformer needs --era5-cache-dir and --gdas-cache-dir")
             return 1
-        run, val_metrics, _artifacts = run_transformer_curriculum(
+        run, val_metrics, artifacts = run_transformer_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment, **streaming_kwargs,
         )
@@ -298,7 +298,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         if not args.era5_cache_dir or not args.gdas_cache_dir:
             print("gnn needs --era5-cache-dir and --gdas-cache-dir")
             return 1
-        run, val_metrics, _artifacts = run_gnn_curriculum(
+        run, val_metrics, artifacts = run_gnn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
             **streaming_kwargs,
@@ -309,7 +309,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         if not args.era5_cache_dir or not args.gdas_cache_dir:
             print("pinn needs --era5-cache-dir and --gdas-cache-dir")
             return 1
-        run, val_metrics, _artifacts = run_pinn_curriculum(
+        run, val_metrics, artifacts = run_pinn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
             **streaming_kwargs,
@@ -337,12 +337,16 @@ def cmd_train(args: argparse.Namespace) -> int:
 
     tags = build_run_tags(args.model, run.curriculum.stages[-1])
     mlflow_run_id = log_curriculum_stages(registry.mlflow_client, args.model, run, val_metrics)
+    tag_dict = tags.to_dict() if tags else {}
+    arch_params = arch_params_tag(artifacts)
+    if arch_params is not None:
+        tag_dict["arch_params"] = arch_params
     version = registry.register(
         args.model,
         run_id=f"cli-{datetime.now(UTC):%Y%m%dT%H%M%S}",
         input_flavor=Flavor.GDAS_FINETUNE,
         metrics=val_metrics.values,
-        tags=tags.to_dict() if tags else None,
+        tags=tag_dict or None,
         checkpoint_uri=run.results[-1].checkpoint_uri,
         mlflow_run_id=mlflow_run_id,
     )

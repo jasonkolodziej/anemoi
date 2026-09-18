@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -133,6 +133,16 @@ class RunArtifacts:
     candidate_model: object | None = None
     env_mean: np.ndarray | None = None
     env_std: np.ndarray | None = None
+    #: The real keyword arguments this run's `build_<model>(...)` call used
+    #: -- everything needed to reconstruct an identical, untrained skeleton
+    #: before `load_state_dict` (#78). Checkpoints only ever save
+    #: `model.state_dict()` (see every `run_*_curriculum`'s upload step),
+    #: never the architecture that produced it, so this is the only real
+    #: record of what shape a given checkpoint's weights actually are.
+    #: Empty (not None) when a caller has no real inference use for it yet.
+    arch_params: dict = field(default_factory=dict)
+    #: PINN only: the candidate-generator LSTM's own `build_lstm(...)` kwargs.
+    candidate_arch_params: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -601,5 +611,12 @@ def run_lstm_curriculum(
 
     assert val_metrics is not None  # curriculum always has >=1 stage
     x_mean, x_std, y_mean, y_std = stats
-    artifacts = RunArtifacts(model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std)
+    arch_params = {
+        "input_dim": len(STORM_RELATIVE_COLUMNS), "hidden_dim": hidden_dim,
+        "lead_hours": list(DEFAULT_LEADS),
+    }
+    artifacts = RunArtifacts(
+        model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
+        arch_params=arch_params,
+    )
     return run, val_metrics, artifacts

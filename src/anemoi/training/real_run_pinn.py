@@ -780,7 +780,16 @@ def run_pinn_curriculum(
 
     assert val_metrics is not None
     env_mean, env_std = env_stats
+    arch_params = {
+        "input_dim": len(FEATURE_NAMES), "hidden_dim": hidden_dim,
+        "lead_hours": list(DEFAULT_LEADS),
+    }
+    candidate_arch_params = {
+        "input_dim": len(STORM_RELATIVE_COLUMNS), "hidden_dim": candidate_hidden_dim,
+        "lead_hours": list(DEFAULT_LEADS),
+    }
     artifacts = RunArtifacts(
         model=model, candidate_model=candidate_model, env_mean=env_mean, env_std=env_std,
+        arch_params=arch_params, candidate_arch_params=candidate_arch_params,
     )
     return run, val_metrics, artifacts

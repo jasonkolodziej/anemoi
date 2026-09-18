@@ -527,5 +527,12 @@ def run_transformer_curriculum(
 
     assert val_metrics is not None
     x_mean, x_std, y_mean, y_std = stats
-    artifacts = RunArtifacts(model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std)
+    arch_params = {
+        "n_variables": len(TRANSFORMER_FIELD_NAMES), "grid_size": list(GRID_SIZE),
+        "d_model": d_model, "dropout": dropout, "lead_hours": list(DEFAULT_LEADS),
+    }
+    artifacts = RunArtifacts(
+        model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
+        arch_params=arch_params,
+    )
     return run, val_metrics, artifacts
