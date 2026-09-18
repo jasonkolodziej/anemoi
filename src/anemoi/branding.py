@@ -105,7 +105,24 @@ def god(slug_or_architecture: str) -> WindGod:
 
 
 def experiment_name(slug_or_architecture: str) -> str:
-    """MLflow experiment name for a model. The god slug, nothing decorative."""
+    """MLflow experiment name for a model. The god slug, nothing decorative.
+
+    ``"fusion"`` is a real, deliberate special case, not an oversight:
+    fusion has no ``WindGod`` entry by design (see ``FUSION_COLOR``'s own
+    comment -- "a model but not a god"), so routing it through ``god()``
+    always raised ``KeyError``. That exception was silently swallowed by
+    `tracking.experiment_tracking.log_stage_run`'s catch-all
+    ``except Exception: return None`` (deliberate -- tracking must never
+    fail a training run), so a real fusion training run would complete,
+    register, and upload its checkpoint successfully, just with
+    ``mlflow_run_id=None`` -- no MLflow run, no logged metrics, anywhere,
+    for a model that otherwise looks identical to the other six in every
+    other respect. Found via a real full-schedule VM run (2026-09-18):
+    ``MlflowClient.get_model_version("fusion", ...).run_id`` came back as
+    the empty string while every other model's did not.
+    """
+    if slug_or_architecture.lower() == "fusion":
+        return "fusion"
     return god(slug_or_architecture).slug
 
 

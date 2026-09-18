@@ -50,6 +50,16 @@ def test_experiment_names_are_the_god_slugs():
     assert experiment_name("pinn") == "kaikias"
 
 
+def test_experiment_name_handles_fusion_without_raising():
+    """Real bug found via a full-schedule VM run (2026-09-18): fusion has
+    no WindGod entry by design (it's "a model but not a god"), so
+    experiment_name("fusion") used to raise KeyError -- silently swallowed
+    by log_stage_run's catch-all exception handler, so fusion trained and
+    registered successfully but never got an MLflow run at all."""
+    assert experiment_name("fusion") == "fusion"
+    assert experiment_name("FUSION") == "fusion"
+
+
 def test_structural_colors_are_never_model_colors():
     """§5.3: if a colour appears on data it must map to exactly one model."""
     model_colors = {g.color for g in GODS} | {FUSION_COLOR}
