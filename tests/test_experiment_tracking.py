@@ -198,6 +198,31 @@ def test_log_stage_run_creates_a_real_run_under_the_wind_god_experiment_name():
 
 
 @pytest.mark.tracking
+def test_log_stage_run_creates_a_real_run_for_fusion():
+    """Real bug found via a full-schedule VM run (2026-09-18): fusion has
+    no WindGod entry by design (branding.GODS covers only the six
+    directional gods; fusion is "a model but not a god"), so
+    experiment_name("fusion") used to raise KeyError, silently swallowed
+    by this function's catch-all exception handler -- fusion still
+    trained, registered, and uploaded its checkpoint successfully, just
+    with no MLflow run created and no metrics logged anywhere. This must
+    return a real run_id, not None, the same as every other model."""
+    client = _StubMlflowClient()
+    stage = stage_b()
+    result = StageResult(
+        stage_name="B", flavor=Flavor.GDAS_FINETUNE, epochs_completed=10,
+        final_train_loss=0.3, final_val_loss=0.4, checkpoint_uri="s3://fake/fusion-B.pt",
+        completed_at=datetime(2026, 9, 18, tzinfo=UTC),
+    )
+
+    run_id = et.log_stage_run(client, "fusion", stage, result)
+
+    assert run_id == "run-1"
+    create_run_call = next(c for c in client.calls if c[0] == "create_run")
+    assert create_run_call[3] == "fusion-B"
+
+
+@pytest.mark.tracking
 def test_log_stage_run_degrades_silently_on_mlflow_failure():
     class BrokenClient:
         def get_experiment_by_name(self, name):
