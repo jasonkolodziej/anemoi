@@ -160,8 +160,9 @@ def area_mean(field: np.ndarray, radius_frac: float = 0.5) -> float:
     ``mean`` a single land pixel poisons the whole box to NaN, which is what
     surfaced this (a real ``non-finite feature value`` failure training
     PINN, the only model that calls ``compute_environment_features`` --
-    CNN/Transformer/GNN consume raw field pixels directly and never hit this
-    validation, LSTM never touches gridded fields at all).
+    CNN/Transformer/GNN consume raw field pixels directly instead and need
+    their own fix, ``sanitize_field_pixels`` below; LSTM never touches
+    gridded fields at all).
 
     **This is a real, deliberate change to what "SST near this storm"
     physically means, not a value-neutral bug fix** -- worth understanding
@@ -208,6 +209,48 @@ def area_mean(field: np.ndarray, radius_frac: float = 0.5) -> float:
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message="Mean of empty slice")
         return float(np.nanmean(box))
+
+
+def sanitize_field_pixels(field: np.ndarray) -> np.ndarray | None:
+    """Real NaN handling for CNN/Transformer/GNN's raw-pixel input path --
+    the gap ``area_mean``'s own docstring names ("CNN/Transformer/GNN
+    consume raw field pixels directly and never hit this validation").
+
+    Unlike ``area_mean``, which reduces a box to one scalar, these three
+    models feed every pixel of a cached field directly into the network,
+    so a single NaN pixel (real ERA5's ``sea_surface_temperature`` is NaN
+    over land; other fields may be too, depending on how they're derived)
+    isn't just one bad value -- it corrupts `training.streaming
+    .OnlineMeanStd`, a plain, non-NaN-aware running mean fit once per
+    stage across every window's raw channel stack. The first NaN pixel any
+    window contributes turns ``x_mean``/``x_std`` NaN *permanently* for
+    that stage (`OnlineMeanStd.update`'s running-aggregate math has no way
+    to recover once ``self.mean`` is NaN), which then poisons
+    ``(x - x_mean) / x_std`` standardization for *every* window, not just
+    the ones that actually touch land -- this is why real CNN/Transformer/
+    GNN training against the real ERA5 cache produced ``nan`` loss for
+    every single batch, confirmed via a real MLflow query
+    (2026-09-17 full-schedule run), not something a per-window skip alone
+    would have caught.
+
+    Same "sample from remaining ocean" semantics ``area_mean`` already
+    uses, applied per-pixel instead of per-box-average: every NaN pixel is
+    replaced with that field's own real spatial mean over its still-valid
+    (non-NaN) pixels, so a land pixel reads as "about what the surrounding
+    real ocean reads" rather than an arbitrary sentinel like 0 the model
+    would otherwise have to learn to treat as meaningless. Returns
+    ``None`` if the whole field is NaN (the box is entirely land) -- the
+    caller must skip that window, the same "skip, don't corrupt" contract
+    ``area_mean``'s own callers already use for an all-NaN box.
+    """
+    if not np.isnan(field).any():
+        return field
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="Mean of empty slice")
+        fill = np.nanmean(field)
+    if np.isnan(fill):
+        return None
+    return np.where(np.isnan(field), fill, field)
 
 
 def deep_layer_shear(fields: GriddedFields) -> tuple[float, float]:

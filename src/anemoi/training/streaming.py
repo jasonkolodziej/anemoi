@@ -270,3 +270,48 @@ def filter_windows_with_cache(windows: list[StageWindow], cache_dir) -> list[Sta
         if cache_path(cache_dir, task).exists():
             kept.append(sw)
     return kept
+
+
+def filter_windows_with_finite_fields(
+    windows: list[StageWindow], cache_dir, field_names: tuple[str, ...],
+) -> list[StageWindow]:
+    """Real windows filtered down to the ones where every raw field in
+    ``field_names`` has at least one real, non-NaN pixel -- CNN/
+    Transformer/GNN's raw-pixel analogue of `filter_windows_with_cache`,
+    needed because their `build_x` uses `data.features
+    .sanitize_field_pixels` to fill NaN pixels (real ERA5 fields can be
+    NaN over land) with that field's own real spatial mean, which is only
+    possible when the field has *some* real pixel to take a mean over. A
+    window whose box is entirely land for one of these fields is dropped
+    here, the same "skip, don't corrupt" contract `area_mean`'s own
+    callers already use, and for the same underlying reason
+    `filter_windows_with_cache` exists: `WindowDataset.__getitem__` has no
+    well-defined way to signal "skip this index" once the dataset is
+    constructed, so windows `build_x` can't actually handle must be
+    filtered out up front.
+
+    Does one real read per window (same cost as `build_x` will pay again
+    when it actually loads the window) -- deliberately simple rather than
+    threaded through the online-stats-fitting pass the way
+    `real_run_pinn._filter_and_fit_env_stats` folds its own finite-check
+    into the stats pass; revisit the same way if this doubles-read cost
+    ever shows up as a real bottleneck the way PINN's did (#69)."""
+    from pathlib import Path
+
+    from ..data.features import sanitize_field_pixels
+    from ..data.gridded_cache import FetchTask, cache_path, load_cached_fields
+
+    cache_dir = Path(cache_dir)
+    kept = []
+    for sw in windows:
+        task = FetchTask(
+            storm_id=sw.storm_id, valid_time=sw.current.valid_time,
+            lat=sw.current.lat, lon=sw.current.lon,
+        )
+        path = cache_path(cache_dir, task)
+        if not path.exists():
+            continue
+        fields = load_cached_fields(path)
+        if all(sanitize_field_pixels(getattr(fields, name)) is not None for name in field_names):
+            kept.append(sw)
+    return kept

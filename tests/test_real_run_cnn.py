@@ -96,6 +96,43 @@ def test_build_cnn_samples_empty_when_nothing_cached(tmp_path):
     assert len(samples) == 0
 
 
+def test_build_cnn_samples_sanitizes_partial_land_and_skips_entirely_land_windows(tmp_path):
+    """Real bug found re-verifying the num_workers fix on the VM
+    (2026-09-17): a real full-schedule run produced ``nan`` loss for CNN
+    (and Transformer/GNN/diffusion) because real ERA5 ``sst`` is NaN over
+    land and this raw-pixel path had no NaN handling at all -- unlike
+    PINN's `area_mean`, which was already fixed for the same root cause
+    (#67). A window whose box is partially land must come back with a
+    real, finite value (filled from that channel's own real ocean
+    pixels); a window entirely over land must be dropped, not poison the
+    stack."""
+    import dataclasses
+
+    track = make_track("AL011985", season=1985, n=26)
+    cache_all_fixes(tmp_path, track, Flavor.ERA5_PRETRAIN)
+    baseline = build_cnn_samples([track], tmp_path, np.random.default_rng(1), n_augment=1)
+
+    coastal_fix, land_fix = track.fixes[5], track.fixes[10]
+
+    coastal_fields = make_fields(coastal_fix.valid_time, Flavor.ERA5_PRETRAIN)
+    coastal_sst = coastal_fields.sst.copy()
+    coastal_sst[:3, :] = np.nan
+    coastal_fields = dataclasses.replace(coastal_fields, sst=coastal_sst)
+    coastal_task = _task_for(track, coastal_fix)
+    save_cached_fields(cache_path(tmp_path, coastal_task), coastal_fields, coastal_task)
+
+    land_fields = dataclasses.replace(
+        make_fields(land_fix.valid_time, Flavor.ERA5_PRETRAIN), sst=np.full((9, 9), np.nan),
+    )
+    land_task = _task_for(track, land_fix)
+    save_cached_fields(cache_path(tmp_path, land_task), land_fields, land_task)
+
+    samples = build_cnn_samples([track], tmp_path, np.random.default_rng(1), n_augment=1)
+
+    assert np.all(np.isfinite(samples.x))
+    assert len(samples) < len(baseline)  # the entirely-land window(s) were dropped
+
+
 def test_build_cnn_samples_rejects_ragged_cached_shapes(tmp_path):
     track = make_track("AL011985", season=1985, n=10)
     for i, fix in enumerate(track.fixes):
@@ -163,6 +200,52 @@ def test_train_cnn_stage_streaming_runs_and_produces_val_metrics(tmp_path):
     assert "track_error_12h_nm" in val_metrics.values
     x_mean, x_std, y_mean, y_std = stats
     assert x_mean.shape == (1, 10, 1, 1)
+
+
+@pytest.mark.torch
+def test_train_cnn_stage_streaming_does_not_produce_nan_loss_with_a_land_touching_window(tmp_path):
+    """The real regression: an unhandled NaN pixel used to reach
+    `training.streaming.OnlineMeanStd`'s plain running mean during the
+    online stats-fitting pass, corrupting x_mean/x_std to NaN
+    *permanently* for the whole stage -- so every window's standardized
+    input came out NaN, not just the one that touched land. This is what
+    a real full-schedule VM run actually hit (2026-09-17, confirmed via a
+    real MLflow metrics query): CNN's real train/val loss and every
+    downstream metric came back ``nan``."""
+    import dataclasses
+
+    from anemoi.models.cnn import build_cnn
+    from anemoi.training.curriculum import stage_a
+    from anemoi.training.real_run_cnn import train_cnn_stage_streaming
+
+    train_track = make_track("AL011985", season=1985, n=26, seed=0)
+    val_tracks = [make_track("AL012020", season=2020, n=26, seed=1)]
+    cache_all_fixes(tmp_path, train_track, Flavor.ERA5_PRETRAIN)
+    cache_all_fixes(tmp_path, val_tracks[0], Flavor.ERA5_PRETRAIN)
+
+    # Re-save one real train-set window's cached fields with an
+    # entirely-land sst -- exactly the shape of the real bug (a storm
+    # window whose box is entirely over land).
+    poisoned_fix = train_track.fixes[5]
+    task = _task_for(train_track, poisoned_fix)
+    poisoned = dataclasses.replace(
+        make_fields(poisoned_fix.valid_time, Flavor.ERA5_PRETRAIN), sst=np.full((9, 9), np.nan),
+    )
+    save_cached_fields(cache_path(tmp_path, task), poisoned, task)
+
+    leads = (12, 24, 36, 48, 72, 96, 120)
+    model, _spec = build_cnn(in_channels=10, latent_dim=16, lead_hours=leads)
+    stage = stage_a(epochs=2, learning_rate=1e-2)
+    rng = np.random.default_rng(5)
+
+    _model, train_loss, val_loss, val_metrics, stats = train_cnn_stage_streaming(
+        model, stage, [train_track], val_tracks, tmp_path, rng, n_augment=1, batch_size=4,
+    )
+    assert np.isfinite(train_loss)
+    assert np.isfinite(val_loss)
+    assert all(np.isfinite(v) for v in val_metrics.values.values())
+    x_mean, x_std, y_mean, y_std = stats
+    assert np.all(np.isfinite(x_mean)) and np.all(np.isfinite(x_std))
 
 
 @pytest.mark.torch

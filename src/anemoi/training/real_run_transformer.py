@@ -32,6 +32,7 @@ from pathlib import Path
 import numpy as np
 
 from ..data.besttrack import Track, WorkingTrackNoise
+from ..data.features import sanitize_field_pixels
 from ..data.gridded_cache import FetchTask, cache_path, load_cached_fields
 from ..data.sources import Flavor
 from ..data.splits import Split, assign_splits, filter_tracks
@@ -62,6 +63,20 @@ TRANSFORMER_FIELD_NAMES: tuple[str, ...] = (
 #: matches build_transformer's own default grid_size, divisible by its
 #: default patch_size=4.
 GRID_SIZE: tuple[int, int] = (40, 40)
+
+
+def _sanitized_channel_stack(fields) -> np.ndarray | None:
+    """`real_run_cnn._sanitized_channel_stack`'s analog for
+    `TRANSFORMER_FIELD_NAMES` -- see that function's docstring and
+    `data.features.sanitize_field_pixels` for why real ERA5 NaN-over-land
+    pixels (sst/ohc) can't be left unhandled in this raw-pixel path."""
+    channels = []
+    for name in TRANSFORMER_FIELD_NAMES:
+        sanitized = sanitize_field_pixels(getattr(fields, name))
+        if sanitized is None:
+            return None
+        channels.append(sanitized)
+    return np.stack(channels)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +119,9 @@ def build_transformer_samples(
         if not path.exists():
             continue
         fields = load_cached_fields(path)
-        stack = np.stack([getattr(fields, name) for name in TRANSFORMER_FIELD_NAMES])
+        stack = _sanitized_channel_stack(fields)
+        if stack is None:
+            continue
         h, w = stack.shape[1:]
         if h < gh or w < gw:
             raise ValueError(
@@ -285,6 +302,7 @@ def train_transformer_stage_streaming(
         OnlineMeanStd,
         WindowDataset,
         filter_windows_with_cache,
+        filter_windows_with_finite_fields,
         make_dataloader,
     )
 
@@ -295,16 +313,23 @@ def train_transformer_stage_streaming(
     device = device or get_device()
     gh, gw = GRID_SIZE
 
-    train_windows = filter_windows_with_cache(
+    raw_train_windows = filter_windows_with_cache(
         list(iter_stage_windows(train_tracks, rng, n_augment)), cache_dir,
     )
-    val_windows = filter_windows_with_cache(
+    train_windows = filter_windows_with_finite_fields(
+        raw_train_windows, cache_dir, TRANSFORMER_FIELD_NAMES,
+    )
+    raw_val_windows = filter_windows_with_cache(
         list(iter_stage_windows(val_tracks, rng, 1)), cache_dir,
+    )
+    val_windows = filter_windows_with_finite_fields(
+        raw_val_windows, cache_dir, TRANSFORMER_FIELD_NAMES,
     )
     if not train_windows or not val_windows:
         raise ValueError(
             f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
-            f"{cache_dir} -- has data.era5_cache/data.gdas_cache fetched anything yet?"
+            f"{cache_dir} -- has data.era5_cache/data.gdas_cache fetched anything yet, or "
+            "were every matched window's fields entirely NaN (storms entirely over land)?"
         )
 
     def build_x(sw):
@@ -312,8 +337,7 @@ def train_transformer_stage_streaming(
             storm_id=sw.storm_id, valid_time=sw.current.valid_time,
             lat=sw.current.lat, lon=sw.current.lon,
         )))
-        stack = np.stack([getattr(fields, name) for name in TRANSFORMER_FIELD_NAMES])
-        return stack[:, :gh, :gw]
+        return _sanitized_channel_stack(fields)[:, :gh, :gw]
 
     n_leads = len(LEAD_STEPS)
     raw_train_ds = WindowDataset(train_windows, build_x)
