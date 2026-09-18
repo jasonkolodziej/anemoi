@@ -32,6 +32,7 @@ completes, not more.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -90,6 +91,33 @@ def _storm_split(stage: StageSpec) -> str:
     train_lo, train_hi = boundaries[Split.TRAIN]
     val_lo, val_hi = boundaries[Split.VAL]
     return f"train-{train_lo}-{train_hi}_val-{val_lo}-{val_hi}"
+
+
+def arch_params_tag(artifacts: object) -> str | None:
+    """JSON-encode ``artifacts.arch_params`` (`training.real_run
+    .RunArtifacts`/`training.real_run_diffusion.DiffusionArtifacts`/
+    `training.real_run_fusion.FusionArtifacts`, whichever this model has)
+    for storage as a registry tag -- tags are ``dict[str, str]``
+    (`tracking.registry.ModelVersion.tags`), so a plain dict can't be
+    stored directly.
+
+    Real motivation (#78): checkpoints only ever save
+    ``model.state_dict()``, never the architecture that produced it
+    (every `run_*_curriculum`'s upload step). Real inference needs to
+    reconstruct an identical, untrained skeleton before
+    ``load_state_dict`` can put real weights into it, and this tag is the
+    only place that information survives after the training process that
+    built the model exits.
+
+    ``None`` if there's nothing real to record (``artifacts`` is ``None``,
+    or its ``arch_params`` is empty) -- a real inference loader treats a
+    missing tag as "this version predates arch_params tracking," not as
+    an empty-but-present dict.
+    """
+    arch_params = getattr(artifacts, "arch_params", None)
+    if not arch_params:
+        return None
+    return json.dumps(arch_params, sort_keys=True)
 
 
 def baseline_beaten(val_metrics: MetricSet | None) -> bool | None:

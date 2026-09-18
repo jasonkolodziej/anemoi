@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 from anemoi.data.sources import Flavor
+from anemoi.models.base import DEFAULT_LEADS
 
 T_N_LEADS = 7
 T_N_MODELS = 5
@@ -150,7 +151,7 @@ def test_run_fusion_curriculum_uploads_a_checkpoint_and_registers_stage_b():
     )
     store = CheckpointStore(config, client=_FakeS3Client())
 
-    run, val_metrics, model = run_fusion_curriculum(
+    run, val_metrics, model, artifacts = run_fusion_curriculum(
         bundle, store, hidden_dim=8, epochs=10, seed=1,
     )
 
@@ -160,3 +161,7 @@ def test_run_fusion_curriculum_uploads_a_checkpoint_and_registers_stage_b():
     assert run.results[0].checkpoint_uri.startswith("s3://anemoi-test/checkpoints/fusion/")
     assert "track_error_12h_nm" in val_metrics.values
     assert model is not None
+    assert artifacts.arch_params == {
+        "n_models": T_N_MODELS, "context_dim": 10, "hidden_dim": 8, "weight_floor": 0.02,
+        "lead_hours": list(DEFAULT_LEADS),
+    }

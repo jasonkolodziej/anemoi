@@ -22,7 +22,7 @@ import pytest
 from anemoi.data.sources import Flavor
 from anemoi.tracking.registry import ModelRegistry
 from anemoi.tracking.tags import ExecutionMode
-from anemoi.training.curriculum import Curriculum, CurriculumRun, StageResult
+from anemoi.training.curriculum import Curriculum, CurriculumRun, StageResult, stage_b
 from anemoi.training.orchestrator import Mode, Task, build_schedule, run_schedule
 from anemoi.training.promotion import MetricSet
 from anemoi.training.real_orchestrator import RealOrchestratorRunner
@@ -54,8 +54,30 @@ def _fake_curriculum_run(model_name: str) -> tuple[CurriculumRun, MetricSet, obj
         )
     )
     metrics = MetricSet(split="val", flavor=Flavor.GDAS_FINETUNE, values=dict(FAKE_METRICS_VALUES))
-    artifacts = SimpleNamespace(model=f"trained-{model_name}")
+    artifacts = SimpleNamespace(model=f"trained-{model_name}", arch_params={})
     return run, metrics, artifacts
+
+
+def _fake_derived_curriculum_run(
+    model_name: str,
+) -> tuple[CurriculumRun, MetricSet, object, object]:
+    """`run_diffusion_curriculum`/`run_fusion_curriculum`'s own 4-tuple
+    return shape (#78: model, then a real artifacts object with
+    arch_params, added alongside for a real inference loader) -- these
+    two are single-stage (Stage B only), unlike every Group 1 model's
+    two-stage `_fake_curriculum_run`."""
+    curriculum = Curriculum(model_name=model_name, stages=(stage_b(),))
+    run = CurriculumRun(curriculum=curriculum)
+    run.record(
+        StageResult(
+            stage_name="B", flavor=Flavor.GDAS_FINETUNE, epochs_completed=1,
+            final_train_loss=0.5, final_val_loss=0.5, checkpoint_uri="s3://fake/B.pt",
+        )
+    )
+    metrics = MetricSet(split="val", flavor=Flavor.GDAS_FINETUNE, values=dict(FAKE_METRICS_VALUES))
+    model = f"trained-{model_name}"
+    artifacts = SimpleNamespace(model=model, arch_params={})
+    return run, metrics, model, artifacts
 
 
 class _FakeJointLatents:
@@ -78,9 +100,12 @@ def runner(tmp_path, monkeypatch) -> RealOrchestratorRunner:
         ("run_fusion_curriculum", "anemoi.training.real_run_fusion"),
     ):
         model_name = name.removeprefix("run_").removesuffix("_curriculum")
+        is_derived = model_name in ("diffusion", "fusion")
 
-        def make_fake(model_name=model_name):
+        def make_fake(model_name=model_name, is_derived=is_derived):
             def fake(*args, **kwargs):
+                if is_derived:
+                    return _fake_derived_curriculum_run(model_name)
                 return _fake_curriculum_run(model_name)
 
             return fake

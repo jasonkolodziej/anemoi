@@ -515,5 +515,12 @@ def run_cnn_curriculum(
 
     assert val_metrics is not None
     x_mean, x_std, y_mean, y_std = stats
-    artifacts = RunArtifacts(model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std)
+    arch_params = {
+        "in_channels": len(CNN_FIELD_NAMES), "latent_dim": latent_dim,
+        "lead_hours": list(DEFAULT_LEADS),
+    }
+    artifacts = RunArtifacts(
+        model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
+        arch_params=arch_params,
+    )
     return run, val_metrics, artifacts

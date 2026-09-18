@@ -29,7 +29,7 @@ from pathlib import Path
 from ..data.besttrack import Track
 from ..data.sources import Flavor
 from ..tracking.checkpoint_store import CheckpointStore
-from ..tracking.experiment_tracking import build_run_tags, log_curriculum_stages
+from ..tracking.experiment_tracking import arch_params_tag, build_run_tags, log_curriculum_stages
 from ..tracking.registry import DERIVED_MODELS, GROUP1_MODELS, ModelRegistry, latent_signature
 from .curriculum import CurriculumRun
 from .orchestrator import OrchestrationError, RunOutcome, Task
@@ -130,9 +130,10 @@ def _run_diffusion(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]
 
     if r.joint_latents is None:
         raise OrchestrationError("diffusion: latents have not been extracted yet")
-    run, val_metrics, _model = run_diffusion_curriculum(
+    run, val_metrics, _model, artifacts = run_diffusion_curriculum(
         r.joint_latents, r.checkpoint_store, seed=r.seed,
     )
+    r.trained_artifacts["diffusion"] = artifacts
     return run, val_metrics
 
 
@@ -141,9 +142,10 @@ def _run_fusion(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]:
 
     if r.joint_latents is None:
         raise OrchestrationError("fusion: latents have not been extracted yet")
-    run, val_metrics, _model = run_fusion_curriculum(
+    run, val_metrics, _model, artifacts = run_fusion_curriculum(
         r.joint_latents, r.checkpoint_store, seed=r.seed,
     )
+    r.trained_artifacts["fusion"] = artifacts
     return run, val_metrics
 
 
@@ -260,12 +262,16 @@ class RealOrchestratorRunner:
             self.registry.mlflow_client, task.name, run, val_metrics,
             execution_mode=task.execution_mode,
         )
+        tag_dict = tags.to_dict() if tags else {}
+        arch_params = arch_params_tag(self.trained_artifacts.get(task.name))
+        if arch_params is not None:
+            tag_dict["arch_params"] = arch_params
         version = self.registry.register(
             task.name,
             run_id=f"orchestrator-{datetime.now(UTC):%Y%m%dT%H%M%S}",
             input_flavor=Flavor.GDAS_FINETUNE,
             metrics=val_metrics.values,
-            tags=tags.to_dict() if tags else None,
+            tags=tag_dict or None,
             latent_signature=sig,
             checkpoint_uri=run.results[-1].checkpoint_uri,
             mlflow_run_id=mlflow_run_id,

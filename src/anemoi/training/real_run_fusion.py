@@ -19,6 +19,7 @@ own absolute-space loss either).
 from __future__ import annotations
 
 import tempfile
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -30,6 +31,17 @@ from .curriculum import Curriculum, CurriculumRun, StageResult, stage_b
 from .device import get_device
 from .promotion import MetricSet
 from .real_latents import JointLatentBundle, JointLatentSamples
+
+
+@dataclass(frozen=True, slots=True)
+class FusionArtifacts:
+    model: object
+    #: The real `build_fusion(...)` kwargs this run used -- see
+    #: `real_run.RunArtifacts.arch_params`'s docstring for why this is the
+    #: only real record of what shape a checkpoint's weights are (#78).
+    #: No standardisation stats to carry: fusion's inputs/outputs are
+    #: already in absolute coordinates (module docstring).
+    arch_params: dict = field(default_factory=dict)
 
 
 def train_fusion_stage(
@@ -127,13 +139,18 @@ def run_fusion_curriculum(
     epochs: int = 200,
     learning_rate: float = 1e-3,
     curriculum_kwargs: dict | None = None,
-) -> tuple[CurriculumRun, MetricSet, object]:
+) -> tuple[CurriculumRun, MetricSet, object, FusionArtifacts]:
     """Run the real (single-stage) curriculum for the fusion consensus
     layer against a real `JointLatentBundle`, uploading the trained
     checkpoint to durable storage. ``seed`` is accepted for the same
     per-model-runner calling convention `real_orchestrator` uses, even
     though this training loop (full-batch, no augmentation, no dropout) has
     no other randomness to seed.
+
+    Returns ``(run, val_metrics, model, artifacts)`` -- ``model`` is kept
+    as its own return value for backward compatibility with existing
+    callers; ``artifacts`` (added #78) carries the real `build_fusion(...)`
+    kwargs a real inference path needs.
     """
     require_torch()
     del seed  # no stochastic step depends on it -- see docstring
@@ -146,6 +163,13 @@ def run_fusion_curriculum(
         hidden_dim=hidden_dim, weight_floor=weight_floor, epochs=epochs,
         learning_rate=learning_rate,
     )
+    arch_params = {
+        "n_models": joint_latents.train.predictions.shape[1],
+        "context_dim": joint_latents.train.context.shape[-1],
+        "hidden_dim": hidden_dim, "weight_floor": weight_floor,
+        "lead_hours": list(DEFAULT_LEADS),
+    }
+    artifacts = FusionArtifacts(model=model, arch_params=arch_params)
 
     torch = require_torch()
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -161,4 +185,4 @@ def run_fusion_curriculum(
             completed_at=datetime.now(UTC),
         )
     )
-    return run, val_metrics, model
+    return run, val_metrics, model, artifacts

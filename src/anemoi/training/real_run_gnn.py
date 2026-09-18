@@ -654,5 +654,12 @@ def run_gnn_curriculum(
 
     assert val_metrics is not None
     x_mean, x_std, y_mean, y_std = stats
-    artifacts = RunArtifacts(model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std)
+    arch_params = {
+        "node_features": NODE_FEATURES, "edge_features": EDGE_FEATURES,
+        "hidden_dim": hidden_dim, "lead_hours": list(DEFAULT_LEADS),
+    }
+    artifacts = RunArtifacts(
+        model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
+        arch_params=arch_params,
+    )
     return run, val_metrics, artifacts

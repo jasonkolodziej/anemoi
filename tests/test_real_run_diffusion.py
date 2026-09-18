@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from anemoi.data.sources import Flavor
+from anemoi.models.base import DEFAULT_LEADS
 
 T_N_LEADS = 7
 
@@ -115,7 +116,7 @@ def test_run_diffusion_curriculum_uploads_a_checkpoint_and_registers_stage_b():
     )
     store = CheckpointStore(config, client=_FakeS3Client())
 
-    run, val_metrics, model = run_diffusion_curriculum(
+    run, val_metrics, model, artifacts = run_diffusion_curriculum(
         bundle, store, hidden_dim=8, n_layers=1, n_timesteps=5, epochs=2, n_ensemble_eval=2, seed=4,
     )
 
@@ -125,3 +126,7 @@ def test_run_diffusion_curriculum_uploads_a_checkpoint_and_registers_stage_b():
     assert run.results[0].checkpoint_uri.startswith("s3://anemoi-test/checkpoints/diffusion/")
     assert "track_error_12h_nm" in val_metrics.values
     assert model is not None
+    assert artifacts.arch_params == {
+        "latent_dim": 16, "hidden_dim": 8, "n_layers": 1, "n_timesteps": 5,
+        "lead_hours": list(DEFAULT_LEADS),
+    }

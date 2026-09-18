@@ -230,7 +230,7 @@ def test_run_lstm_curriculum_completes_both_stages_and_uploads_checkpoints():
 
     from anemoi.training.real_run import run_lstm_curriculum
 
-    run, val_metrics, _artifacts = run_lstm_curriculum(
+    run, val_metrics, artifacts = run_lstm_curriculum(
         tracks, store, seed=42, n_augment=1, hidden_dim=8,
     )
 
@@ -242,6 +242,17 @@ def test_run_lstm_curriculum_completes_both_stages_and_uploads_checkpoints():
         assert store.exists(result.checkpoint_uri.split("anemoi-test/", 1)[1])
     assert val_metrics.flavor is Flavor.GDAS_FINETUNE
     assert "track_error_12h_nm" in val_metrics.values
+
+    # #78: real inference needs these exact kwargs to reconstruct the
+    # trained model before load_state_dict, since only the state_dict
+    # itself gets checkpointed.
+    from anemoi.data.storm_relative import STORM_RELATIVE_COLUMNS
+    from anemoi.models.base import DEFAULT_LEADS
+
+    assert artifacts.arch_params == {
+        "input_dim": len(STORM_RELATIVE_COLUMNS), "hidden_dim": 8,
+        "lead_hours": list(DEFAULT_LEADS),
+    }
 
 
 # --- streaming (docs/streaming_dataloader.md) -------------------------------

@@ -51,6 +51,15 @@ class ModelVersion:
     #: None for Group 1 models themselves.
     latent_signature: str | None = None
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    #: Where this version's real trained weights live (`register`'s
+    #: ``checkpoint_uri`` argument) -- persisted here, not just mirrored to
+    #: MLflow (#78). Before this field existed, a real inference process
+    #: had no way to look up "given this registered version, where's its
+    #: checkpoint" without an MLflow client configured and reachable; local-
+    #: registry-only deployments (`ModelRegistry.mlflow_available is
+    #: False`, Scope v2.1 SS10.1's real degraded mode) had no way at all.
+    #: None for a version registered before this field existed.
+    checkpoint_uri: str | None = None
 
     def to_json(self) -> dict:
         data = asdict(self)
@@ -137,11 +146,13 @@ class ModelRegistry:
         output is a candidate for anything, so an ERA5-flavor artifact has no
         business in the registry at all.
 
-        ``checkpoint_uri``/``mlflow_run_id`` are optional and only affect the
-        MLflow mirror (below): the real `create_model_version` API needs a
-        real artifact ``source`` URI, so without one the mirror is skipped
-        rather than sent a fabricated placeholder. ``mlflow_run_id`` (from
-        `tracking.experiment_tracking.log_curriculum_stages`) links the
+        ``checkpoint_uri`` is stored on the returned `ModelVersion` (#78,
+        so a real inference process can look up where a version's weights
+        live without an MLflow client) and, together with ``mlflow_run_id``,
+        optionally mirrors to MLflow (below): the real `create_model_version`
+        API needs a real artifact ``source`` URI, so without one the mirror
+        is skipped rather than sent a fabricated placeholder. ``mlflow_run_id``
+        (from `tracking.experiment_tracking.log_curriculum_stages`) links the
         mirrored model version back to the real run that produced it, when
         one exists.
         """
@@ -168,6 +179,7 @@ class ModelRegistry:
             metrics=dict(metrics),
             tags=dict(tags or {}),
             latent_signature=latent_signature,
+            checkpoint_uri=checkpoint_uri,
         )
         versions.append(version)
         self._save()
