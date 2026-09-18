@@ -766,6 +766,16 @@ def run_pinn_curriculum(
             key = f"checkpoints/pinn/{stage.name}/{datetime.now(UTC):%Y%m%dT%H%M%S}.pt"
             checkpoint_uri = checkpoint_store.upload(local_path, key)
 
+            # Real inference needs this candidate too (module docstring
+            # note above, #78) -- uploaded from the same stage, same
+            # tempdir, right alongside the model it was trained for.
+            candidate_local_path = Path(tmpdir) / f"{stage.name}-candidate.pt"
+            torch.save(candidate_model.state_dict(), candidate_local_path)
+            candidate_key = (
+                f"checkpoints/pinn/{stage.name}/candidate-{datetime.now(UTC):%Y%m%dT%H%M%S}.pt"
+            )
+            candidate_checkpoint_uri = checkpoint_store.upload(candidate_local_path, candidate_key)
+
         run.record(
             StageResult(
                 stage_name=stage.name,
@@ -791,5 +801,6 @@ def run_pinn_curriculum(
     artifacts = RunArtifacts(
         model=model, candidate_model=candidate_model, env_mean=env_mean, env_std=env_std,
         arch_params=arch_params, candidate_arch_params=candidate_arch_params,
+        candidate_checkpoint_uri=candidate_checkpoint_uri,
     )
     return run, val_metrics, artifacts

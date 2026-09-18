@@ -120,6 +120,25 @@ def arch_params_tag(artifacts: object) -> str | None:
     return json.dumps(arch_params, sort_keys=True)
 
 
+def candidate_tags(artifacts: object) -> dict[str, str]:
+    """PINN-only tags for its candidate-generator LSTM (`training.real_run
+    .RunArtifacts.candidate_arch_params`/``.candidate_checkpoint_uri``) --
+    the second real model a real PINN inference loader needs, since
+    `models.pinn.PhysicsCorrector.encode` takes both the environment
+    vector AND the candidate's own forecast (#78). Empty dict (not a
+    tag with an empty value) for every other model, or a PINN version
+    that predates this being persisted.
+    """
+    tags: dict[str, str] = {}
+    candidate_arch_params = getattr(artifacts, "candidate_arch_params", None)
+    if candidate_arch_params:
+        tags["candidate_arch_params"] = json.dumps(candidate_arch_params, sort_keys=True)
+    candidate_checkpoint_uri = getattr(artifacts, "candidate_checkpoint_uri", None)
+    if candidate_checkpoint_uri:
+        tags["candidate_checkpoint_uri"] = candidate_checkpoint_uri
+    return tags
+
+
 def baseline_beaten(val_metrics: MetricSet | None) -> bool | None:
     """Real, threshold-derived (not invented) `RunTags.baseline_beaten`:
     whether this stage's real `nhc_consensus_beat_rate_48h` clears

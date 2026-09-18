@@ -29,7 +29,12 @@ from pathlib import Path
 from ..data.besttrack import Track
 from ..data.sources import Flavor
 from ..tracking.checkpoint_store import CheckpointStore
-from ..tracking.experiment_tracking import arch_params_tag, build_run_tags, log_curriculum_stages
+from ..tracking.experiment_tracking import (
+    arch_params_tag,
+    build_run_tags,
+    candidate_tags,
+    log_curriculum_stages,
+)
 from ..tracking.registry import DERIVED_MODELS, GROUP1_MODELS, ModelRegistry, latent_signature
 from .curriculum import CurriculumRun
 from .orchestrator import OrchestrationError, RunOutcome, Task
@@ -263,9 +268,11 @@ class RealOrchestratorRunner:
             execution_mode=task.execution_mode,
         )
         tag_dict = tags.to_dict() if tags else {}
-        arch_params = arch_params_tag(self.trained_artifacts.get(task.name))
+        artifacts = self.trained_artifacts.get(task.name)
+        arch_params = arch_params_tag(artifacts)
         if arch_params is not None:
             tag_dict["arch_params"] = arch_params
+        tag_dict.update(candidate_tags(artifacts))
         version = self.registry.register(
             task.name,
             run_id=f"orchestrator-{datetime.now(UTC):%Y%m%dT%H%M%S}",
