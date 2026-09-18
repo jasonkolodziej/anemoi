@@ -92,6 +92,62 @@ def build_live_transformer_x(
     return stack[:, :gh, :gw]
 
 
+def build_live_pinn_x(
+    track: Track, current: Fix, candidate_model, cache_dir: Path | str,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """PINN's real input: the environment-feature vector plus its
+    candidate-generator LSTM's own forecast, converted to absolute (lat,
+    lon, wind) -- `models.pinn.PhysicsCorrector.forward(environment,
+    candidate)` takes the candidate already in that space (module
+    docstring; mirrors `real_run_pinn._candidate_and_true_absolute`'s
+    training-time conversion, for one live window instead of a batch).
+
+    Unlike the other three gridded-field models, this needs a real,
+    already-loaded candidate LSTM (`real_inference.load_trained_pinn_candidate`)
+    as an argument rather than loading one itself -- building this
+    feature inherently requires running that model's forward pass, the
+    same way training runs the candidate before the outer corrector.
+
+    Returns ``None`` under the same conditions the training-time
+    builder skips a window for: no cached field for the current
+    position/time, a non-finite environment vector (a storm-centred box
+    entirely over land -- real ERA5 SST has no ocean pixel there at all,
+    see `data.features.area_mean`'s docstring), or too little real
+    history for the candidate's own input sequence.
+    """
+    import torch
+
+    from ..data.features import compute_environment_features
+    from .capacity_ablation import SEQUENCE_LENGTH
+    from .real_run import displacement_to_latlon
+
+    fields = _current_fields(track, current, cache_dir)
+    if fields is None:
+        return None
+    try:
+        env = compute_environment_features(fields).values
+    except ValueError:
+        return None
+
+    window = _current_window(track, current, SEQUENCE_LENGTH + 1)
+    if window is None:
+        return None
+
+    from ..data.storm_relative import storm_relative_sequence
+
+    x_track = storm_relative_sequence(window)
+    with torch.no_grad():
+        xt = torch.as_tensor(x_track[None], dtype=torch.float32)
+        pred_disp = candidate_model(xt).cpu().numpy()[0]
+
+    candidate_abs = np.zeros_like(pred_disp)
+    for li in range(pred_disp.shape[0]):
+        lat, lon = displacement_to_latlon(current.lat, current.lon, *pred_disp[li, :2])
+        candidate_abs[li] = [lat, lon, pred_disp[li, 2]]
+
+    return env, candidate_abs
+
+
 def build_live_gnn_x(
     track: Track, current: Fix, cache_dir: Path | str, stride: int | None = None,
 ) -> tuple[np.ndarray, MeshTopology] | None:
