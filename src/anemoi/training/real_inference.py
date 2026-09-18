@@ -128,6 +128,28 @@ def load_trained_model(name: str, version: ModelVersion, checkpoint_store: Check
     return model, spec
 
 
+def load_standardization_stats(version: ModelVersion) -> dict:
+    """Real standardisation stats (`tracking.experiment_tracking
+    .STANDARDIZATION_STAT_FIELDS`, whichever ``version`` actually
+    carries) decoded back into real numpy arrays -- a real inference
+    process needs the EXACT same mean/std training fit its inputs/
+    targets with, to standardise a live input correctly and un-
+    standardise a prediction back to real units. Empty dict for a
+    version that predates this being persisted, or one (fusion) whose
+    inputs/outputs are already absolute and were never standardised.
+    """
+    import numpy as np
+
+    from ..tracking.experiment_tracking import STANDARDIZATION_STAT_FIELDS
+
+    stats: dict[str, object] = {}
+    for field_name in STANDARDIZATION_STAT_FIELDS:
+        raw = version.tags.get(field_name)
+        if raw is not None:
+            stats[field_name] = np.array(json.loads(raw))
+    return stats
+
+
 def load_trained_pinn_candidate(version: ModelVersion, checkpoint_store: CheckpointStore):
     """PINN only: its candidate-generator LSTM, from the
     ``candidate_arch_params``/``candidate_checkpoint_uri`` tags (#80) --

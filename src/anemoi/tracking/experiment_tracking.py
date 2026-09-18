@@ -120,6 +120,33 @@ def arch_params_tag(artifacts: object) -> str | None:
     return json.dumps(arch_params, sort_keys=True)
 
 
+#: Every real standardisation-stat field any RunArtifacts/DiffusionArtifacts
+#: variant carries -- FusionArtifacts has none (its inputs/outputs are
+#: already absolute, no standardisation needed).
+STANDARDIZATION_STAT_FIELDS: tuple[str, ...] = (
+    "x_mean", "x_std", "y_mean", "y_std", "env_mean", "env_std", "z_mean", "z_std",
+)
+
+
+def standardization_tags(artifacts: object) -> dict[str, str]:
+    """JSON-encode whichever of ``artifacts``' real standardisation stats
+    are actually present (#78) -- a real inference process needs the
+    EXACT same mean/std training fit its inputs/targets with to
+    standardise a live input correctly and un-standardise a prediction
+    back to real units. These numpy arrays only ever lived in memory for
+    the training process that produced them until now; a value refit
+    independently later (even from the same tracks) would only
+    approximate the real ones a specific checkpoint's weights were
+    actually trained against.
+    """
+    tags: dict[str, str] = {}
+    for field_name in STANDARDIZATION_STAT_FIELDS:
+        value = getattr(artifacts, field_name, None)
+        if value is not None:
+            tags[field_name] = json.dumps(value.tolist())
+    return tags
+
+
 def candidate_tags(artifacts: object) -> dict[str, str]:
     """PINN-only tags for its candidate-generator LSTM (`training.real_run
     .RunArtifacts.candidate_arch_params`/``.candidate_checkpoint_uri``) --

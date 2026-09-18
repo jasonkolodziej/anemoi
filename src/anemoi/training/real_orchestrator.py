@@ -34,6 +34,7 @@ from ..tracking.experiment_tracking import (
     build_run_tags,
     candidate_tags,
     log_curriculum_stages,
+    standardization_tags,
 )
 from ..tracking.registry import DERIVED_MODELS, GROUP1_MODELS, ModelRegistry, latent_signature
 from .curriculum import CurriculumRun
@@ -273,6 +274,7 @@ class RealOrchestratorRunner:
         if arch_params is not None:
             tag_dict["arch_params"] = arch_params
         tag_dict.update(candidate_tags(artifacts))
+        tag_dict.update(standardization_tags(artifacts))
         version = self.registry.register(
             task.name,
             run_id=f"orchestrator-{datetime.now(UTC):%Y%m%dT%H%M%S}",

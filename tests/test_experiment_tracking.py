@@ -115,6 +115,26 @@ def test_candidate_tags_is_empty_for_non_pinn_models():
     assert et.candidate_tags(SimpleNamespace(arch_params={"hidden_dim": 8})) == {}
 
 
+def test_standardization_tags_json_encodes_real_numpy_arrays():
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    artifacts = SimpleNamespace(
+        x_mean=np.array([1.0, 2.0]), x_std=np.array([0.5, 0.5]),
+        y_mean=None, y_std=None, env_mean=None, env_std=None, z_mean=None, z_std=None,
+    )
+    tags = et.standardization_tags(artifacts)
+    assert tags == {"x_mean": "[1.0, 2.0]", "x_std": "[0.5, 0.5]"}
+
+
+def test_standardization_tags_is_empty_when_nothing_is_present():
+    from types import SimpleNamespace
+
+    assert et.standardization_tags(None) == {}
+    assert et.standardization_tags(SimpleNamespace()) == {}
+
+
 def test_build_run_tags_constructs_a_real_validated_runtags():
     stage = stage_b()
     tags = et.build_run_tags("lstm", stage, execution_mode=ExecutionMode.PARALLEL_GROUP1)
