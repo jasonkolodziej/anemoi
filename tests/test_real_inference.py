@@ -14,6 +14,7 @@ from anemoi.tracking.registry import ModelVersion, Stage
 from anemoi.training.real_inference import (
     MODEL_NAMES,
     InferenceLoadError,
+    load_standardization_stats,
     load_trained_model,
     load_trained_pinn_candidate,
 )
@@ -185,3 +186,22 @@ def test_load_trained_pinn_candidate_raises_without_the_candidate_tag():
     version = _make_version("pinn", _ARCH_PARAMS["pinn"], "s3://fake/pinn.pt")
     with pytest.raises(InferenceLoadError, match="candidate_arch_params"):
         load_trained_pinn_candidate(version, _store())
+
+
+def test_load_standardization_stats_round_trips_real_arrays():
+    import numpy as np
+
+    version = _make_version("lstm", _ARCH_PARAMS["lstm"], "s3://fake/lstm.pt")
+    version.tags["x_mean"] = json.dumps([1.0, 2.0, 3.0])
+    version.tags["x_std"] = json.dumps([0.5, 0.5, 0.5])
+
+    stats = load_standardization_stats(version)
+
+    assert set(stats) == {"x_mean", "x_std"}
+    assert np.array_equal(stats["x_mean"], np.array([1.0, 2.0, 3.0]))
+    assert np.array_equal(stats["x_std"], np.array([0.5, 0.5, 0.5]))
+
+
+def test_load_standardization_stats_is_empty_without_any_tags():
+    version = _make_version("fusion", _ARCH_PARAMS["fusion"], "s3://fake/fusion.pt")
+    assert load_standardization_stats(version) == {}

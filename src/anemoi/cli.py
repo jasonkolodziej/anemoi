@@ -258,6 +258,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         build_run_tags,
         candidate_tags,
         log_curriculum_stages,
+        standardization_tags,
     )
     from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ModelRegistry
@@ -347,6 +348,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     if arch_params is not None:
         tag_dict["arch_params"] = arch_params
     tag_dict.update(candidate_tags(artifacts))
+    tag_dict.update(standardization_tags(artifacts))
     version = registry.register(
         args.model,
         run_id=f"cli-{datetime.now(UTC):%Y%m%dT%H%M%S}",
