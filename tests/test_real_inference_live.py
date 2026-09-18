@@ -17,6 +17,7 @@ from anemoi.training.real_inference_live import (
     build_live_cnn_x,
     build_live_gnn_x,
     build_live_lstm_x,
+    build_live_pinn_x,
     build_live_transformer_x,
 )
 
@@ -138,3 +139,63 @@ def test_build_live_gnn_x_is_none_without_a_cached_field():
     track = make_track("AL011985", n=3)
     current = track.fixes[-1]
     assert build_live_gnn_x(track, current, "/nonexistent/cache") is None
+
+
+# --- PINN (needs a real, already-loaded candidate model too) ----------------
+
+
+@pytest.fixture
+def candidate_model():
+    from anemoi.models.lstm import build_lstm
+
+    model, _spec = build_lstm(input_dim=5, hidden_dim=8, lead_hours=(12, 24))
+    model.eval()
+    return model
+
+
+def test_build_live_pinn_x_returns_env_features_and_absolute_candidate(tmp_path, candidate_model):
+    from anemoi.data.features import FEATURE_NAMES
+
+    track = make_track("AL011985", n=SEQUENCE_LENGTH + 5)
+    current = track.fixes[-1]
+    cache_current_fix(tmp_path, track, current, shape=(41, 41))
+
+    result = build_live_pinn_x(track, current, candidate_model, tmp_path)
+
+    assert result is not None
+    env, candidate_abs = result
+    assert env.shape == (len(FEATURE_NAMES),)
+    assert np.all(np.isfinite(env))
+    assert candidate_abs.shape == (2, 3)  # lead_hours=(12, 24) on the fixture model
+    assert np.all(np.isfinite(candidate_abs))
+    # candidate_abs is a real (lat, lon) near current, not a raw displacement
+    assert abs(candidate_abs[0, 0] - current.lat) < 5.0
+    assert abs(candidate_abs[0, 1] - current.lon) < 5.0
+
+
+def test_build_live_pinn_x_is_none_without_a_cached_field(candidate_model):
+    track = make_track("AL011985", n=SEQUENCE_LENGTH + 5)
+    current = track.fixes[-1]
+    assert build_live_pinn_x(track, current, candidate_model, "/nonexistent/cache") is None
+
+
+def test_build_live_pinn_x_is_none_when_the_storm_is_entirely_over_land(tmp_path, candidate_model):
+    """Real ERA5 sea_surface_temperature is NaN over land -- a storm box
+    entirely over land has no real ocean pixel to average at all
+    (data.features.area_mean's docstring). Same skip, don't crash
+    contract build_pinn_samples already uses for training."""
+    track = make_track("AL011985", n=SEQUENCE_LENGTH + 5)
+    current = track.fixes[-1]
+    task = FetchTask(storm_id=track.storm_id, valid_time=current.valid_time,
+                      lat=current.lat, lon=current.lon)
+    land_fields = GriddedFields(
+        valid_time=current.valid_time, flavor=Flavor.ERA5_PRETRAIN,
+        u200=np.full((41, 41), 15.0), v200=np.full((41, 41), 5.0),
+        u850=np.full((41, 41), 10.0), v850=np.full((41, 41), 3.0),
+        z500=np.full((41, 41), 5750.0), rh700=np.full((41, 41), 62.0),
+        t700=np.full((41, 41), 281.0), mslp=np.full((41, 41), 1012.0),
+        sst=np.full((41, 41), np.nan), ohc=np.full((41, 41), 60.0),
+    )
+    save_cached_fields(cache_path(tmp_path, task), land_fields, task)
+
+    assert build_live_pinn_x(track, current, candidate_model, tmp_path) is None
