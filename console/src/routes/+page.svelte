@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { listStorms, getSchedule } from '$lib/api/endpoints';
+	import { listStorms, getSchedule, health } from '$lib/api/endpoints';
 	import { ApiError } from '$lib/api/client';
 	import type { StormSummary, CyclePlanOut } from '$lib/api/types';
 	import StormCard from '$lib/components/anemoi/StormCard.svelte';
@@ -10,14 +10,18 @@
 	let storms = $state<StormSummary[] | null>(null);
 	let plans = $state<CyclePlanOut[] | null>(null);
 	let error = $state<string | null>(null);
+	// Defaults to the safe assumption (demo) until /v1/health actually
+	// answers -- never claims "real" before confirming it.
+	let stateMode = $state<'demo' | 'real'>('demo');
 
 	onMount(async () => {
 		try {
 			const today = cycleLabel(new Date()).slice(0, 8); // YYYYMMDD
 			const isoDate = `${today.slice(0, 4)}-${today.slice(4, 6)}-${today.slice(6, 8)}`;
-			const [s, sched] = await Promise.all([listStorms(), getSchedule(isoDate)]);
+			const [s, sched, h] = await Promise.all([listStorms(), getSchedule(isoDate), health()]);
 			storms = s;
 			plans = sched.plans;
+			stateMode = h.state_mode;
 		} catch (e) {
 			error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
 		}
@@ -27,7 +31,11 @@
 <div class="mx-auto max-w-6xl px-6 py-8">
 	<header class="mb-8">
 		<h1 class="font-display text-2xl font-semibold text-text">Active storms</h1>
-		<p class="mt-1 text-sm text-text-muted">Synthetic demo season — anemoi.data.synthetic.</p>
+		{#if stateMode === 'real'}
+			<p class="mt-1 text-sm text-text-muted">Real HURDAT2 storms — anemoi.api.real_state.</p>
+		{:else}
+			<p class="mt-1 text-sm text-text-muted">Synthetic demo season — anemoi.data.synthetic.</p>
+		{/if}
 	</header>
 
 	{#if error}
@@ -37,7 +45,9 @@
 	{:else if storms === null}
 		<p class="text-sm text-text-faint">Loading storms…</p>
 	{:else if storms.length === 0}
-		<p class="text-sm text-text-faint">No storms in the current demo season.</p>
+		<p class="text-sm text-text-faint">
+			{stateMode === 'real' ? 'No storms in the real HURDAT2 archive window.' : 'No storms in the current demo season.'}
+		</p>
 	{:else}
 		<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
 			{#each storms as storm (storm.storm_id)}

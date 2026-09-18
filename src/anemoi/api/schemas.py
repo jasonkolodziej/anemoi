@@ -248,3 +248,9 @@ class HealthOut(BaseModel):
     api_version: str
     anemoi_version: str
     torch_available: bool
+    #: "demo" (synthetic storms/models, always available) or "real"
+    #: (real HURDAT2 storms + real trained models via #78/#85) -- which
+    #: `deps.state_dependency` is currently serving, so a client (the
+    #: console frontend) can label data honestly instead of always
+    #: saying "demo" even once real state is opted into.
+    state_mode: str

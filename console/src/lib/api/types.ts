@@ -216,6 +216,8 @@ export interface HealthOut {
 	api_version: string;
 	anemoi_version: string;
 	torch_available: boolean;
+	/** "demo" (synthetic, always available) or "real" (real HURDAT2 storms + real trained models). */
+	state_mode: 'demo' | 'real';
 }
 
 export interface StreamMessage {
