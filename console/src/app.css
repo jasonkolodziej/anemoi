@@ -10,6 +10,21 @@
  * palette. If a colour identifies a model, it appears nowhere else; if a
  * colour is UI chrome, it never appears on a track line or model badge.
  * `lib/branding.ts` is the single source of truth these are copied from.
+ *
+ * Values below are OKLCH -- perceptually uniform, and the format Tailwind
+ * v4's own default palette ships in. Each keeps its original hex as a
+ * trailing comment; the two are the same colour; nothing shifted in the
+ * conversion (verified round-trip, hex -> oklch -> hex, zero drift).
+ *
+ * `--color-status-*` is new: the two structural-only colours were sitting
+ * unused everywhere except the logo glyph, and the Model Pantheon's four
+ * states (Online / Training / Degraded / Offline, Brief §8.2) needed exactly
+ * two more colours than the system already had. These are aliases, not new
+ * hues -- the "only saturated hues" rule above still holds. `--color-action`
+ * covers Online since a model quietly working is the expected case, not one
+ * that needs its own saturated signal; Offline reuses the faintest neutral
+ * for the same reason. A status colour still never appears on a track line
+ * or model badge, same rule as the two tokens it's built from.
  */
 @theme {
 	--font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
@@ -19,31 +34,39 @@
 	/* Neutral scale -- the console's actual palette. Blue-slate, not pure
 	   black: warmer under long viewing, and it keeps the god colours (several
 	   of which are themselves cool) from fighting the background. */
-	--color-bg: #0a0e14;
-	--color-surface: #10161f;
-	--color-surface-raised: #161d29;
-	--color-border: #212b38;
-	--color-border-strong: #2e3b4d;
-	--color-text: #e7ecf3;
-	--color-text-muted: #8b96a8;
-	--color-text-faint: #5b6576;
+	--color-bg: oklch(16.2% 0.014 258.36); /* #0a0e14 */
+	--color-surface: oklch(19.9% 0.020 258.33); /* #10161f */
+	--color-surface-raised: oklch(23.0% 0.026 261.02); /* #161d29 */
+	--color-border: oklch(28.6% 0.028 255.17); /* #212b38 */
+	--color-border-strong: oklch(34.9% 0.036 256.60); /* #2e3b4d */
+	--color-text: oklch(94.1% 0.011 256.70); /* #e7ecf3 */
+	--color-text-muted: oklch(67.0% 0.030 260.30); /* #8b96a8 */
+	--color-text-faint: oklch(50.4% 0.030 261.06); /* #5b6576 */
 
 	/* The one interactive hue outside the god set. */
-	--color-action: #60a5fa;
-	--color-action-strong: #93c5fd;
+	--color-action: oklch(71.4% 0.143 254.62); /* #60a5fa */
+	--color-action-strong: oklch(80.9% 0.096 251.81); /* #93c5fd */
 
 	/* Wind gods (Anemoi-Core, except Skiron/Spread) -- Branding Brief §5.2. */
-	--color-boreas: #06b6d4;
-	--color-notus: #f59e0b;
-	--color-eurus: #ef4444;
-	--color-zephyrus: #10b981;
-	--color-kaikias: #8b5cf6;
-	--color-skiron: #ec4899;
-	--color-fusion: #f8fafc;
+	--color-boreas: oklch(71.5% 0.126 215.22); /* #06b6d4 */
+	--color-notus: oklch(76.9% 0.165 70.08); /* #f59e0b */
+	--color-eurus: oklch(63.7% 0.208 25.33); /* #ef4444 */
+	--color-zephyrus: oklch(69.6% 0.149 162.48); /* #10b981 */
+	--color-kaikias: oklch(60.6% 0.219 292.72); /* #8b5cf6 */
+	--color-skiron: oklch(65.6% 0.212 354.31); /* #ec4899 */
+	--color-fusion: oklch(98.4% 0.003 247.86); /* #f8fafc */
 
 	/* Structural-only (wind-rose scaffolding). Never a model colour. */
-	--color-euronotus: #fb923c;
-	--color-lips: #a3e635;
+	--color-euronotus: oklch(75.8% 0.159 55.93); /* #fb923c */
+	--color-lips: oklch(84.9% 0.207 128.85); /* #a3e635 */
+
+	/* Model Pantheon status (§8.2) -- aliases onto the tokens above, not new
+	   hues. Online -> the existing action blue; Training -> Lips; Degraded ->
+	   Euronotus; Offline -> the faintest neutral. */
+	--color-status-online: var(--color-action);
+	--color-status-training: var(--color-lips);
+	--color-status-degraded: var(--color-euronotus);
+	--color-status-offline: var(--color-text-faint);
 
 	--radius-sm: 0.25rem;
 	--radius-md: 0.375rem;
