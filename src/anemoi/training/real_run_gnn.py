@@ -45,6 +45,7 @@ from pathlib import Path
 import numpy as np
 
 from ..data.besttrack import Track, WorkingTrackNoise
+from ..data.features import sanitize_field_pixels
 from ..data.gridded_cache import FetchTask, cache_path, load_cached_fields
 from ..data.sources import Flavor
 from ..data.splits import Split, assign_splits, filter_tracks
@@ -119,15 +120,31 @@ def build_mesh_topology(shape: tuple[int, int], stride: int = GNN_STRIDE) -> Mes
     )
 
 
-def _node_features(fields, topo: MeshTopology) -> np.ndarray:
-    """(n_nodes, NODE_FEATURES) for one sample's cached fields."""
+def _node_features(fields, topo: MeshTopology) -> np.ndarray | None:
+    """(n_nodes, NODE_FEATURES) for one sample's cached fields, or ``None``
+    if any of `GNN_FIELD_NAMES` (real ERA5 ``sst``/``ohc`` are NaN over
+    land) is entirely NaN for this window -- the caller must skip it, the
+    same contract `real_run_cnn._sanitized_channel_stack`/`real_run_
+    transformer._sanitized_channel_stack` use. Each field is sanitized via
+    `data.features.sanitize_field_pixels` (NaN pixels filled with that
+    field's own real spatial mean) once per channel, *before* the per-node
+    ``[row, col]`` lookup below, so a land node reads a real value instead
+    of NaN -- see that function's docstring for why an unhandled NaN here
+    would otherwise corrupt this whole stage's online standardization
+    statistics, not just this one window."""
     nh, nw = len(topo.rows), len(topo.cols)
     crow, ccol = topo.rows[nh // 2], topo.cols[nw // 2]
+    sanitized: dict[str, np.ndarray] = {}
+    for name in GNN_FIELD_NAMES:
+        field = sanitize_field_pixels(getattr(fields, name))
+        if field is None:
+            return None
+        sanitized[name] = field
     out = np.empty((topo.n_nodes, NODE_FEATURES), dtype=np.float32)
     for r, row in enumerate(topo.rows):
         for c, col in enumerate(topo.cols):
             nid = r * nw + c
-            values = [getattr(fields, name)[row, col] for name in GNN_FIELD_NAMES]
+            values = [sanitized[name][row, col] for name in GNN_FIELD_NAMES]
             out[nid, : len(GNN_FIELD_NAMES)] = values
             out[nid, len(GNN_FIELD_NAMES)] = row - crow
             out[nid, len(GNN_FIELD_NAMES) + 1] = col - ccol
@@ -188,7 +205,10 @@ def build_gnn_samples(
                 "-- cache was built with inconsistent box_deg"
             )
 
-        x_rows.append(_node_features(fields, topo))
+        node_features = _node_features(fields, topo)
+        if node_features is None:
+            continue
+        x_rows.append(node_features)
         y_rows.append(sw.y)
         mask_rows.append(sw.mask)
         base_lat_rows.append(sw.current.lat)
@@ -396,6 +416,7 @@ def train_gnn_stage_streaming(
         OnlineMeanStd,
         WindowDataset,
         filter_windows_with_cache,
+        filter_windows_with_finite_fields,
         make_dataloader,
     )
 
@@ -405,16 +426,19 @@ def train_gnn_stage_streaming(
     torch = require_torch()
     device = device or get_device()
 
-    train_windows = filter_windows_with_cache(
+    raw_train_windows = filter_windows_with_cache(
         list(iter_stage_windows(train_tracks, rng, n_augment)), cache_dir,
     )
-    val_windows = filter_windows_with_cache(
+    train_windows = filter_windows_with_finite_fields(raw_train_windows, cache_dir, GNN_FIELD_NAMES)
+    raw_val_windows = filter_windows_with_cache(
         list(iter_stage_windows(val_tracks, rng, 1)), cache_dir,
     )
+    val_windows = filter_windows_with_finite_fields(raw_val_windows, cache_dir, GNN_FIELD_NAMES)
     if not train_windows or not val_windows:
         raise ValueError(
             f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
-            f"{cache_dir} -- has data.era5_cache/data.gdas_cache fetched anything yet?"
+            f"{cache_dir} -- has data.era5_cache/data.gdas_cache fetched anything yet, or "
+            "were every matched window's fields entirely NaN (storms entirely over land)?"
         )
 
     cache_dir = Path(cache_dir)

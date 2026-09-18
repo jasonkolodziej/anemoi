@@ -232,6 +232,52 @@ def test_train_gnn_stage_streaming_runs_and_produces_val_metrics(tmp_path):
 
 
 @pytest.mark.torch
+def test_train_gnn_stage_streaming_does_not_produce_nan_loss_with_a_land_touching_window(tmp_path):
+    """GNN's analog of `test_real_run_cnn`'s same-named test -- real bug
+    found re-verifying the num_workers fix on the VM (2026-09-17): a NaN
+    pixel (real ERA5 sst over land) reaching a mesh node's raw feature,
+    then `training.streaming.OnlineMeanStd`'s plain running mean,
+    corrupted x_mean/x_std to NaN permanently for the whole stage.
+    Confirmed via a real MLflow metrics query against a real
+    full-schedule run: GNN came back with ``nan`` train/val loss and
+    every downstream metric."""
+    import dataclasses
+
+    from anemoi.models.gnn import build_gnn
+    from anemoi.training.curriculum import stage_a
+    from anemoi.training.real_run_gnn import train_gnn_stage_streaming
+
+    train_track = make_track("AL011985", season=1985, n=26, seed=0)
+    val_tracks = [make_track("AL012020", season=2020, n=26, seed=1)]
+    cache_all_fixes(tmp_path, train_track, Flavor.ERA5_PRETRAIN)
+    cache_all_fixes(tmp_path, val_tracks[0], Flavor.ERA5_PRETRAIN)
+
+    poisoned_fix = train_track.fixes[5]
+    task = _task_for(train_track, poisoned_fix)
+    poisoned = dataclasses.replace(
+        make_fields(poisoned_fix.valid_time, Flavor.ERA5_PRETRAIN), sst=np.full((41, 41), np.nan),
+    )
+    save_cached_fields(cache_path(tmp_path, task), poisoned, task)
+
+    leads = (12, 24, 36, 48, 72, 96, 120)
+    model, _spec = build_gnn(
+        node_features=NODE_FEATURES, edge_features=EDGE_FEATURES,
+        hidden_dim=16, n_layers=2, lead_hours=leads,
+    )
+    stage = stage_a(epochs=2, learning_rate=1e-2)
+    rng = np.random.default_rng(5)
+
+    _model, train_loss, val_loss, val_metrics, stats = train_gnn_stage_streaming(
+        model, stage, [train_track], val_tracks, tmp_path, rng, n_augment=1, batch_size=4,
+    )
+    assert np.isfinite(train_loss)
+    assert np.isfinite(val_loss)
+    assert all(np.isfinite(v) for v in val_metrics.values.values())
+    x_mean, x_std, _y_mean, _y_std = stats
+    assert np.all(np.isfinite(x_mean)) and np.all(np.isfinite(x_std))
+
+
+@pytest.mark.torch
 def test_train_gnn_stage_streaming_raises_on_empty_cache(tmp_path):
     from anemoi.models.gnn import build_gnn
     from anemoi.training.curriculum import stage_a

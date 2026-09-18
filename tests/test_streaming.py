@@ -20,6 +20,7 @@ from anemoi.training.streaming import (
     OnlineMeanStd,
     WindowDataset,
     filter_windows_with_cache,
+    filter_windows_with_finite_fields,
     iter_dataset_in_batches,
 )
 
@@ -356,3 +357,81 @@ def test_filter_windows_with_cache_empty_when_nothing_cached(tmp_path):
         ),
     ]
     assert filter_windows_with_cache(windows, tmp_path) == []
+
+
+# --- filter_windows_with_finite_fields ---------------------------------------
+#
+# CNN/Transformer/GNN's raw-pixel analogue of the area_mean/PINN fix (#67):
+# real ERA5 sst/ohc are NaN over land, and unlike PINN's area-mean scalar,
+# these three models feed every pixel into the model directly -- an unhandled
+# NaN pixel corrupts `OnlineMeanStd`'s running stats permanently for the
+# whole stage, not just the window that touched land (confirmed via a real
+# MLflow query against a real full-schedule VM run, 2026-09-17: CNN/
+# Transformer/GNN/diffusion all came back with `nan` loss/metrics while
+# LSTM/PINN, neither of which touches raw pixels the same way, were fine).
+
+
+def test_filter_windows_with_finite_fields_drops_only_the_all_nan_window(tmp_path):
+    from datetime import UTC, datetime
+
+    from anemoi.data.besttrack import Fix, TrackQuality
+    from anemoi.data.features import GriddedFields
+    from anemoi.data.gridded_cache import FetchTask, cache_path, save_cached_fields
+    from anemoi.data.sources import Flavor
+    from anemoi.training.real_run import StageWindow
+
+    def make_fix(hour: int) -> Fix:
+        return Fix(
+            storm_id="AL011985", valid_time=datetime(1985, 8, 1, hour, tzinfo=UTC),
+            lat=20.0, lon=-60.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+            quality=TrackQuality.FINAL,
+        )
+
+    ocean_fix, coastal_fix, land_fix = make_fix(0), make_fix(6), make_fix(12)
+    grid = lambda v: np.full((5, 5), v)  # noqa: E731
+
+    def save(fix, sst):
+        fields = GriddedFields(
+            valid_time=fix.valid_time, flavor=Flavor.ERA5_PRETRAIN,
+            u200=grid(1.0), v200=grid(1.0), u850=grid(1.0), v850=grid(1.0), z500=grid(1.0),
+            rh700=grid(1.0), t700=grid(1.0), mslp=grid(1.0), sst=sst, ohc=grid(1.0),
+        )
+        task = FetchTask(storm_id=fix.storm_id, valid_time=fix.valid_time, lat=fix.lat, lon=fix.lon)
+        save_cached_fields(cache_path(tmp_path, task), fields, task)
+
+    coastal_sst = grid(28.0)
+    coastal_sst[:2, :] = np.nan  # partial land -- still salvageable
+    save(ocean_fix, grid(28.0))  # fully ocean
+    save(coastal_fix, coastal_sst)  # partial land
+    save(land_fix, grid(np.nan))  # entirely land -- must be dropped
+
+    def make_window(fix: Fix) -> StageWindow:
+        return StageWindow(
+            storm_id="AL011985", window=(fix,), current=fix,
+            y=np.zeros((1, 3)), mask=np.array([True]),
+        )
+
+    windows = [make_window(fix) for fix in (ocean_fix, coastal_fix, land_fix)]
+
+    kept = filter_windows_with_finite_fields(windows, tmp_path, ("sst",))
+    assert {sw.current.valid_time for sw in kept} == {ocean_fix.valid_time, coastal_fix.valid_time}
+
+
+def test_filter_windows_with_finite_fields_empty_when_nothing_cached(tmp_path):
+    from datetime import UTC, datetime
+
+    from anemoi.data.besttrack import Fix, TrackQuality
+    from anemoi.training.real_run import StageWindow
+
+    fix = Fix(
+        storm_id="AL011985", valid_time=datetime(1985, 8, 1, tzinfo=UTC),
+        lat=20.0, lon=-60.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+        quality=TrackQuality.FINAL,
+    )
+    windows = [
+        StageWindow(
+            storm_id="AL011985", window=(fix,), current=fix,
+            y=np.zeros((1, 3)), mask=np.array([True]),
+        ),
+    ]
+    assert filter_windows_with_finite_fields(windows, tmp_path, ("sst",)) == []

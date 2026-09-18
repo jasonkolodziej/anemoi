@@ -164,10 +164,11 @@ def _extract_for_tracks(
     device=None,
 ) -> JointLatentSamples:
     from ..data.features import compute_environment_features
-    from .real_run_cnn import CNN_FIELD_NAMES
+    from .real_run_cnn import _sanitized_channel_stack as _cnn_channel_stack
     from .real_run_gnn import _node_features, batch_graph, build_mesh_topology
     from .real_run_pinn import PinnStageSamples, _candidate_and_true_absolute
-    from .real_run_transformer import GRID_SIZE, TRANSFORMER_FIELD_NAMES
+    from .real_run_transformer import GRID_SIZE
+    from .real_run_transformer import _sanitized_channel_stack as _trf_channel_stack
 
     torch = require_torch()
     device = device or get_device()
@@ -213,12 +214,27 @@ def _extract_for_tracks(
         elif field_shape != shape:
             continue  # ragged cached field shape -- skip this one row, not the whole extraction
 
+        # Real ERA5 fields (sst/ohc) can be NaN over land -- CNN/Transformer's
+        # channel stacks and GNN's node features all need the same
+        # sanitize-or-skip handling `real_run_cnn`/`real_run_transformer`/
+        # `real_run_gnn`'s own build paths use (see `data.features
+        # .sanitize_field_pixels`'s docstring), reusing their exact helpers
+        # here rather than a third copy of the same NaN-handling logic.
+        cnn_stack = _cnn_channel_stack(fields)
+        trf_stack = _trf_channel_stack(fields)
+        node_features = _node_features(fields, topo)
+        if cnn_stack is None or trf_stack is None or node_features is None:
+            continue
+        try:
+            env = compute_environment_features(fields).values
+        except ValueError:
+            continue  # non-finite env feature (storm entirely over land) -- skip, don't crash
+
         lstm_x_rows.append(storm_relative_sequence(sw.window))
-        cnn_x_rows.append(np.stack([getattr(fields, name) for name in CNN_FIELD_NAMES]))
-        trf_stack = np.stack([getattr(fields, name) for name in TRANSFORMER_FIELD_NAMES])
+        cnn_x_rows.append(cnn_stack)
         trf_x_rows.append(trf_stack[:, :gh, :gw])
-        gnn_x_rows.append(_node_features(fields, topo))
-        env_rows.append(compute_environment_features(fields).values)
+        gnn_x_rows.append(node_features)
+        env_rows.append(env)
         cand_track_rows.append(storm_relative_sequence(sw.window))
         y_rows.append(sw.y)
         mask_rows.append(sw.mask)

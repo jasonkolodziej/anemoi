@@ -21,6 +21,7 @@ from anemoi.data.features import (
     emanuel_potential_intensity,
     inner_core_moisture,
     potential_intensity,
+    sanitize_field_pixels,
 )
 from anemoi.data.sources import Flavor
 from anemoi.data.splits import (
@@ -159,6 +160,43 @@ def test_compute_environment_features_succeeds_with_partial_land_coverage():
     fs = compute_environment_features(coastal_fields)  # must not raise
     assert np.all(np.isfinite(fs.values))
     assert fs["sst_c"] == pytest.approx(area_mean(sst))
+
+
+# --- sanitize_field_pixels: CNN/Transformer/GNN's raw-pixel NaN fix ----------
+#
+# area_mean's fix (above) only helps PINN, which reduces a box to one scalar.
+# CNN/Transformer/GNN feed every pixel directly into the model -- a real,
+# separate bug found re-verifying the num_workers fix on the VM (2026-09-17):
+# a real full-schedule run produced `nan` train/val loss for CNN, Transformer,
+# GNN, and diffusion (conditioned on their now NaN-weighted latents), while
+# LSTM/PINN (neither touches raw pixels the same way) came back with real
+# finite numbers in the same run -- confirmed via a real MLflow metrics query,
+# not assumed. Root cause: a NaN pixel reaches `training.streaming
+# .OnlineMeanStd`'s plain (non-NaN-aware) running mean during the online
+# standardization pass, which corrupts x_mean/x_std *permanently* for that
+# whole stage, not just the one window that touched land.
+
+
+def test_sanitize_field_pixels_fills_nan_with_the_fields_own_spatial_mean():
+    field = np.full((41, 41), 28.0)
+    field[:20, :] = np.nan  # "land" strip
+    result = sanitize_field_pixels(field)
+    assert result is not None
+    assert np.all(np.isfinite(result))
+    assert result[0, 0] == pytest.approx(np.nanmean(field))  # land pixel filled
+    assert result[40, 40] == pytest.approx(28.0)  # real ocean pixel untouched
+
+
+def test_sanitize_field_pixels_is_a_no_op_when_nothing_is_nan():
+    rng = np.random.default_rng(3)
+    field = rng.normal(loc=10.0, scale=3.0, size=(41, 41))
+    result = sanitize_field_pixels(field)
+    assert result is field  # returned unchanged, not merely equal
+
+
+def test_sanitize_field_pixels_returns_none_when_the_whole_field_is_nan():
+    field = np.full((41, 41), np.nan)
+    assert sanitize_field_pixels(field) is None
 
 
 def _radial_gradient_fields(*, center_rh: float, edge_rh: float, shape=(41, 41)) -> GriddedFields:
