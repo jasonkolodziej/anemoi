@@ -1,12 +1,15 @@
 <script lang="ts">
-	import { cn } from '$lib/utils';
-	import type { HTMLAttributes } from 'svelte/elements';
-	interface Props extends HTMLAttributes<HTMLTableCellElement> {
-		class?: string;
-	}
-	let { class: className, children, ...rest }: Props = $props();
+	import { cn, type WithElementRef } from "$lib/utils.js";
+	import type { HTMLTdAttributes } from "svelte/elements";
+
+	let {
+		ref = $bindable(null),
+		class: className,
+		children,
+		...restProps
+	}: WithElementRef<HTMLTdAttributes> = $props();
 </script>
 
-<td class={cn('px-3 py-2.5 align-middle text-text', className)} {...rest}>
+<td bind:this={ref} data-slot="table-cell" class={cn("p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0", className)} {...restProps}>
 	{@render children?.()}
 </td>

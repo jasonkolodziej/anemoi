@@ -17,6 +17,7 @@
     "@sveltejs/kit": "^2.70.3",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/table-core": "^9.2.4",
     "svelte": "^5.57.0",
     "svelte-check": "^4.7.6",
     "tailwindcss": "^4.3.3",
@@ -24,10 +25,12 @@
     "vite": "^8.3.0"
   },
   "dependencies": {
+    "@lucide/svelte": "^1.46.0",
+    "@tanstack/svelte-table": "^9.2.4",
     "bits-ui": "^1.8.0",
     "clsx": "^2.1.1",
-    "@lucide/svelte": "^1.46.0",
     "tailwind-merge": "^2.6.1",
     "tailwind-variants": "^0.3.1"
-  }
+  },
+  "packageManager": "pnpm@12.4.2+sha512.08adc6613180275c7c9edada39dcf08c9c61ad4e7eaf330a4f3461f102b0f907423454d117f98e72d47fef0616070644d7bffc973a6a57f5090a6d7c368b07c9"
 }
