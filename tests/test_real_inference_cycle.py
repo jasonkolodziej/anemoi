@@ -78,36 +78,42 @@ def cache_current_fix(cache_dir, track: Track, fix: Fix, shape=(41, 41)) -> None
     save_cached_fields(cache_path(cache_dir, task), fields, task)
 
 
+def _upload_state_dict(model, name, store, tmp_path, suffix=""):
+    import torch
+
+    local_path = tmp_path / f"{name}{suffix}-det-fn-test.pt"
+    torch.save(model.state_dict(), local_path)
+    return store.upload(local_path, f"checkpoints/{name}/B/test{suffix}.pt")
+
+
 def _register_real_version(
-    name, build_kwargs, x_shape, registry, store, tmp_path, stage=Stage.PRODUCTION,
+    name, build_kwargs, x_shape, registry, store, tmp_path,
+    stage=Stage.PRODUCTION, extra_tags=None, n_leads=7, latent_signature=None,
 ):
     """Real end-to-end registration: build a real (untrained -- weight
     quality doesn't matter for testing the wiring) model, upload its real
     state_dict, register it with real arch_params + real-shaped
     standardisation stats, promote to ``stage``."""
-    import torch
-
     from anemoi.training.real_inference import _builder
 
     model, _spec = _builder(name)(**build_kwargs)
-    local_path = tmp_path / f"{name}-det-fn-test.pt"
-    torch.save(model.state_dict(), local_path)
-    checkpoint_uri = store.upload(local_path, f"checkpoints/{name}/B/test.pt")
+    checkpoint_uri = _upload_state_dict(model, name, store, tmp_path)
 
-    n_leads = 7
-    tags = {
-        "arch_params": json.dumps(build_kwargs),
-        "x_mean": json.dumps(np.zeros(x_shape).tolist()),
-        "x_std": json.dumps(np.ones(x_shape).tolist()),
-        "y_mean": json.dumps(np.zeros((n_leads, 3)).tolist()),
-        "y_std": json.dumps(np.ones((n_leads, 3)).tolist()),
-    }
+    tags = {"arch_params": json.dumps(build_kwargs)}
+    if x_shape is not None:
+        tags["x_mean"] = json.dumps(np.zeros(x_shape).tolist())
+        tags["x_std"] = json.dumps(np.ones(x_shape).tolist())
+        tags["y_mean"] = json.dumps(np.zeros((n_leads, 3)).tolist())
+        tags["y_std"] = json.dumps(np.ones((n_leads, 3)).tolist())
+    tags.update(extra_tags or {})
+
     version = registry.register(
         name, run_id=f"test-{name}", input_flavor=Flavor.GDAS_FINETUNE,
         metrics={"track_error_48h_nm": 100.0 + hash(name) % 50}, tags=tags,
-        checkpoint_uri=checkpoint_uri,
+        checkpoint_uri=checkpoint_uri, latent_signature=latent_signature,
     )
     registry.transition(name, version.version, stage)
+    return model
 
 
 @pytest.mark.torch
@@ -162,6 +168,101 @@ def test_build_real_deterministic_fn_combines_all_four_real_models(tmp_path):
     assert np.all(np.isfinite(forecast.winds_kt))
     assert set(forecast.contributors) == {"lstm", "cnn", "transformer", "gnn"}
     assert pytest.approx(sum(forecast.contributors.values()), abs=1e-6) == 1.0
+
+
+@pytest.mark.torch
+def test_build_real_deterministic_fn_uses_the_real_learned_fusion_with_all_five(tmp_path):
+    """Once all five real Group 1 predictions are available, the real
+    ConsensusFusion model must be used instead of the non-learned
+    fallback -- confirmed by the contributors summing to 1 (fusion's own
+    softmax-normalised weights, same as the fallback's own guarantee)
+    and containing exactly the five real model names, not the fallback
+    path's differently-shaped output."""
+    from anemoi.data.features import FEATURE_NAMES
+    from anemoi.data.storm_relative import STORM_RELATIVE_COLUMNS
+    from anemoi.inference.scheduler import CyclePlan
+    from anemoi.models.lstm import build_lstm
+
+    track = make_track("AL011985", n=SEQUENCE_LENGTH + 5)
+    current = track.fixes[-1]
+    cache_current_fix(tmp_path, track, current)
+
+    registry = ModelRegistry(tmp_path / "registry")
+    store = _store()
+    leads = [12, 24, 36, 48, 72, 96, 120]
+
+    _register_real_version(
+        "lstm", {"input_dim": 5, "hidden_dim": 8, "lead_hours": leads},
+        x_shape=(5,), registry=registry, store=store, tmp_path=tmp_path,
+    )
+    _register_real_version(
+        "cnn", {"in_channels": len(CNN_FIELD_NAMES), "latent_dim": 8, "lead_hours": leads},
+        x_shape=(1, len(CNN_FIELD_NAMES), 1, 1), registry=registry, store=store, tmp_path=tmp_path,
+    )
+    _register_real_version(
+        "transformer", {
+            "n_variables": len(TRANSFORMER_FIELD_NAMES), "grid_size": list(GRID_SIZE),
+            "d_model": 8, "dropout": 0.0, "lead_hours": leads,
+        },
+        x_shape=(1, len(TRANSFORMER_FIELD_NAMES), 1, 1),
+        registry=registry, store=store, tmp_path=tmp_path,
+    )
+    _register_real_version(
+        "gnn", {
+            "node_features": NODE_FEATURES, "edge_features": 3, "hidden_dim": 8,
+            "lead_hours": leads,
+        },
+        x_shape=(1, 1, NODE_FEATURES), registry=registry, store=store, tmp_path=tmp_path,
+    )
+
+    # PINN: a real candidate LSTM checkpoint, then the corrector itself
+    # tagged with the candidate's real uri/arch_params + real env stats.
+    candidate_model, _spec = build_lstm(
+        input_dim=len(STORM_RELATIVE_COLUMNS), hidden_dim=6, lead_hours=tuple(leads),
+    )
+    candidate_uri = _upload_state_dict(
+        candidate_model, "pinn", store, tmp_path, suffix="-candidate",
+    )
+    _register_real_version(
+        "pinn", {"input_dim": len(FEATURE_NAMES), "hidden_dim": 8, "lead_hours": leads},
+        x_shape=None, registry=registry, store=store, tmp_path=tmp_path,
+        extra_tags={
+            "env_mean": json.dumps(np.zeros(len(FEATURE_NAMES)).tolist()),
+            "env_std": json.dumps(np.ones(len(FEATURE_NAMES)).tolist()),
+            "candidate_arch_params": json.dumps({
+                "input_dim": len(STORM_RELATIVE_COLUMNS), "hidden_dim": 6, "lead_hours": leads,
+            }),
+            "candidate_checkpoint_uri": candidate_uri,
+        },
+    )
+
+    # fusion: n_models=5, context_dim=len(CONTEXT_FEATURE_NAMES)=10. Derived
+    # models must record the real latent_signature of the Group 1 set
+    # they were trained against (registry.register's own §5.7 check).
+    from anemoi.tracking.registry import GROUP1_MODELS, latent_signature
+
+    signature = latent_signature({name: registry.latest(name).version for name in GROUP1_MODELS})
+    _register_real_version(
+        "fusion", {"n_models": 5, "context_dim": 10, "hidden_dim": 8, "weight_floor": 0.02,
+                    "lead_hours": leads},
+        x_shape=None, registry=registry, store=store, tmp_path=tmp_path,
+        latent_signature=signature,
+    )
+
+    deterministic_fn = build_real_deterministic_fn(track, registry, store, tmp_path)
+    plan = CyclePlan(
+        target_time=current.valid_time, cycle_start=current.valid_time,
+        stages=(), inputs=None, vitals_estimated=False,
+    )
+
+    forecast = deterministic_fn(plan, current)
+
+    assert forecast.lead_hours == tuple(leads)
+    assert np.all(np.isfinite(forecast.lats))
+    assert np.all(np.isfinite(forecast.lons))
+    assert np.all(np.isfinite(forecast.winds_kt))
+    assert set(forecast.contributors) == {"lstm", "cnn", "transformer", "gnn", "pinn"}
+    assert pytest.approx(sum(forecast.contributors.values()), abs=1e-4) == 1.0
 
 
 def test_build_real_deterministic_fn_raises_with_no_registered_models(tmp_path):

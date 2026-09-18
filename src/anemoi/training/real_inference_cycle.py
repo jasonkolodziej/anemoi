@@ -1,21 +1,17 @@
-"""Real `deterministic_fn` for `inference.cycle.run_cycle` (#78).
+"""Real `deterministic_fn` for `inference.cycle.run_cycle` (#78, #85).
 
-Built from LSTM/CNN/Transformer/GNN's real trained checkpoints
+Built from all five Group 1 models' real trained checkpoints
 (`real_inference.load_trained_model`) and real live features
-(`real_inference_live.build_live_<model>_x`), combined via the real
-non-learned inverse-error consensus (`inference.cycle.fusion_weights`) --
-not the learned `ConsensusFusion` model, which needs all five Group 1
-predictions in a fixed order (``n_models=5``) to run at all. PINN's own
-live feature builder needs its candidate model's forecast converted to
-absolute coordinates first (a real, separate piece) and is deferred to
-its own follow-up, the same way `real_inference_live` deferred it --
-until then, the learned fusion model and the diffusion ensemble (both of
-which also need all five real Group 1 predictions via `real_latents
-.extract_joint_latents`) can't run correctly either. `fusion_weights`
-is not a stopgap invented for this gap: it is already the system's real,
-existing non-learned consensus path (§6.1, §10.1 divergence handling),
-used here with real per-model validation error instead of a synthetic
-one.
+(`real_inference_live.build_live_<model>_x`). When all five real
+predictions are available, combines them via the real, learned
+`ConsensusFusion` model (`real_inference.load_trained_model("fusion",
+...)`) -- the system's actual §6.1 fusion layer, not an approximation of
+it. When fewer than five are (a real registered version is missing, a
+live feature couldn't be built, PINN's storm is entirely over land...),
+falls back to the real, existing non-learned inverse-error consensus
+(`inference.cycle.fusion_weights`, §10.1 divergence handling) using each
+contributing model's own recorded validation error -- `ConsensusFusion`
+has a fixed ``n_models=5`` and cannot run at all with fewer.
 """
 
 from __future__ import annotations
@@ -43,9 +39,10 @@ if TYPE_CHECKING:
 #: dominate the consensus instead of being appropriately distrusted).
 _UNKNOWN_ERROR_SENTINEL = 1e6
 
-#: Group 1 models with a real live feature builder (`real_inference_live`)
-#: -- PINN is deferred (module docstring).
-_GROUP1_LIVE_MODELS: tuple[str, ...] = ("lstm", "cnn", "transformer", "gnn")
+#: Group 1 models with a real live feature builder (`real_inference_live`),
+#: in `real_latents.GROUP1_ORDER`'s exact order -- the order the real
+#: fusion model's predictions tensor was trained against.
+_GROUP1_LIVE_MODELS: tuple[str, ...] = ("lstm", "cnn", "transformer", "gnn", "pinn")
 
 
 class InferenceCycleError(RuntimeError):
@@ -69,6 +66,56 @@ def _build_live_x(name: str, track: Track, current: Fix, cache_dir: Path | str):
     if name == "gnn":
         return build_live_gnn_x(track, current, cache_dir)
     raise InferenceCycleError(f"no real live feature builder for {name!r}")
+
+
+def _run_pinn(
+    registry: ModelRegistry, checkpoint_store: CheckpointStore,
+    track: Track, current: Fix, cache_dir: Path | str,
+) -> np.ndarray | None:
+    """PINN's own (n_leads, 3) absolute prediction -- structurally
+    different from the other four: two real models to load (the
+    corrector and its candidate), and its output needs no
+    un-standardization at all (`PhysicsCorrector`'s own output is
+    already absolute, module docstring's own note). Returns ``None`` for
+    any of the same real reasons the other models' path can: no
+    registered version, no real live feature, no checkpoint to load.
+    """
+    from ..tracking.registry import Stage
+    from .real_inference import (
+        InferenceLoadError,
+        load_standardization_stats,
+        load_trained_model,
+        load_trained_pinn_candidate,
+    )
+    from .real_inference_live import build_live_pinn_x
+
+    version = registry.production("pinn") or registry.in_stage("pinn", Stage.STAGING)
+    if version is None:
+        return None
+    try:
+        model, _spec = load_trained_model("pinn", version, checkpoint_store)
+        candidate_model, _cspec = load_trained_pinn_candidate(version, checkpoint_store)
+    except InferenceLoadError:
+        return None
+
+    raw = build_live_pinn_x(track, current, candidate_model, cache_dir)
+    if raw is None:
+        return None
+    env, candidate_abs = raw
+
+    stats = load_standardization_stats(version)
+    if "env_mean" not in stats or "env_std" not in stats:
+        return None
+
+    import torch
+
+    env_z = (env - stats["env_mean"]) / stats["env_std"]
+
+    with torch.no_grad():
+        env_t = torch.as_tensor(env_z[None], dtype=torch.float32)
+        cand_t = torch.as_tensor(candidate_abs[None], dtype=torch.float32)
+        pred = model(env_t, cand_t)
+    return pred[0].cpu().numpy()
 
 
 #: How many leading (always size-1) axes to index away from each model's
@@ -132,6 +179,68 @@ def _run_group1_model(name: str, model, raw, stats: dict, current: Fix) -> np.nd
     return abs_pred
 
 
+def _build_live_context(track: Track, current: Fix) -> np.ndarray | None:
+    """The real fusion model's `context` vector (`real_latents
+    .CONTEXT_FEATURE_NAMES`) for the current moment -- `real_latents
+    ._context_features` only ever reads a window's own track data
+    (heading, speed, intensity trend, season), never a future target, so
+    it's directly reusable for live inference; only the "enough real
+    history" check is new here."""
+    from .capacity_ablation import SEQUENCE_LENGTH
+    from .real_latents import _context_features
+    from .real_run import StageWindow
+
+    window = track.window_ending(current.valid_time, SEQUENCE_LENGTH + 1)
+    if window is None:
+        return None
+    sw = StageWindow(
+        storm_id=track.storm_id, window=window, current=current,
+        y=np.zeros((1, 3)), mask=np.zeros((1,), dtype=bool),
+    )
+    return _context_features(sw)
+
+
+def _real_fusion_forecast(
+    registry: ModelRegistry, checkpoint_store: CheckpointStore,
+    track: Track, current: Fix, per_model_abs: dict[str, np.ndarray],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, float]] | None:
+    """The real, learned `ConsensusFusion` combination -- only possible
+    when all five real Group 1 predictions are present, `fusion` itself
+    has a registered version, and there's enough real history for its
+    context vector. Returns ``None`` (not an exception) for the caller
+    to fall back to the non-learned consensus on any of those."""
+    from ..tracking.registry import Stage
+    from .real_inference import InferenceLoadError, load_trained_model
+
+    if set(per_model_abs) != set(_GROUP1_LIVE_MODELS):
+        return None
+    version = registry.production("fusion") or registry.in_stage("fusion", Stage.STAGING)
+    if version is None:
+        return None
+    context = _build_live_context(track, current)
+    if context is None:
+        return None
+    try:
+        model, _spec = load_trained_model("fusion", version, checkpoint_store)
+    except InferenceLoadError:
+        return None
+
+    import torch
+
+    predictions = np.stack([per_model_abs[name] for name in _GROUP1_LIVE_MODELS])
+    with torch.no_grad():
+        pred_t = torch.as_tensor(predictions[None], dtype=torch.float32)
+        ctx_t = torch.as_tensor(context[None], dtype=torch.float32)
+        out = model(pred_t, ctx_t)[0].cpu().numpy()
+        # model.weights() -> (1, n_leads, n_models); average over leads for
+        # one real per-model summary weight (DeterministicForecast
+        # .contributors is dict[str, float], not per-lead).
+        per_lead_weights = model.weights(ctx_t)[0].cpu().numpy()
+    mean_weights = per_lead_weights.mean(axis=0)
+    contributors = dict(zip(_GROUP1_LIVE_MODELS, (float(w) for w in mean_weights), strict=True))
+    return out[:, 0], out[:, 1], out[:, 2], contributors
+
+
 def build_real_deterministic_fn(
     track: Track,
     registry: ModelRegistry,
@@ -166,19 +275,22 @@ def build_real_deterministic_fn(
         recent_errors: dict[str, float] = {}
 
         for name in _GROUP1_LIVE_MODELS:
-            version = registry.production(name) or registry.in_stage(name, Stage.STAGING)
-            if version is None:
-                continue
-            raw = _build_live_x(name, track, current, cache_dir)
-            if raw is None:
-                continue
-            try:
-                model, _spec = load_trained_model(name, version, checkpoint_store)
-            except InferenceLoadError:
-                continue
-            stats = load_standardization_stats(version)
-            abs_pred = _run_group1_model(name, model, raw, stats, current)
-            if abs_pred is None:
+            if name == "pinn":
+                abs_pred = _run_pinn(registry, checkpoint_store, track, current, cache_dir)
+                version = registry.production("pinn") or registry.in_stage("pinn", Stage.STAGING)
+            else:
+                version = registry.production(name) or registry.in_stage(name, Stage.STAGING)
+                abs_pred = None
+                if version is not None:
+                    raw = _build_live_x(name, track, current, cache_dir)
+                    if raw is not None:
+                        try:
+                            model, _spec = load_trained_model(name, version, checkpoint_store)
+                            stats = load_standardization_stats(version)
+                            abs_pred = _run_group1_model(name, model, raw, stats, current)
+                        except InferenceLoadError:
+                            abs_pred = None
+            if abs_pred is None or version is None:
                 continue
 
             per_model_abs[name] = abs_pred
@@ -191,21 +303,27 @@ def build_real_deterministic_fn(
                 "staging/production version, no real live feature, or no checkpoint to load"
             )
 
-        weights = fusion_weights(recent_errors)
         n_leads = len(DEFAULT_LEADS)
-        lats = np.zeros(n_leads)
-        lons = np.zeros(n_leads)
-        winds = np.zeros(n_leads)
-        for name, abs_pred in per_model_abs.items():
-            w = weights[name]
-            lats += w * abs_pred[:, 0]
-            lons += w * abs_pred[:, 1]
-            winds += w * abs_pred[:, 2]
+        real_fusion = _real_fusion_forecast(
+            registry, checkpoint_store, track, current, per_model_abs,
+        )
+        if real_fusion is not None:
+            lats, lons, winds, contributors = real_fusion
+        else:
+            weights = fusion_weights(recent_errors)
+            lats = np.zeros(n_leads)
+            lons = np.zeros(n_leads)
+            winds = np.zeros(n_leads)
+            for name, abs_pred in per_model_abs.items():
+                w = weights[name]
+                lats += w * abs_pred[:, 0]
+                lons += w * abs_pred[:, 1]
+                winds += w * abs_pred[:, 2]
+            contributors = {name: weights[name] for name in per_model_abs}
 
         return DeterministicForecast(
             target_time=plan.target_time, lead_hours=DEFAULT_LEADS,
-            lats=lats, lons=lons, winds_kt=winds,
-            contributors={name: weights[name] for name in per_model_abs},
+            lats=lats, lons=lons, winds_kt=winds, contributors=contributors,
         )
 
     return deterministic_fn
