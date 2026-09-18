@@ -96,6 +96,25 @@ def test_arch_params_tag_is_none_for_empty_or_missing_arch_params():
     assert et.arch_params_tag(SimpleNamespace()) is None  # no arch_params attr at all
 
 
+def test_candidate_tags_covers_both_pinn_specific_fields():
+    from types import SimpleNamespace
+
+    artifacts = SimpleNamespace(
+        candidate_arch_params={"hidden_dim": 64}, candidate_checkpoint_uri="s3://fake/cand.pt",
+    )
+    assert et.candidate_tags(artifacts) == {
+        "candidate_arch_params": '{"hidden_dim": 64}',
+        "candidate_checkpoint_uri": "s3://fake/cand.pt",
+    }
+
+
+def test_candidate_tags_is_empty_for_non_pinn_models():
+    from types import SimpleNamespace
+
+    assert et.candidate_tags(None) == {}
+    assert et.candidate_tags(SimpleNamespace(arch_params={"hidden_dim": 8})) == {}
+
+
 def test_build_run_tags_constructs_a_real_validated_runtags():
     stage = stage_b()
     tags = et.build_run_tags("lstm", stage, execution_mode=ExecutionMode.PARALLEL_GROUP1)

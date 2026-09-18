@@ -143,6 +143,13 @@ class RunArtifacts:
     arch_params: dict = field(default_factory=dict)
     #: PINN only: the candidate-generator LSTM's own `build_lstm(...)` kwargs.
     candidate_arch_params: dict = field(default_factory=dict)
+    #: PINN only: where the candidate LSTM's checkpoint was uploaded (#78).
+    #: Real inference needs this persisted too -- unlike training (where a
+    #: fresh candidate is a reasonable simplification, since one gets
+    #: trained as part of every curriculum run regardless), retraining a
+    #: whole LSTM from scratch on every inference cycle is not viable, so
+    #: this is now uploaded the same way the main model's checkpoint is.
+    candidate_checkpoint_uri: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

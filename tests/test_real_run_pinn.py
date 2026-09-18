@@ -424,11 +424,15 @@ def test_run_pinn_curriculum_completes_both_stages(tmp_path):
 
     # #78: PINN is the only model with TWO real architectures to
     # reconstruct -- the PhysicsCorrector itself and its candidate-
-    # generator LSTM (never checkpointed on its own, module docstring).
+    # generator LSTM, which real inference needs checkpointed on its own
+    # too (retraining a whole LSTM per inference cycle isn't viable).
     from anemoi.data.features import FEATURE_NAMES
     from anemoi.data.storm_relative import STORM_RELATIVE_COLUMNS
     from anemoi.models.base import DEFAULT_LEADS
 
+    assert artifacts.candidate_checkpoint_uri.startswith(
+        "s3://anemoi-test/checkpoints/pinn/"
+    )
     assert artifacts.arch_params == {
         "input_dim": len(FEATURE_NAMES), "hidden_dim": 8, "lead_hours": list(DEFAULT_LEADS),
     }

@@ -253,7 +253,12 @@ def cmd_train(args: argparse.Namespace) -> int:
     from .data.hurdat2 import parse_hurdat2_file
     from .data.sources import Flavor
     from .tracking.checkpoint_store import CheckpointStore, S3Config
-    from .tracking.experiment_tracking import arch_params_tag, build_run_tags, log_curriculum_stages
+    from .tracking.experiment_tracking import (
+        arch_params_tag,
+        build_run_tags,
+        candidate_tags,
+        log_curriculum_stages,
+    )
     from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ModelRegistry
     from .training.promotion import MetricSet, evaluate_promotion
@@ -341,6 +346,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     arch_params = arch_params_tag(artifacts)
     if arch_params is not None:
         tag_dict["arch_params"] = arch_params
+    tag_dict.update(candidate_tags(artifacts))
     version = registry.register(
         args.model,
         run_id=f"cli-{datetime.now(UTC):%Y%m%dT%H%M%S}",
