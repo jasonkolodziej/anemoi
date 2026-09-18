@@ -34,7 +34,16 @@ jobs:
             -not -path "*/dist/*" \
             -not -path "*/vendor/*" \
             | while read -r f; do
-              python3 -c "import yaml, pathlib; yaml.safe_load(pathlib.Path('$f').read_text())" \
+              # yaml.safe_load_all, not safe_load: pnpm 12.x writes its own
+              # lockfiles (pnpm-lock.yaml) as two YAML documents -- one for
+              # pnpm's own self-management deps (packageManagerDependencies),
+              # one for the project's real deps -- which is valid multi-
+              # document YAML, not a malformed file. safe_load (single-
+              # document only) rejected every real, freshly-generated
+              # pnpm-lock.yaml as "INVALID", confirmed by regenerating one
+              # from scratch and getting byte-identical multi-document
+              # output back.
+              python3 -c "import yaml, pathlib; list(yaml.safe_load_all(pathlib.Path('$f').read_text()))" \
                 && echo "OK: $f" \
                 || { echo "INVALID: $f"; exit 1; }
             done
