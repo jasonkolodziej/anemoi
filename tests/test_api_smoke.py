@@ -43,6 +43,18 @@ def test_health(client):
     assert r.json()["status"] == "ok"
 
 
+def test_health_state_mode_is_demo_by_default(client, monkeypatch):
+    monkeypatch.delenv("ANEMOI_API_REAL_STATE", raising=False)
+    r = client.get("/v1/health")
+    assert r.json()["state_mode"] == "demo"
+
+
+def test_health_state_mode_is_real_when_opted_in(client, monkeypatch):
+    monkeypatch.setenv("ANEMOI_API_REAL_STATE", "1")
+    r = client.get("/v1/health")
+    assert r.json()["state_mode"] == "real"
+
+
 def test_models_are_the_six_gods(client):
     r = client.get("/v1/models")
     assert r.status_code == 200

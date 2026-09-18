@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 
 from fastapi import APIRouter
 
@@ -15,11 +16,16 @@ router = APIRouter(tags=["meta"])
 
 @router.get("/health", response_model=schemas.HealthOut)
 def health() -> schemas.HealthOut:
+    # Mirrors deps.state_dependency's own selection exactly, rather than
+    # importing/constructing RealState just to ask "which mode is this" --
+    # the env var is the single source of truth for both.
+    state_mode = "real" if os.environ.get("ANEMOI_API_REAL_STATE") else "demo"
     return schemas.HealthOut(
         status="ok",
         api_version=__api_version__,
         anemoi_version=anemoi_version,
         torch_available=importlib.util.find_spec("torch") is not None,
+        state_mode=state_mode,
     )
 
 
