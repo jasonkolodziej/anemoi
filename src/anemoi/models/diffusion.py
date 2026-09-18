@@ -92,12 +92,38 @@ def build_diffusion(
             return self.out(h).view(-1, n_leads, 3)
 
         @torch.no_grad()
-        def sample(self, conditioning, n_members: int = 20, generator=None):
+        def sample(self, conditioning, n_members: int = 20, generator=None, clip_x0: float = 6.0):
             """Ancestral sampling of ``n_members`` trajectories.
 
             ``conditioning`` is (1, cond_dim) or (n_members, cond_dim); a single
             row is broadcast so every member shares the Anemoi-Core guess and differs
             only through the noise path.
+
+            ``clip_x0`` (default 6.0, real standard-deviation units since the
+            target this samples is standardized) bounds each step's predicted
+            *x0* before it feeds the next step's posterior mean -- the
+            standard "clip_denoised" mitigation (Nichol & Dhariwal 2021,
+            arXiv:2102.09672, `improved-diffusion`'s `p_mean_variance`).
+            Real bug found training against real ERA5/GDAS latents
+            (2026-09-18): the previous version computed the posterior mean
+            directly from the predicted noise (mathematically the same as an
+            *unclipped* x0), so a denoiser badly out-of-distribution on a
+            validation-time latent (this model overfits fast on the small,
+            1448-sample real latent dataset -- real `val_loss` came back
+            ~8x `train_loss`) could drift x0 to an arbitrary magnitude at
+            an early, high-noise step, and every later step's posterior
+            mean is a moving average that includes that unclipped x0, so
+            the drift persists and compounds across the remaining ~200
+            steps rather than self-correcting. Confirmed via a real MLflow
+            query: `track_error_48h_nm` around 4800 (every other model,
+            same run, landed 250-310) and `intensity_error_36h_kt` around
+            1000 (every other model landed 12-17) -- both symptomatic of
+            an unbounded z-score, not a units/scale bug (the
+            un-standardization step downstream is unchanged and correct).
+            6.0 is a deliberately loose bound -- real standardized
+            meteorological targets essentially never exceed +/-6 std devs,
+            so this stops runaway divergence without constraining any
+            plausible real trajectory, including genuine tail events.
             """
             if conditioning.shape[0] == 1:
                 conditioning = conditioning.expand(n_members, -1)
@@ -111,11 +137,18 @@ def build_diffusion(
                 predicted_noise = self(x, t, conditioning)
                 alpha = self.alphas[step]
                 alpha_bar = self.alpha_bars[step]
-                coef = (1.0 - alpha) / torch.sqrt(1.0 - alpha_bar)
-                mean = (x - coef * predicted_noise) / torch.sqrt(alpha)
+                alpha_bar_prev = self.alpha_bars[step - 1] if step > 0 else x.new_tensor(1.0)
+
+                x0_pred = (x - torch.sqrt(1.0 - alpha_bar) * predicted_noise)
+                x0_pred = (x0_pred / torch.sqrt(alpha_bar)).clamp(-clip_x0, clip_x0)
+
+                beta = self.betas[step]
+                coef_x0 = beta * torch.sqrt(alpha_bar_prev) / (1.0 - alpha_bar)
+                coef_xt = (1.0 - alpha_bar_prev) * torch.sqrt(alpha) / (1.0 - alpha_bar)
+                mean = coef_x0 * x0_pred + coef_xt * x
                 if step > 0:
                     noise = torch.randn(x.shape, generator=generator, device=x.device)
-                    x = mean + torch.sqrt(self.betas[step]) * noise
+                    x = mean + torch.sqrt(beta) * noise
                 else:
                     x = mean
             return x

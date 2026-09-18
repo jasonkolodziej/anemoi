@@ -124,6 +124,35 @@ def test_diffusion_sampling_produces_distinct_members():
     assert not torch.allclose(members[0], members[1])
 
 
+def test_diffusion_sampling_clips_x0_to_bound_a_diverging_denoiser():
+    """Real bug found training diffusion against real ERA5/GDAS latents
+    (2026-09-18): a denoiser badly out-of-distribution at inference (this
+    model overfits fast on a small real latent dataset) could drift its
+    implied x0 to an arbitrary magnitude at an early step, and every
+    later step's posterior mean is a moving average that includes that
+    unclipped x0 -- so the drift persisted and compounded across ~200
+    steps instead of self-correcting. Confirmed via a real MLflow query:
+    track_error_48h_nm around 4800 (every other model that run landed
+    250-310). This simulates the worst case directly -- a denoiser that
+    always predicts a wildly wrong (huge) noise value -- and confirms
+    `clip_x0` keeps the final samples in a bounded, plausible range
+    instead of exploding."""
+    torch = require_torch()
+    from anemoi.models.diffusion import build_diffusion
+
+    model, _ = build_diffusion(latent_dim=16, hidden_dim=32, n_layers=2,
+                               n_timesteps=20, lead_hours=LEADS)
+
+    def diverging_forward(noisy_traj, t, conditioning):
+        return torch.full((noisy_traj.shape[0], len(LEADS), 3), 1000.0)
+
+    model.forward = diverging_forward
+    members = model.sample(torch.randn(1, 16), n_members=4, clip_x0=6.0)
+
+    assert torch.isfinite(members).all()
+    assert members.abs().max() < 100.0  # bounded, not exploded into the thousands
+
+
 def test_diffusion_accepts_extra_conditioning():
     torch = require_torch()
     from anemoi.models.diffusion import build_diffusion
