@@ -10,14 +10,22 @@ binding routes requests into the container). Types (`Env`,
 `ExportedHandler`, container/DO runtime types) are generated, not
 hand-written -- see "Regenerating types" below.
 
-## Status: deployed and serving real storms (2026-09-21)
+## Status: deployed and serving real storms + real registry data (2026-09-21)
 
-Live at `https://anemoi-api-real.jasonkolodziej.workers.dev`. `GET /v1/health`
-returns `{"state_mode": "real", "torch_available": true, ...}`, and
-`GET /v1/storms` returns real 2023-season HURDAT2 storms (confirmed
-stable across several requests, ~150-200ms once warm) -- the HURDAT2 gap
-below is resolved. Real *cycles* (`POST .../cycles`) are not yet real,
-though -- see the registry-data gap below, still open.
+Live at `https://anemoi-api-real.jasonkolodziej.workers.dev`. Confirmed for
+real, not just built-then-assumed:
+
+- `GET /v1/health` -> `{"state_mode": "real", "torch_available": true, ...}`
+- `GET /v1/storms` -> real 2023-season HURDAT2 storms
+- `GET /v1/registry` -> all 7 real models at their real, verified versions
+  from the completed training run (`lstm v6`, `cnn v5`, `transformer v4`,
+  `gnn v4`, `pinn v4`, `diffusion v3`, `fusion v3`) -- the registry-data
+  gap below is resolved.
+
+Not yet exercised: an actual `POST .../cycles` real forecast end to end
+(the pieces are now all in place -- real storms, real registry, real
+checkpoints in R2 -- but running one for real and checking the output is
+still a distinct, not-yet-done step).
 
 Spike findings (all confirmed, not just built-then-assumed):
 
@@ -35,7 +43,7 @@ Spike findings (all confirmed, not just built-then-assumed):
 issue #91) stands; Proposal B (Python Workers demo + real-mode off
 Cloudflare) is not needed as a fallback.
 
-## Four real problems hit during the actual deploy, and their fixes
+## Six real problems hit during the actual deploy, and their fixes
 
 Worth recording -- none of these were visible from the local `docker
 build` spike alone, only from a real `wrangler deploy` attempt:
@@ -80,12 +88,61 @@ build` spike alone, only from a real `wrangler deploy` attempt:
    `ANEMOI_API_DEBUG` addition below, added specifically because this was
    otherwise unreachable). Several follow-up requests all returned clean
    200s, confirming it wasn't a real, reproducible bug in the app.
+5. **`wrangler secret put` secrets never reached the container process at
+   all.** Confirmed by reading `@cloudflare/containers`' own source
+   (`dist/lib/container.js`): `Container.envVars` defaults to `{}` and is
+   never auto-populated from the Worker's `env` bindings -- secrets set via
+   `wrangler secret put` are Worker-level only. `S3_ARTIFACT_*` looked
+   configured (`wrangler secret list` showed all four) but never actually
+   reached Python's `os.environ`; `RealState.run_cycle`'s broad exception
+   handling silently swallowed the resulting `CheckpointStoreError` into
+   the synthetic fallback, so this produced no visible error at all until
+   traced through the SDK source directly. Fixed in `index.ts`:
+   `AnemoiRealApi`'s constructor now explicitly forwards the four secrets
+   into `envVars` via `super(ctx, env, { envVars: {...} })`.
+6. **A redeploy does not restart an already-running container instance.**
+   Cloudflare Containers here run as a single long-lived "singleton"
+   instance (same instance ID persists across multiple `wrangler deploy`
+   runs, confirmed via `wrangler containers instances`) -- a new image only
+   takes effect on the *next natural cold start* (after `sleepAfter`, 5m
+   here, with zero requests). Cost several rounds of "why didn't my fix
+   take effect" confusion: `/v1/registry` still came back empty right
+   after deploying the registry-sync fix, not because the fix was wrong,
+   but because the already-warm instance from before that deploy was still
+   serving the old image. Confirmed by genuinely waiting out a full idle
+   `sleepAfter` window before re-checking. Worth remembering for any future
+   deploy: **don't immediately re-probe after `cf:deploy` and conclude a
+   fix failed** -- either wait out `sleepAfter`, or accept the previous
+   instance keeps serving until it naturally sleeps.
 
-`anemoi.api.main.create_app` also gained `ANEMOI_API_DEBUG` (off by
-default) while chasing the above -- when set, an unhandled exception
-returns its real traceback in the response body (Starlette's own debug
-mode) instead of a bare "Internal Server Error." Kept permanently since
-container log access here is genuinely hard to get to (see problem 4).
+`anemoi.api.main.create_app` gained `ANEMOI_API_DEBUG` (off by default)
+while chasing problem 4 -- when set, an unhandled exception returns its
+real traceback in the response body (Starlette's own debug mode) instead
+of a bare "Internal Server Error." Kept permanently since container log
+access here is genuinely hard to get to. A second, more invasive
+diagnostic built while chasing problems 5/6 -- a temporary
+`/debug/registry-pull-log` route plus a Dockerfile CMD change capturing
+`anemoi registry-pull`'s real stdout/stderr to a file -- was **not** kept;
+it was removed once problems 5/6 were actually diagnosed and fixed, since
+unlike `ANEMOI_API_DEBUG` it hardcoded a container-specific file path and
+had no purpose once the fix worked.
+
+### SSH access
+
+`wrangler containers ssh <instance-id>` needs an `authorized_keys` entry
+under the container's `wrangler.jsonc` config (only `ssh-ed25519` keys) --
+not configured until problem 6 above made shell access seem necessary. A
+dedicated keypair now lives at `~/.ssh/anemoi_cf_container` (this
+machine only, not committed) with its public half in `wrangler.jsonc`.
+In practice this was never successfully used *during* diagnosis here --
+the two gotchas above (a live instance is needed to attach to, and a
+redeploy doesn't create one) made the timing genuinely hard to catch, so
+the `/debug/registry-pull-log` route ended up being the thing that
+actually worked. Kept configured for next time regardless; catching a
+live instance is easier if you trigger a request and immediately run
+`wrangler containers instances <app-id>` / `wrangler containers ssh
+<instance-id>` right after, ideally right after a fresh cold start
+rather than hours into a warm/idle cycle.
 
 ## What's genuinely still needed before this serves real forecasts
 
@@ -96,21 +153,19 @@ container log access here is genuinely hard to get to (see problem 4).
   container starts. Containers have ephemeral disk with no host to mount
   a volume from, so this genuinely couldn't have been solved by a secret
   alone -- a secret only sets an env var, it doesn't put a file anywhere.
-- **The real registry data -- still open.** `tracking.registry.ModelRegistry`
-  (`src/anemoi/tracking/registry.py:86-115`) reads registered model
-  versions from a single local JSON file (`registry.json`, default
-  `~/.anemoi/registry/`) -- there is no S3/MLflow read path at all,
-  confirmed by reading `versions()`/`latest()`/`production()` directly.
-  On ephemeral Container disk, a fresh container starts with **zero**
-  registered versions no matter what secrets are set. This does not
-  error -- `RealState` silently falls back to its synthetic
-  linear-extrapolation forecast every cycle, while `/v1/health` keeps
-  reporting `"state_mode": "real"`. The real `registry.json` (the
-  verified `lstm v6`/`cnn v5`/`transformer v4`/`gnn v4`/`pinn v4`/
-  `diffusion v3`/`fusion v3` from the completed training run) currently
-  only exists on the stopped GCP VM. Until this is baked into the image
-  (or a real sync path is built -- worth its own issue), this deployment
-  cannot actually serve a real forecast, only real storm listings.
+- ~~The real registry data~~ **Done.** `tracking.registry.ModelRegistry`
+  gained an optional durable-storage (R2) mirror, symmetric with its
+  existing MLflow mirror: every real save now pushes `registry.json` to
+  `registry/registry.json` in the same R2 bucket checkpoints already live
+  in, and construction with no local file pulls one from there first. A
+  new `anemoi registry-pull` CLI command wraps the read side; the
+  Dockerfile's `CMD` runs it (wrapped in `|| true`, never blocking
+  startup) before `uvicorn` starts. The VM's existing `registry.json` was
+  pushed once manually (`CheckpointStore.upload`, no code changes needed
+  for that one-time seed) to give the new pull path something real to
+  hydrate from immediately, rather than waiting for the next full
+  training run. Confirmed for real: `/v1/registry` on the live deployment
+  now returns all 7 models at their real versions.
 
 Also not done, per #91's remaining scope:
 
