@@ -43,7 +43,7 @@ Cloudflare) is not needed as a fallback.
 ## What's NOT done yet
 
 This repo has no Cloudflare account credentials configured, so nothing
-here has actually been deployed -- `npx wrangler deploy` (from this
+here has actually been deployed -- `pnpm exec wrangler deploy` (from this
 directory, after `wrangler login` or `CLOUDFLARE_API_TOKEN`) is the real
 next step once that access exists. Also not done, per #91's remaining
 scope:
@@ -70,12 +70,19 @@ curl http://127.0.0.1:8080/v1/health
 
 ```bash
 cd docker/api
-npm install
-npx wrangler secret put HURDAT2_PATH        # or bake into the image / a mounted volume
-npx wrangler secret put S3_ARTIFACT_ACCESS_KEYID
-npx wrangler secret put S3_ARTIFACT_SECRET_ACCESS_KEY
-npx wrangler deploy
+pnpm install
+pnpm exec wrangler login                     # or set CLOUDFLARE_API_TOKEN
+pnpm exec wrangler secret put HURDAT2_PATH   # or bake into the image / a mounted volume
+pnpm exec wrangler secret put S3_ARTIFACT_ACCESS_KEYID
+pnpm exec wrangler secret put S3_ARTIFACT_SECRET_ACCESS_KEY
+pnpm exec wrangler deploy                    # or: pnpm run cf:deploy
 ```
+
+`pnpm deploy` (no `exec`/`run`) is a **different, built-in pnpm command**
+(exports a workspace package as a standalone deploy target, unrelated to
+this project) -- it will fail with `ERR_PNPM_INVALID_DEPLOY_TARGET` if you
+run it by accident. Use `pnpm exec wrangler deploy` or `pnpm run
+cf:deploy`, not bare `pnpm deploy`.
 
 Docker (or a Docker-compatible daemon reachable the way `wrangler` expects)
 must be running locally during `wrangler deploy` -- it builds and pushes

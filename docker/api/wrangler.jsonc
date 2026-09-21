@@ -2,7 +2,7 @@
 	// Cloudflare Containers config for issue #91's primary proposal: real-mode
 	// Anemoi-API (torch inference, see ../Dockerfile) as a real linux/amd64
 	// container, fronted by this Worker. Not yet deployed -- this repo has no
-	// Cloudflare account credentials wired in; `npx wrangler deploy` from
+	// Cloudflare account credentials wired in; `pnpm exec wrangler deploy` from
 	// this directory (with `wrangler login` done first) is the real next
 	// step once that's available. See README.md for required env/secrets.
 	"$schema": "node_modules/wrangler/config-schema.json",
