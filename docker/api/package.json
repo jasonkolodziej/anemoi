@@ -5,10 +5,13 @@
 	"description": "Worker + Cloudflare Container front door for real-mode Anemoi-API (issue #91).",
 	"scripts": {
 		"dev": "wrangler dev",
-		"cf:deploy": "wrangler deploy"
+		"cf:deploy": "wrangler deploy",
+		"types": "wrangler types",
+		"check": "tsc --noEmit"
 	},
 	"devDependencies": {
 		"@cloudflare/containers": "^0.3.7",
+		"@types/node": "^26.6.2",
 		"typescript": "^5.9.3",
 		"wrangler": "^4.136.1"
 	},

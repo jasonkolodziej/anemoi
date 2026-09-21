@@ -35,8 +35,8 @@ export class AnemoiRealApi extends Container {
 }
 
 export default {
-	async fetch(request: Request, env: { ANEMOI_REAL_API: DurableObjectNamespace<AnemoiRealApi> }) {
+	async fetch(request, env) {
 		const container = getContainer(env.ANEMOI_REAL_API);
 		return container.fetch(request);
 	},
-};
+} satisfies ExportedHandler<Env>;

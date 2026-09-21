@@ -1,52 +1,109 @@
 # Real-mode Anemoi-API on Cloudflare Containers
 
-Issue #91's primary proposal, spiked. `Dockerfile` packages `anemoi.api.main:app`
+Issue #91's primary proposal. `Dockerfile` packages `anemoi.api.main:app`
 with `ANEMOI_API_REAL_STATE=1` (real HURDAT2 storms + real trained-model
 inference via #78/#85, `anemoi.api.real_state.RealState`) as a real
 `linux/amd64` container -- not the Pyodide-based Python Workers runtime,
 which has no PyTorch wheel available. `wrangler.jsonc` + `src/index.ts` are
 the Worker front door Cloudflare Containers requires (a Durable Object
-binding routes requests into the container).
+binding routes requests into the container). Types (`Env`,
+`ExportedHandler`, container/DO runtime types) are generated, not
+hand-written -- see "Regenerating types" below.
 
-## Spike result (2026-09-21)
+## Status: deployed (2026-09-21)
 
-Built and smoke-tested locally (`podman`, aliased to `docker`) -- the one
-open risk #91 flagged before committing to this proposal:
+Live at `https://anemoi-api-real.jasonkolodziej.workers.dev`. `GET /v1/health`
+returns `{"state_mode": "real", "torch_available": true, ...}` -- confirms
+the container actually boots and serves real-mode FastAPI traffic, not
+just that the build succeeds.
 
-- `docker build -f docker/api/Dockerfile .` succeeds, both natively
-  (`aarch64`, this machine) and cross-built for `--platform linux/amd64`
-  (Cloudflare's required architecture, via emulation) -- confirms the image
-  isn't accidentally arch-locked to the build host.
-- CPU-only torch installs cleanly: `torch.__version__` reports a `+cpu`
-  build, `torch.cuda.is_available()` is `False`, confirming pip never
-  pulled the much larger default CUDA wheel (Cloudflare Containers has no
-  GPU instances -- see #91).
+Spike findings (all confirmed, not just built-then-assumed):
+
+- CPU-only torch installs cleanly (`torch.cuda.is_available()` is `False`);
+  no GPU wheel pulled. Cloudflare Containers has no GPU instances, but
+  real-mode only ever does *inference* (a handful of small forward passes
+  plus one diffusion `sample()` call per cycle, see #91), not training.
 - `anemoi.api.real_state`, `anemoi.training.real_inference_cycle`, and
   `anemoi.training.real_inference_ensemble` all import successfully inside
   the built image.
-- Final image size: **1.78 GB** -- comfortably inside Cloudflare's 20 GB
-  limit on the `standard-4` instance tier.
-- Running the image and hitting `GET /v1/health` returns
-  `{"state_mode": "real", "torch_available": true, ...}` -- the server
-  boots and serves real-mode traffic correctly.
-- `GET /v1/storms` returns `500` with `RealState needs a real HURDAT2
-  archive -- set HURDAT2_PATH or pass hurdat2_path explicitly` -- expected:
-  this spike ran with no config. Real deployment needs `HURDAT2_PATH` plus
-  the S3/R2 credentials `CheckpointStore`/`ModelRegistry` need (`S3_ARTIFACT_*`,
-  same vars `docker/mlflow/README.md` documents) as container secrets, not
-  new infrastructure.
+- Builds cleanly both natively (`aarch64`) and cross-built for
+  `linux/amd64` (Cloudflare's required architecture).
 
-**Conclusion: no architectural blocker found.** Proposal A (Containers,
+**Conclusion holds: no architectural blocker.** Proposal A (Containers,
 issue #91) stands; Proposal B (Python Workers demo + real-mode off
 Cloudflare) is not needed as a fallback.
 
-## What's NOT done yet
+## Three real problems hit during the actual deploy, and their fixes
 
-This repo has no Cloudflare account credentials configured, so nothing
-here has actually been deployed -- `pnpm exec wrangler deploy` (from this
-directory, after `wrangler login` or `CLOUDFLARE_API_TOKEN`) is the real
-next step once that access exists. Also not done, per #91's remaining
-scope:
+Worth recording -- none of these were visible from the local `docker
+build` spike alone, only from a real `wrangler deploy` attempt:
+
+1. **`image_build_context`.** Cloudflare Containers defaults the Docker
+   build context to the Dockerfile's own directory (`docker/api/`), but
+   this Dockerfile's `COPY pyproject.toml ... / COPY src ./src` expect the
+   repo root. Fixed by setting `"image_build_context": "../.."` in
+   `wrangler.jsonc` (see the comment there).
+2. **`instance_type`.** The built image is ~2.2GB; the default instance
+   type (`lite`) caps images at 2000MB, so the deploy failed with "Image
+   too large" until `instance_type: "standard-1"` (4GiB memory / 8GB disk)
+   was set explicitly in `wrangler.jsonc`.
+3. **`DOCKER_HOST` pointed at podman.** This machine's shell has
+   `DOCKER_HOST` set globally to a podman-machine socket, so *even the
+   real Docker Desktop CLI* silently talked to podman instead of Docker
+   Desktop's own engine. Podman's pushed image manifest didn't match the
+   digest Wrangler expected from Cloudflare's registry, failing with
+   `IMAGE_REGISTRY_DOESNT_CONTAIN_IMAGE` even though the push itself
+   reported success. Root-caused by comparing `docker context ls` (shows
+   `desktop-linux` as the selected context) against `echo $DOCKER_HOST`
+   (pointed at podman regardless) -- `DOCKER_HOST` overrides context
+   selection. Fixed by running the deploy with it unset for that one
+   command: `env -u DOCKER_HOST pnpm exec wrangler deploy`. This is a
+   per-shell environment quirk on this machine, not something fixed in
+   the repo -- if you hit the same error, check `echo $DOCKER_HOST` before
+   assuming the image/config is wrong. Cloudflare's own container tooling
+   has a documented, unresolved podman incompatibility
+   ([workers-sdk#9755](https://github.com/cloudflare/workers-sdk/issues/9755)).
+
+## What's genuinely still needed before this serves real data
+
+Secrets (`wrangler secret put`) alone are not enough for two reasons
+found by tracing the actual code paths, not assumed:
+
+- **`HURDAT2_PATH`** has to point at a real file *inside the container* --
+  and there is no way to get one there except baking it into the image or
+  fetching it at startup. Local `docker run -v host/path:/container/path`
+  has no equivalent on Cloudflare Containers: they are ephemeral (a fresh
+  filesystem on every cold start, per Cloudflare's own docs) and there is
+  no host machine to mount a volume from in the first place -- `wrangler
+  secret put HURDAT2_PATH` only sets an env var, it does not put a file
+  anywhere, so pointing it at a path with nothing behind it just moves the
+  crash from "unset" to "file not found." The two real options: `COPY` the
+  archive into the image at build time (sourced from NHC's public archive,
+  <https://www.nhc.noaa.gov/data/hurdat/> -- simplest, right choice for a
+  static historical file that rarely changes), or fetch it over the
+  network in the container's startup command before `uvicorn` runs (only
+  worth it if it needs to update without a rebuild). **Do not set
+  `HURDAT2_PATH` as a secret without also doing one of these** -- it is a
+  deploy-time footgun otherwise: the container will boot fine (`/v1/health`
+  stays green) and only fail later, on the first request that touches
+  `RealState`.
+- **The real registry data.** `tracking.registry.ModelRegistry`
+  (`src/anemoi/tracking/registry.py:86-115`) reads registered model
+  versions from a single local JSON file (`registry.json`, default
+  `~/.anemoi/registry/`) -- there is no S3/MLflow read path at all,
+  confirmed by reading `versions()`/`latest()`/`production()` directly.
+  On ephemeral Container disk, a fresh container starts with **zero**
+  registered versions no matter what secrets are set. This does not
+  error -- `RealState` silently falls back to its synthetic
+  linear-extrapolation forecast every cycle, while `/v1/health` keeps
+  reporting `"state_mode": "real"`. The real `registry.json` (the
+  verified `lstm v6`/`cnn v5`/`transformer v4`/`gnn v4`/`pinn v4`/
+  `diffusion v3`/`fusion v3` from the completed training run) currently
+  only exists on the stopped GCP VM. Until this is baked into the image
+  (or a real sync path is built -- worth its own issue), this deployment
+  cannot actually serve a real forecast, only real storm listings.
+
+Also not done, per #91's remaining scope:
 
 - Demo/real routing in the Worker (`src/index.ts` currently forwards
   everything into the container unconditionally).
@@ -59,24 +116,34 @@ scope:
 ```bash
 docker build -f docker/api/Dockerfile -t anemoi-api-real:spike .
 docker run --rm -p 8080:8080 \
-  -e HURDAT2_PATH=/path/to/hurdat2.txt \
+  -v /path/to/hurdat2.txt:/data/hurdat2.txt:ro \
+  -e HURDAT2_PATH=/data/hurdat2.txt \
   -e S3_ARTIFACT_API_ENDPOINT=... -e S3_ARTIFACT_BUCKET=... \
   -e S3_ARTIFACT_ACCESS_KEYID=... -e S3_ARTIFACT_SECRET_ACCESS_KEY=... \
   anemoi-api-real:spike
 curl http://127.0.0.1:8080/v1/health
 ```
 
-## Deploying for real (once Cloudflare credentials are available)
+The `-v` host-volume mount above is exactly what does **not** carry over
+to the real Cloudflare deploy below -- see "What's genuinely still needed"
+for why `HURDAT2_PATH` needs a different answer there.
+
+## Deploying
 
 ```bash
 cd docker/api
 pnpm install
 pnpm exec wrangler login                     # or set CLOUDFLARE_API_TOKEN
-pnpm exec wrangler secret put HURDAT2_PATH   # or bake into the image / a mounted volume
+pnpm exec wrangler secret put S3_ARTIFACT_API_ENDPOINT
+pnpm exec wrangler secret put S3_ARTIFACT_BUCKET
 pnpm exec wrangler secret put S3_ARTIFACT_ACCESS_KEYID
 pnpm exec wrangler secret put S3_ARTIFACT_SECRET_ACCESS_KEY
 pnpm exec wrangler deploy                    # or: pnpm run cf:deploy
 ```
+
+Deliberately no `wrangler secret put HURDAT2_PATH` above -- see "What's
+genuinely still needed" for why that specific one is a footgun, not just
+a missing step.
 
 `pnpm deploy` (no `exec`/`run`) is a **different, built-in pnpm command**
 (exports a workspace package as a standalone deploy target, unrelated to
@@ -84,6 +151,20 @@ this project) -- it will fail with `ERR_PNPM_INVALID_DEPLOY_TARGET` if you
 run it by accident. Use `pnpm exec wrangler deploy` or `pnpm run
 cf:deploy`, not bare `pnpm deploy`.
 
-Docker (or a Docker-compatible daemon reachable the way `wrangler` expects)
-must be running locally during `wrangler deploy` -- it builds and pushes
-the image as part of the deploy.
+A real Docker engine (not just a `docker` command that resolves to one --
+see the `DOCKER_HOST` note above) must be reachable locally during
+`wrangler deploy`; it builds and pushes the image as part of the deploy.
+
+## Regenerating types
+
+`worker-configuration.d.ts` (the `Env` interface, `ExportedHandler`, and
+Workers/Containers/Durable Object runtime types) is generated from
+`wrangler.jsonc`, not hand-written, and is committed so editors/CI don't
+need an extra step to get types. Per Workers best practice, regenerate it
+(and re-run `pnpm run check` to type-check `src/index.ts` against it)
+after any change to `wrangler.jsonc`'s bindings:
+
+```bash
+pnpm run types  # wrangler types
+pnpm run check  # tsc --noEmit
+```
