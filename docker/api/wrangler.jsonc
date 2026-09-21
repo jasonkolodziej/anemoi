@@ -19,6 +19,12 @@
 			// `image_build_context` defaults to the Dockerfile's own directory,
 			// which fails with "pyproject.toml: not found" without this.
 			"image_build_context": "../..",
+			// Default instance type ("lite") caps images at 2000MB; this image
+			// is ~2.2GB (torch + fastapi + mlflow + boto3 + their deps).
+			// standard-1 (4GiB memory / 8GB disk) also gives runtime headroom
+			// for holding several small torch models loaded at once during a
+			// real cycle, not just enough disk for the image itself.
+			"instance_type": "standard-1",
 			"max_instances": 3,
 		},
 	],
