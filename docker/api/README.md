@@ -134,10 +134,20 @@ for why `HURDAT2_PATH` needs a different answer there.
 cd docker/api
 pnpm install
 pnpm exec wrangler login                     # or set CLOUDFLARE_API_TOKEN
+
+### Secrets handling
+
 pnpm exec wrangler secret put S3_ARTIFACT_API_ENDPOINT
 pnpm exec wrangler secret put S3_ARTIFACT_BUCKET
 pnpm exec wrangler secret put S3_ARTIFACT_ACCESS_KEYID
 pnpm exec wrangler secret put S3_ARTIFACT_SECRET_ACCESS_KEY
+
+#### OR in bulk
+
+echo '{"S3_ARTIFACT_API_ENDPOINT": "value1", "S3_ARTIFACT_BUCKET": "value2", "S3_ARTIFACT_ACCESS_KEYID": null, "S3_ARTIFACT_SECRET_ACCESS_KEY": null}' | npx wrangler secret bulk
+
+### Deploying 
+
 pnpm exec wrangler deploy                    # or: pnpm run cf:deploy
 ```
 
