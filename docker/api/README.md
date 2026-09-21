@@ -22,10 +22,34 @@ real, not just built-then-assumed:
   `gnn v4`, `pinn v4`, `diffusion v3`, `fusion v3`) -- the registry-data
   gap below is resolved.
 
-Not yet exercised: an actual `POST .../cycles` real forecast end to end
-(the pieces are now all in place -- real storms, real registry, real
-checkpoints in R2 -- but running one for real and checking the output is
-still a distinct, not-yet-done step).
+**Real end-to-end cycle: run for real, three real bugs found and fixed or
+diagnosed along the way** (none of them Cloudflare-deployment-specific --
+`POST .../cycles` was the thing that actually exercised them for the
+first time):
+
+1. **#94/#95, fixed and merged.** `evaluate_promotion`'s decision was
+   computed and printed by both real training entry points but never
+   applied -- every real version was stuck at `stage=none`. Fixed;
+   manually promoted the 5 real versions that genuinely earn it
+   (`beats_incumbent` re-checked by hand against the real registered
+   metrics, not assumed): `cnn v5`, `transformer v4`, `gnn v4`,
+   `diffusion v3`, `fusion v3`. `lstm v6`/`pinn v4` do **not** qualify --
+   both are actually worse than their own immediate predecessor.
+2. **#98, fixed and merged.** `real_inference_live._current_fields` only
+   ever read a pre-populated local cache; no environment outside the
+   training VM ever had one. Added `data.gdas_cache.fetch_one` and an
+   on-demand fetch fallback. **Confirmed working** -- traced via temporary
+   per-model debug instrumentation (added and reverted in the same
+   session, not committed) that the live GDAS fetch itself succeeds.
+3. **#100, found, not yet fixed -- a decision, not a quick patch.** One
+   step past the fetch, `real_inference.load_trained_model` needs an
+   `arch_params` registry tag to reconstruct a checkpoint's architecture.
+   `cnn v5`/`transformer v4`/`gnn v4` -- the exact real, verified
+   checkpoints from the one fully-verified training run -- predate PR #79
+   (`arch_params_tag`), so they don't have it. Real cycles still fall back
+   to the synthetic path until #100 is resolved (retroactively patch the
+   tags, or re-run training with current code -- see #100 for the
+   tradeoffs).
 
 Spike findings (all confirmed, not just built-then-assumed):
 
