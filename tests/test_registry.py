@@ -6,12 +6,17 @@ from anemoi.data.sources import Flavor
 from anemoi.tracking.registry import (
     ALL_MODELS,
     GROUP1_MODELS,
+    REGISTRY_STORE_KEY,
     ModelRegistry,
     RegistryError,
     Stage,
     invalidated_by,
     latent_signature,
 )
+
+
+class _FakeS3Config:
+    bucket = "fake-bucket"
 
 METRICS = {"track_error_48h_nm": 70.0}
 
@@ -259,3 +264,119 @@ def test_mlflow_transition_mirror_uses_real_titlecase_stage_names(tmp_path):
     reg.transition("lstm", v.version, Stage.PRODUCTION)
 
     assert calls == [("lstm", str(v.version), "Production")]
+
+
+def test_checkpoint_store_push_mirrors_registry_json_after_every_save(tmp_path):
+    """The durable-storage counterpart to the MLflow mirror (#91): every
+    save should push the real registry.json to the fixed key every reader
+    (a fresh Cloudflare Container's bootstrap, `anemoi registry-pull`)
+    agrees on."""
+    calls: list[tuple] = []
+
+    class RecordingStore:
+        config = _FakeS3Config()
+
+        def upload(self, local_path, key):
+            calls.append((local_path, key))
+
+    reg = ModelRegistry(tmp_path, checkpoint_store=RecordingStore())
+    reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+
+    assert len(calls) == 1
+    local_path, key = calls[0]
+    assert key == REGISTRY_STORE_KEY
+    assert local_path == tmp_path / "registry.json"
+    assert local_path.exists()
+
+
+def test_checkpoint_store_push_failure_degrades_to_local_only(tmp_path):
+    class BrokenStore:
+        config = _FakeS3Config()
+
+        def upload(self, local_path, key):
+            raise RuntimeError("R2 unreachable")
+
+    reg = ModelRegistry(tmp_path, checkpoint_store=BrokenStore())
+    reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+    reg.register("cnn", run_id="b", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+
+    assert len(reg.versions("lstm")) == 1
+    assert len(reg.versions("cnn")) == 1
+
+
+def test_pull_from_checkpoint_store_hydrates_a_missing_local_registry(tmp_path):
+    """The read-side counterpart: a fresh process with no local
+    registry.json (a Cloudflare Container's ephemeral disk on every cold
+    start) should hydrate from durable storage instead of starting empty."""
+    remote_path = tmp_path / "remote.json"
+    reg = ModelRegistry(tmp_path / "writer", checkpoint_store=None)
+    reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+    remote_path.write_text((reg.root / "registry.json").read_text())  # simulate a prior push
+
+    class FakeStore:
+        config = _FakeS3Config()
+
+        def exists(self, key):
+            assert key == REGISTRY_STORE_KEY
+            return True
+
+        def download(self, uri, local_path):
+            assert uri == f"s3://{_FakeS3Config.bucket}/{REGISTRY_STORE_KEY}"
+            local_path.write_text(remote_path.read_text())
+
+    reader = ModelRegistry(tmp_path / "reader", checkpoint_store=FakeStore())
+    assert len(reader.versions("lstm")) == 1
+    assert reader.latest("lstm").run_id == "a"
+
+
+def test_pull_is_skipped_when_a_local_registry_already_exists(tmp_path):
+    """Local disk (the normal VM case, where registry.json already exists
+    from prior runs) always wins -- no need to touch durable storage."""
+
+    class ExplodingStore:
+        config = _FakeS3Config()
+
+        def exists(self, key):
+            raise AssertionError("should not be called when a local file already exists")
+
+        def download(self, uri, local_path):
+            raise AssertionError("should not be called when a local file already exists")
+
+        def upload(self, local_path, key):
+            pass
+
+    reg = ModelRegistry(tmp_path, checkpoint_store=ExplodingStore())
+    reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+
+    # A second instance over the same root has a local file already -- must
+    # not call the (exploding) checkpoint store's read path.
+    reg2 = ModelRegistry(tmp_path, checkpoint_store=ExplodingStore())
+    assert len(reg2.versions("lstm")) == 1
+
+
+def test_pull_failure_degrades_to_an_empty_registry(tmp_path):
+    class BrokenStore:
+        config = _FakeS3Config()
+
+        def exists(self, key):
+            raise RuntimeError("R2 unreachable")
+
+    reg = ModelRegistry(tmp_path, checkpoint_store=BrokenStore())
+    assert reg.versions("lstm") == []
+
+
+def test_pull_is_a_noop_when_the_key_does_not_exist_remotely_yet(tmp_path):
+    """Before any run has ever pushed a registry.json -- e.g. the very
+    first real deploy -- there is nothing to pull; must not raise."""
+
+    class EmptyStore:
+        config = _FakeS3Config()
+
+        def exists(self, key):
+            return False
+
+        def download(self, uri, local_path):
+            raise AssertionError("should not be called when the remote key doesn't exist")
+
+    reg = ModelRegistry(tmp_path, checkpoint_store=EmptyStore())
+    assert reg.versions("lstm") == []

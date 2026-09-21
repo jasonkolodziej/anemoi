@@ -52,4 +52,14 @@ ENV ANEMOI_API_REAL_STATE=1
 ENV HURDAT2_PATH=/app/data/hurdat2.txt
 EXPOSE 8080
 
-CMD ["uvicorn", "anemoi.api.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# `anemoi registry-pull` hydrates a local registry.json from R2 (see
+# tracking.registry.ModelRegistry's checkpoint_store mirror, #91) --
+# without this, a fresh container has no registered model versions at
+# all and every real cycle silently degrades to the synthetic fallback.
+# `|| true`: this must never block startup -- RealState already degrades
+# gracefully with an empty registry (same contract the registry's own
+# best-effort mirror uses), so a misconfigured/unreachable R2 here should
+# log and continue, not crash the container. Real errors are still
+# visible: `anemoi registry-pull` run directly (not through this `|| true`)
+# fails loudly, e.g. for an operator checking why real cycles aren't real.
+CMD ["sh", "-c", "anemoi registry-pull || true; exec uvicorn anemoi.api.main:app --host 0.0.0.0 --port 8080"]

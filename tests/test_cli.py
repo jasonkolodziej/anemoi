@@ -249,3 +249,52 @@ def test_cmd_train_schedule_passes_streaming_batch_size_and_num_workers_to_runne
     assert captured["streaming"] is True
     assert captured["batch_size"] == 16
     assert captured["num_workers"] == 3
+
+
+def test_cmd_registry_pull_hydrates_from_durable_storage(tmp_path, monkeypatch, capsys):
+    """#91: a fresh Cloudflare Container's ephemeral disk has no local
+    registry.json -- this command is the bootstrap step that pulls one
+    from durable storage before the API starts."""
+    import json
+
+    remote = json.dumps(
+        {
+            "versions": {
+                "lstm": [
+                    {
+                        "name": "lstm", "version": 1, "stage": "staging", "run_id": "r1",
+                        "input_flavor": "gdas_finetune",
+                        "metrics": {"track_error_48h_nm": 40.0}, "tags": {},
+                        "latent_signature": None,
+                        "created_at": "2026-01-01T00:00:00+00:00",
+                        "checkpoint_uri": "s3://bucket/lstm.pt",
+                    }
+                ]
+            },
+            "pins": {},
+        }
+    )
+
+    class FakeStore:
+        config = type("Cfg", (), {"bucket": "fake-bucket"})()
+
+        def exists(self, key):
+            return True
+
+        def download(self, uri, local_path):
+            local_path.write_text(remote)
+
+    monkeypatch.setattr(
+        "anemoi.tracking.checkpoint_store.S3Config",
+        type("FakeS3Config", (), {"from_env": staticmethod(lambda: "fake-config")}),
+    )
+    monkeypatch.setattr(
+        "anemoi.tracking.checkpoint_store.CheckpointStore", lambda config: FakeStore()
+    )
+
+    args = argparse.Namespace(registry_root=str(tmp_path / "registry"))
+    assert cli.cmd_registry_pull(args) == 0
+
+    out = capsys.readouterr().out
+    assert "1 registered version(s) across 7 models" in out
+    assert (tmp_path / "registry" / "registry.json").exists()
