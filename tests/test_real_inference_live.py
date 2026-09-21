@@ -102,10 +102,19 @@ def test_build_live_cnn_x_returns_the_real_sanitized_channel_stack(tmp_path):
     assert np.all(np.isfinite(x))
 
 
-def test_build_live_cnn_x_is_none_without_a_cached_field():
+def test_build_live_cnn_x_is_none_without_a_cached_field_and_the_live_fetch_fails(
+    tmp_path, monkeypatch
+):
+    """A cache miss now tries a real on-demand GDAS fetch (#98) before
+    giving up -- mock it failing (a real network/no-data outcome) rather
+    than actually hitting the network in a unit test."""
+    monkeypatch.setattr(
+        "anemoi.data.gdas_cache.fetch_one",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no network in tests")),
+    )
     track = make_track("AL011985", n=3)
     current = track.fixes[-1]
-    assert build_live_cnn_x(track, current, "/nonexistent/cache") is None
+    assert build_live_cnn_x(track, current, tmp_path / "nonexistent") is None
 
 
 def test_build_live_transformer_x_trims_to_the_real_grid_size(tmp_path):
@@ -135,10 +144,16 @@ def test_build_live_gnn_x_returns_node_features_and_a_real_topology(tmp_path):
     assert np.all(np.isfinite(node_features))
 
 
-def test_build_live_gnn_x_is_none_without_a_cached_field():
+def test_build_live_gnn_x_is_none_without_a_cached_field_and_the_live_fetch_fails(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "anemoi.data.gdas_cache.fetch_one",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no network in tests")),
+    )
     track = make_track("AL011985", n=3)
     current = track.fixes[-1]
-    assert build_live_gnn_x(track, current, "/nonexistent/cache") is None
+    assert build_live_gnn_x(track, current, tmp_path / "nonexistent") is None
 
 
 # --- PINN (needs a real, already-loaded candidate model too) ----------------
@@ -173,10 +188,16 @@ def test_build_live_pinn_x_returns_env_features_and_absolute_candidate(tmp_path,
     assert abs(candidate_abs[0, 1] - current.lon) < 5.0
 
 
-def test_build_live_pinn_x_is_none_without_a_cached_field(candidate_model):
+def test_build_live_pinn_x_is_none_without_a_cached_field_and_the_live_fetch_fails(
+    tmp_path, monkeypatch, candidate_model
+):
+    monkeypatch.setattr(
+        "anemoi.data.gdas_cache.fetch_one",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no network in tests")),
+    )
     track = make_track("AL011985", n=SEQUENCE_LENGTH + 5)
     current = track.fixes[-1]
-    assert build_live_pinn_x(track, current, candidate_model, "/nonexistent/cache") is None
+    assert build_live_pinn_x(track, current, candidate_model, tmp_path / "nonexistent") is None
 
 
 def test_build_live_pinn_x_is_none_when_the_storm_is_entirely_over_land(tmp_path, candidate_model):
@@ -199,3 +220,60 @@ def test_build_live_pinn_x_is_none_when_the_storm_is_entirely_over_land(tmp_path
     save_cached_fields(cache_path(tmp_path, task), land_fields, task)
 
     assert build_live_pinn_x(track, current, candidate_model, tmp_path) is None
+
+
+# --- on-demand GDAS fetch fallback (#98) -------------------------------------
+
+
+def test_current_fields_fetches_on_demand_and_caches_the_result(tmp_path, monkeypatch):
+    """A cache miss for a storm/time GDAS actually has data for (any real
+    HURDAT2 storm from 2021 onward, not just a genuinely live one -- see
+    _current_fields' docstring) must fetch it, not just give up, and must
+    save it so a repeat cycle for the same window doesn't re-fetch."""
+    from anemoi.training.real_inference_live import _current_fields
+
+    track = make_track("AL011985", n=3)
+    current = track.fixes[-1]
+    fetched = make_fields(current.valid_time, shape=(9, 9))
+    calls: list[tuple] = []
+
+    def fake_fetch_one(valid_time, lat, lon, **kwargs):
+        calls.append((valid_time, lat, lon))
+        return fetched
+
+    monkeypatch.setattr("anemoi.data.gdas_cache.fetch_one", fake_fetch_one)
+
+    result = _current_fields(track, current, tmp_path)
+
+    assert calls == [(current.valid_time, current.lat, current.lon)]
+    assert result is fetched
+    task = FetchTask(
+        storm_id=track.storm_id, valid_time=current.valid_time, lat=current.lat, lon=current.lon,
+    )
+    assert cache_path(tmp_path, task).exists()  # saved for next time, not re-fetched
+
+    # A second call must hit the now-warm cache, not fetch again.
+    calls.clear()
+    result2 = _current_fields(track, current, tmp_path)
+    assert calls == []
+    assert result2.valid_time == fetched.valid_time
+
+
+def test_current_fields_never_fetches_before_the_real_gdas_archive_starts(tmp_path, monkeypatch):
+    """A time before GDAS_ARCHIVE_START is a guaranteed 404 -- must not
+    even attempt the network call."""
+    from anemoi.data.gdas_cache import GDAS_ARCHIVE_START
+    from anemoi.training.real_inference_live import _current_fields
+
+    monkeypatch.setattr(
+        "anemoi.data.gdas_cache.fetch_one",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not be called")),
+    )
+    track = make_track("AL011985", n=3)
+    old_fix = Fix(
+        storm_id=track.storm_id, valid_time=GDAS_ARCHIVE_START - timedelta(hours=6),
+        lat=track.fixes[-1].lat, lon=track.fixes[-1].lon,
+        max_wind_kt=60.0, min_pressure_mb=990.0, quality=TrackQuality.WORKING,
+    )
+
+    assert _current_fields(track, old_fix, tmp_path) is None
