@@ -72,6 +72,22 @@ def create_app() -> FastAPI:
     app.include_router(retraining.router, prefix="/v1")
     app.include_router(stream_router, prefix="/v1")
 
+    if os.environ.get("ANEMOI_API_DEBUG"):
+        # Opt-in only -- real cycle failure detail (which model, why) is
+        # not secret, but there is no reason to expose it by default.
+        # real_state.RealState.last_deterministic_error is always captured
+        # regardless of this flag (cheap: one short string); this route
+        # only controls whether it's ever served over HTTP. The container
+        # log access this exists in place of has repeatedly proven hard to
+        # get to on this deployment (see docker/api/README.md's "problem
+        # 4"/"problem 6") -- found real, useful this way for #100.
+        @app.get("/debug/last-deterministic-error", include_in_schema=False)
+        def _debug_last_deterministic_error() -> dict:
+            from .deps import state_dependency
+
+            state = state_dependency()
+            return {"error": getattr(state, "last_deterministic_error", None)}
+
     @app.get("/", include_in_schema=False)
     def root() -> dict:
         return {

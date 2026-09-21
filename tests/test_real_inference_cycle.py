@@ -278,5 +278,49 @@ def test_build_real_deterministic_fn_raises_with_no_registered_models(tmp_path):
         target_time=current.valid_time, cycle_start=current.valid_time,
         stages=(), inputs=None, vitals_estimated=False,
     )
-    with pytest.raises(InferenceCycleError, match="no real Group 1 model"):
+    with pytest.raises(InferenceCycleError, match="no real Group 1 model") as excinfo:
         deterministic_fn(plan, current)
+
+    # #100: the message must say *why*, per model -- not just that nothing
+    # contributed. An empty registry means every model's reason is the
+    # same, but the mechanism (not this particular reason) is what matters.
+    message = str(excinfo.value)
+    for name in ("lstm", "cnn", "transformer", "gnn", "pinn"):
+        assert f"{name}: no registered staging/production version" in message
+
+
+@pytest.mark.torch
+def test_deterministic_fn_reports_missing_standardisation_stats_by_name(tmp_path):
+    """The exact real #100 scenario: a version with a real, loadable
+    checkpoint (real arch_params, real weights) but no x/y standardisation
+    stats -- registered before PR #82 -- must be told apart from "no
+    registered version" or "no live feature", not lumped into one generic
+    failure."""
+    from anemoi.inference.scheduler import CyclePlan
+
+    track = make_track("AL011985", n=SEQUENCE_LENGTH + 5)
+    current = track.fixes[-1]
+    cache_current_fix(tmp_path, track, current)
+
+    registry = ModelRegistry(tmp_path / "registry")
+    store = _store()
+    _register_real_version(
+        "cnn", {
+            "in_channels": len(CNN_FIELD_NAMES), "latent_dim": 8,
+            "lead_hours": [12, 24, 36, 48, 72, 96, 120],
+        },
+        x_shape=None,  # the real #100 gap: no standardisation tags at all
+        registry=registry, store=store, tmp_path=tmp_path, stage=Stage.STAGING,
+    )
+
+    deterministic_fn = build_real_deterministic_fn(track, registry, store, tmp_path)
+    plan = CyclePlan(
+        target_time=current.valid_time, cycle_start=current.valid_time,
+        stages=(), inputs=None, vitals_estimated=False,
+    )
+    with pytest.raises(InferenceCycleError) as excinfo:
+        deterministic_fn(plan, current)
+
+    message = str(excinfo.value)
+    assert "cnn: missing x/y standardisation stats (predates #82)" in message
+    assert "lstm: no registered staging/production version" in message

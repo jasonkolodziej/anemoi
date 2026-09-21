@@ -87,6 +87,60 @@ def test_real_state_run_cycle_degrades_to_the_synthetic_fallback(client):
     # RealState.run_cycle's try/except degrades that one silently).
     assert any(f.startswith("spread_fallback:") for f in body["payload"]["flags"])
 
+    # #100: the real reason must be captured (always, cheap), even though
+    # this test doesn't expose it over HTTP (ANEMOI_API_DEBUG unset).
+    from anemoi.api.real_state import get_real_state
+
+    assert get_real_state().last_deterministic_error is not None
+    assert "CheckpointStoreError" in get_real_state().last_deterministic_error
+
+
+def test_debug_last_deterministic_error_route_needs_opt_in(tmp_path, hurdat2_file, monkeypatch):
+    """The route must not exist at all (404, not a real endpoint returning
+    empty data) unless ANEMOI_API_DEBUG is set -- real failure detail is
+    not secret, but there is no reason to expose it by default. Builds a
+    fresh app via create_app() directly (not the cached module-level
+    `app`) -- route registration happens at create_app() time, so a
+    monkeypatched env var only takes effect on a fresh instance."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ANEMOI_API_REAL_STATE", "1")
+    monkeypatch.delenv("ANEMOI_API_DEBUG", raising=False)
+    monkeypatch.setenv("HURDAT2_PATH", str(hurdat2_file))
+    monkeypatch.setenv("REGISTRY_ROOT", str(tmp_path / "registry"))
+    monkeypatch.setenv("GDAS_CACHE_DIR", str(tmp_path / "gdas_cache"))
+
+    from anemoi.api import real_state
+    from anemoi.api.main import create_app
+
+    real_state._REAL_STATE = None
+    r = TestClient(create_app()).get("/debug/last-deterministic-error")
+    assert r.status_code == 404
+
+
+def test_debug_last_deterministic_error_route_reports_the_real_reason(
+    tmp_path, hurdat2_file, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ANEMOI_API_REAL_STATE", "1")
+    monkeypatch.setenv("ANEMOI_API_DEBUG", "1")
+    monkeypatch.setenv("HURDAT2_PATH", str(hurdat2_file))
+    monkeypatch.setenv("REGISTRY_ROOT", str(tmp_path / "registry"))
+    monkeypatch.setenv("GDAS_CACHE_DIR", str(tmp_path / "gdas_cache"))
+
+    from anemoi.api import real_state
+    from anemoi.api.main import create_app
+
+    real_state._REAL_STATE = None
+    debug_client = TestClient(create_app())
+    r = debug_client.post(
+        "/v1/storms/AL012026/cycles", json={"cycle": "20260901_18Z", "members": 4},
+    )
+    assert r.status_code == 201
+
+    r = debug_client.get("/debug/last-deterministic-error")
+    assert r.status_code == 200
+    assert "CheckpointStoreError" in r.json()["error"]
+
 
 def test_demo_state_is_unaffected_by_default(tmp_path, monkeypatch):
     """Without ANEMOI_API_REAL_STATE set at all, the API must behave
