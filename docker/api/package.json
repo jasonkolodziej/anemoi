@@ -4,8 +4,8 @@
 	"version": "0.1.0",
 	"description": "Worker + Cloudflare Container front door for real-mode Anemoi-API (issue #91).",
 	"scripts": {
-		"dev": "wrangler dev",
-		"cf:deploy": "wrangler deploy",
+		"dev": "env -u DOCKER_HOST wrangler dev",
+		"cf:deploy": "env -u DOCKER_HOST wrangler deploy",
 		"types": "wrangler types",
 		"check": "tsc --noEmit"
 	},

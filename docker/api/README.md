@@ -56,11 +56,15 @@ build` spike alone, only from a real `wrangler deploy` attempt:
    reported success. Root-caused by comparing `docker context ls` (shows
    `desktop-linux` as the selected context) against `echo $DOCKER_HOST`
    (pointed at podman regardless) -- `DOCKER_HOST` overrides context
-   selection. Fixed by running the deploy with it unset for that one
-   command: `env -u DOCKER_HOST pnpm exec wrangler deploy`. This is a
-   per-shell environment quirk on this machine, not something fixed in
-   the repo -- if you hit the same error, check `echo $DOCKER_HOST` before
-   assuming the image/config is wrong. Cloudflare's own container tooling
+   selection. This bit us twice: once diagnosed and worked around
+   one-off with `env -u DOCKER_HOST`, then again when `pnpm cf:deploy`
+   was run plainly in a fresh shell (same `DOCKER_HOST` still set) and
+   failed the exact same way -- the fix wasn't durable until it moved
+   into the script itself. **Fixed for good** by baking `env -u
+   DOCKER_HOST` into the `dev`/`cf:deploy` scripts in `package.json`, so
+   `pnpm run cf:deploy` (or `pnpm cf:deploy`) is safe regardless of shell
+   state; invoking `wrangler deploy` directly (bypassing the npm script)
+   still needs the manual override. Cloudflare's own container tooling
    has a documented, unresolved podman incompatibility
    ([workers-sdk#9755](https://github.com/cloudflare/workers-sdk/issues/9755)).
 
@@ -133,37 +137,50 @@ for why `HURDAT2_PATH` needs a different answer there.
 ```bash
 cd docker/api
 pnpm install
-pnpm exec wrangler login                     # or set CLOUDFLARE_API_TOKEN
+pnpm exec wrangler login    # or set CLOUDFLARE_API_TOKEN
+```
 
-### Secrets handling
+Set secrets, either one at a time:
 
+```bash
 pnpm exec wrangler secret put S3_ARTIFACT_API_ENDPOINT
 pnpm exec wrangler secret put S3_ARTIFACT_BUCKET
 pnpm exec wrangler secret put S3_ARTIFACT_ACCESS_KEYID
 pnpm exec wrangler secret put S3_ARTIFACT_SECRET_ACCESS_KEY
-
-#### OR in bulk
-
-echo '{"S3_ARTIFACT_API_ENDPOINT": "value1", "S3_ARTIFACT_BUCKET": "value2", "S3_ARTIFACT_ACCESS_KEYID": null, "S3_ARTIFACT_SECRET_ACCESS_KEY": null}' | npx wrangler secret bulk
-
-### Deploying 
-
-pnpm exec wrangler deploy                    # or: pnpm run cf:deploy
 ```
+
+or in bulk, which `wrangler secret bulk` accepts either as a JSON object
+(`{"KEY": "value", ...}`, where a `null` value **deletes** that secret
+rather than setting it -- not a way to pull from the environment) or, more
+usefully here, directly as an `.env`-style file:
+
+```bash
+pnpm exec wrangler secret bulk path/to/an/.env/style/file
+```
+
+A plain JSON blob piped via `echo` puts the real secret values in your
+shell history; prefer a `KEY=VALUE` file (e.g. a scratch copy of the
+relevant `S3_ARTIFACT_*` lines from the repo's own `.env`) over that.
 
 Deliberately no `wrangler secret put HURDAT2_PATH` above -- see "What's
 genuinely still needed" for why that specific one is a footgun, not just
 a missing step.
 
-`pnpm deploy` (no `exec`/`run`) is a **different, built-in pnpm command**
-(exports a workspace package as a standalone deploy target, unrelated to
-this project) -- it will fail with `ERR_PNPM_INVALID_DEPLOY_TARGET` if you
-run it by accident. Use `pnpm exec wrangler deploy` or `pnpm run
-cf:deploy`, not bare `pnpm deploy`.
+Then deploy:
 
-A real Docker engine (not just a `docker` command that resolves to one --
-see the `DOCKER_HOST` note above) must be reachable locally during
-`wrangler deploy`; it builds and pushes the image as part of the deploy.
+```bash
+pnpm run cf:deploy
+```
+
+Use `pnpm run cf:deploy` (or `pnpm cf:deploy`), not bare `pnpm deploy` --
+that's a **different, built-in pnpm command** (exports a workspace
+package as a standalone deploy target, unrelated to this project) and
+fails with `ERR_PNPM_INVALID_DEPLOY_TARGET`. `cf:deploy` also has the
+`DOCKER_HOST` fix (see problem 3 above) baked in; calling `wrangler
+deploy` directly instead of through this script does not.
+
+A real Docker engine must be reachable locally during the deploy; it
+builds and pushes the image as part of it.
 
 ## Regenerating types
 
