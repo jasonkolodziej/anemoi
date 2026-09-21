@@ -39,21 +39,47 @@ def _current_window(track: Track, current: Fix, length: int) -> tuple[Fix, ...] 
 
 
 def _current_fields(track: Track, current: Fix, cache_dir: Path | str) -> GriddedFields | None:
-    """The current fix's cached `GriddedFields`, the same real cache
-    lookup CNN/Transformer/GNN/PINN's training builders already use --
-    real live ingestion (fetching gridded fields for right now, not a
-    historical cached one) is issue #78's own sibling ingestion gap, not
-    solved here; this reads from whatever's already cached, live or not.
+    """The current fix's `GriddedFields` -- the same real cache lookup
+    CNN/Transformer/GNN/PINN's training builders already use, falling back
+    to a real, on-demand GDAS fetch (#98) on a cache miss instead of giving
+    up. GDAS, not ERA5: live/operational inference is always the
+    operational flavor (every real registered version already requires
+    `Flavor.GDAS_FINETUNE`, see `tracking.registry.ModelRegistry.register`),
+    and GDAS's real archive covers any storm from 2021 onward
+    (`data.gdas_cache.GDAS_ARCHIVE_START`) -- including any real HURDAT2
+    storm `RealState` can serve today, not just a genuinely live one.
+
+    Fetched fields are saved to `cache_dir` (same real on-disk format
+    `run_fetch_cache` writes), so a repeat cycle for the same storm/time
+    doesn't re-fetch. Any failure here (network, an eccodes/libeccodes
+    install gap -- see `real_gridded.require_gdas_deps`'s docstring --
+    before GDAS_ARCHIVE_START, or GDAS simply not having this exact
+    synoptic hour) degrades to `None`, the same "this model can't
+    contribute to this cycle" contract every caller here already has to
+    handle regardless of the reason.
     """
-    from ..data.gridded_cache import FetchTask, cache_path, load_cached_fields
+    from ..data.gridded_cache import FetchTask, cache_path, load_cached_fields, save_cached_fields
 
     task = FetchTask(
         storm_id=track.storm_id, valid_time=current.valid_time, lat=current.lat, lon=current.lon,
     )
     path = cache_path(cache_dir, task)
-    if not path.exists():
+    if path.exists():
+        return load_cached_fields(path)
+
+    from ..data.gdas_cache import GDAS_ARCHIVE_START
+
+    if current.valid_time < GDAS_ARCHIVE_START:
         return None
-    return load_cached_fields(path)
+
+    try:
+        from ..data.gdas_cache import fetch_one
+
+        fields = fetch_one(current.valid_time, current.lat, current.lon)
+    except Exception:  # noqa: BLE001 - no real field available must degrade, never crash a cycle
+        return None
+    save_cached_fields(path, fields, task)
+    return fields
 
 
 def build_live_lstm_x(track: Track, current: Fix) -> np.ndarray | None:

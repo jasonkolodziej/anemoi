@@ -17,6 +17,15 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir "torch>=2.2" --index-url https://download.pytorch.org/whl/cpu
 
+# libeccodes0: the `gridded` extra's `eccodes` PyPI package is pure-Python
+# *bindings* only -- it does not bundle the compiled native library (see
+# data.real_gridded.require_gdas_deps's docstring; this bit training on a
+# fresh machine before too). Needed for GDAS fetches (data.gdas_cache,
+# #98's on-demand live-inference fetch), not for ERA5's pure-Python
+# xarray/zarr/gcsfs path.
+RUN apt-get update && apt-get install -y --no-install-recommends libeccodes0 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 
@@ -43,10 +52,11 @@ urllib.request.urlretrieve( \
 # api: fastapi/uvicorn. tracking: mlflow client (registry mirror; degrades
 # to the local JSON store per Scope v2.1 SS10.1 if unreachable/unconfigured).
 # storage: boto3, for CheckpointStore's S3/R2-backed checkpoint loading.
-# No `gridded` extra -- real_inference_live.py's live feature builders read
-# from GriddedFieldCache lookups (numpy only, verified by inspection), not
-# xarray/zarr/gcsfs, which are only needed at training-data-fetch time.
-RUN pip install --no-cache-dir ".[api,tracking,storage]"
+# gridded: xarray/zarr/gcsfs/eccodes/requests -- real_inference_live.py's
+# live feature builders need this now too (#98): a cache miss fetches the
+# real field on demand via data.gdas_cache.fetch_one, not just GriddedField
+# lookups against an already-populated cache.
+RUN pip install --no-cache-dir ".[api,tracking,storage,gridded]"
 
 ENV ANEMOI_API_REAL_STATE=1
 ENV HURDAT2_PATH=/app/data/hurdat2.txt

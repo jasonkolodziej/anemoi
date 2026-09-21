@@ -13,7 +13,7 @@ import pytest
 
 from anemoi.data.besttrack import Fix, Track, TrackQuality
 from anemoi.data.features import GriddedFields
-from anemoi.data.gdas_cache import GDAS_ARCHIVE_START, run_fetch_cache
+from anemoi.data.gdas_cache import GDAS_ARCHIVE_START, fetch_one, run_fetch_cache
 from anemoi.data.sources import Flavor
 
 T = datetime(2026, 8, 6, 0, tzinfo=UTC)
@@ -173,3 +173,32 @@ def test_default_fetch_fn_wires_a_shared_session(monkeypatch):
     assert len(received_sessions) == 2
     assert received_sessions[0] is received_sessions[1]
     assert received_sessions[0] is not None
+
+
+@pytest.mark.gridded
+def test_fetch_one_fetches_exactly_one_real_sample(monkeypatch):
+    """#98: training.real_inference_live's on-demand cache-miss fallback
+    calls this directly -- one real sample, not a whole tracks list."""
+    pytest.importorskip("requests")
+
+    calls: list[tuple] = []
+
+    def fake_fetch_gdas_grib2_fields(valid_time, *, session=None, timeout=60.0):
+        calls.append(("fetch", valid_time))
+        return {}
+
+    def fake_gdas_to_gridded_fields(messages, center_lat, center_lon, valid_time, **kw):
+        calls.append(("convert", center_lat, center_lon, valid_time))
+        return make_fields()
+
+    monkeypatch.setattr(
+        "anemoi.data.real_gridded.fetch_gdas_grib2_fields", fake_fetch_gdas_grib2_fields
+    )
+    monkeypatch.setattr(
+        "anemoi.data.real_gridded.gdas_to_gridded_fields", fake_gdas_to_gridded_fields
+    )
+
+    result = fetch_one(T, 20.0, -60.0)
+
+    assert calls == [("fetch", T), ("convert", 20.0, -60.0, T)]
+    assert result.valid_time == T

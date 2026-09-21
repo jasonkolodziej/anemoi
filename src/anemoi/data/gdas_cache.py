@@ -31,7 +31,7 @@ from .features import GriddedFields
 from .gridded_cache import FetchCacheReport, FieldsFetcher, filter_tracks_by_min_valid_time
 from .gridded_cache import run_fetch_cache as _run_fetch_cache
 
-__all__ = ["GDAS_ARCHIVE_START", "run_fetch_cache"]
+__all__ = ["GDAS_ARCHIVE_START", "fetch_one", "run_fetch_cache"]
 
 #: Earliest date with real data in noaa-gfs-bdp-pds, verified via direct S3
 #: `list-type=2` listing (2026-09-16) -- the bucket has no documented
@@ -61,6 +61,27 @@ def _default_fetch_fn(box_deg: float) -> FieldsFetcher:
         )
 
     return fetch
+
+
+def fetch_one(
+    valid_time: datetime, lat: float, lon: float, *, box_deg: float = 10.0
+) -> GriddedFields:
+    """Fetch real GDAS GriddedFields for one specific sample, on demand --
+    not a batch. `training.real_inference_live`'s on-demand cache-miss
+    fallback is the motivating caller: `_current_fields` needs exactly one
+    window's fields for a real live cycle, not `run_fetch_cache`'s whole
+    tracks-list/concurrency/resumability machinery built for training-time
+    bulk fetches. GDAS, not ERA5, because live/operational inference is
+    always the operational flavor (`data.sources.Flavor.GDAS_FINETUNE` --
+    every real registered version already requires it, see
+    `tracking.registry.ModelRegistry.register`), and ERA5 is a Stage A
+    pretraining-only reanalysis source, not meant to stand in for "real
+    data right now."
+
+    A single call, not worth sharing a `requests.Session` across -- that
+    optimisation is for `run_fetch_cache`'s thousands of calls.
+    """
+    return _default_fetch_fn(box_deg)(valid_time, lat, lon)
 
 
 def run_fetch_cache(
