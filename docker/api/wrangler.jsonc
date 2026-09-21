@@ -14,6 +14,11 @@
 		{
 			"class_name": "AnemoiRealApi",
 			"image": "./Dockerfile",
+			// The Dockerfile's COPY instructions (pyproject.toml, src/, etc.)
+			// expect the repo root as the build context, not this directory --
+			// `image_build_context` defaults to the Dockerfile's own directory,
+			// which fails with "pyproject.toml: not found" without this.
+			"image_build_context": "../..",
 			"max_instances": 3,
 		},
 	],
