@@ -273,23 +273,44 @@ def build_real_deterministic_fn(
 
         per_model_abs: dict[str, np.ndarray] = {}
         recent_errors: dict[str, float] = {}
+        # Why each model didn't contribute, built unconditionally (a few
+        # short strings, no real cost) -- folded into InferenceCycleError's
+        # own message below rather than just "no real model contributed."
+        # Real precedent for needing this: #100 (a version's checkpoint
+        # loading fine but missing standardisation stats, a version with no
+        # registered stage at all, and a live-feature fetch failure all
+        # produce the exact same "didn't contribute" outcome, and told apart
+        # only by which reason each model actually got.
+        reasons: dict[str, str] = {}
 
         for name in _GROUP1_LIVE_MODELS:
             if name == "pinn":
                 abs_pred = _run_pinn(registry, checkpoint_store, track, current, cache_dir)
                 version = registry.production("pinn") or registry.in_stage("pinn", Stage.STAGING)
+                if version is None:
+                    reasons[name] = "no registered staging/production version"
+                elif abs_pred is None:
+                    reasons[name] = (
+                        "no real live feature, checkpoint, or env standardisation stats"
+                    )
             else:
                 version = registry.production(name) or registry.in_stage(name, Stage.STAGING)
                 abs_pred = None
-                if version is not None:
+                if version is None:
+                    reasons[name] = "no registered staging/production version"
+                else:
                     raw = _build_live_x(name, track, current, cache_dir)
-                    if raw is not None:
+                    if raw is None:
+                        reasons[name] = "no real live feature (no cache, on-demand fetch failed)"
+                    else:
                         try:
                             model, _spec = load_trained_model(name, version, checkpoint_store)
                             stats = load_standardization_stats(version)
                             abs_pred = _run_group1_model(name, model, raw, stats, current)
-                        except InferenceLoadError:
-                            abs_pred = None
+                            if abs_pred is None:
+                                reasons[name] = "missing x/y standardisation stats (predates #82)"
+                        except InferenceLoadError as exc:
+                            reasons[name] = f"InferenceLoadError: {exc}"
             if abs_pred is None or version is None:
                 continue
 
@@ -298,9 +319,9 @@ def build_real_deterministic_fn(
             recent_errors[name] = error if error and error > 0 else _UNKNOWN_ERROR_SENTINEL
 
         if not per_model_abs:
+            detail = "; ".join(f"{name}: {reason}" for name, reason in reasons.items())
             raise InferenceCycleError(
-                "no real Group 1 model could contribute to this cycle -- no registered "
-                "staging/production version, no real live feature, or no checkpoint to load"
+                f"no real Group 1 model could contribute to this cycle ({detail})"
             )
 
         n_leads = len(DEFAULT_LEADS)

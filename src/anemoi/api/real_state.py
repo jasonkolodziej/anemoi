@@ -127,6 +127,15 @@ class RealState:
             "GDAS_CACHE_DIR", str(Path.home() / "gdas_cache"),
         )
         self._lock = threading.Lock()
+        #: Why the most recent real deterministic_fn attempt degraded to
+        #: the synthetic fallback, if it did -- InferenceCycleError's own
+        #: message already carries a real per-model breakdown (#100), this
+        #: just keeps the latest one around to inspect without needing
+        #: container log access, which has repeatedly proven hard to get to
+        #: on this deployment. Cheap to always capture (a short string);
+        #: /debug/last-deterministic-error (main.py) only *exposes* it, and
+        #: only when ANEMOI_API_DEBUG is set.
+        self.last_deterministic_error: str | None = None
 
     @property
     def _checkpoint_store(self):
@@ -191,12 +200,13 @@ class RealState:
                     storm.track, self.registry, self._checkpoint_store, self._cache_dir,
                 )
                 return real_deterministic(plan_, fix_)
-            except Exception:  # noqa: BLE001 - no real model contributing must degrade, never 500
+            except Exception as exc:  # noqa: BLE001 - no real model contributing must degrade
                 # Covers InferenceCycleError (no registered version, no real
                 # live feature, no checkpoint) and a missing/misconfigured
                 # real checkpoint store (CheckpointStoreError) alike -- both
                 # mean "no real model available for this cycle," and both
                 # degrade to the same synthetic fallback DemoState uses.
+                self.last_deterministic_error = f"{type(exc).__name__}: {exc}"
                 return _synthetic_fallback_deterministic(plan_, fix_)
 
         def ensemble(det, n):
