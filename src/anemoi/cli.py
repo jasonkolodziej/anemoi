@@ -333,7 +333,9 @@ def cmd_train(args: argparse.Namespace) -> int:
     for key in sorted(val_metrics.values):
         print(f"  {key}: {val_metrics.values[key]:.3f}")
 
-    registry = ModelRegistry(args.registry_root, mlflow_client=mlflow_client_from_env())
+    registry = ModelRegistry(
+        args.registry_root, mlflow_client=mlflow_client_from_env(), checkpoint_store=store,
+    )
     existing = registry.versions(args.model)
     incumbent_metrics = (
         MetricSet(split="val", flavor=existing[-1].input_flavor, values=existing[-1].metrics)
@@ -414,7 +416,9 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
 
     tracks = parse_hurdat2_file(args.hurdat2)
     store = CheckpointStore(S3Config.from_env())
-    registry = ModelRegistry(args.registry_root, mlflow_client=mlflow_client_from_env())
+    registry = ModelRegistry(
+        args.registry_root, mlflow_client=mlflow_client_from_env(), checkpoint_store=store,
+    )
 
     mode = Mode(args.mode)
     default_models = ("lstm", "cnn", "transformer", "gnn", "pinn")
@@ -444,6 +448,35 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
     print(f"succeeded: {list(result.succeeded)}")
     print(f"failed: {list(result.failed)}")
     return 0 if not result.failed else 1
+
+
+def cmd_registry_pull(args: argparse.Namespace) -> int:
+    """Hydrate a local registry.json from durable storage (R2/S3) when
+    there's no local copy yet.
+
+    A thin wrapper around `ModelRegistry`'s own pull-on-construction
+    behavior (`tracking.registry.ModelRegistry._pull_from_checkpoint_store`)
+    -- the real bootstrap step a fresh Cloudflare Container's ephemeral
+    disk needs before `anemoi.api.real_state.RealState` can see any
+    registered model versions at all (issue #91). Reusable both as a
+    container startup step and for an operator to run by hand; unlike the
+    registry's own never-fail-the-caller mirror contract, this command
+    itself surfaces a real S3/R2 misconfiguration loudly (a missing/wrong
+    credential run manually deserves a clear error) -- callers that want
+    "never block startup over this" wrap the invocation themselves (see
+    docker/api/Dockerfile's CMD).
+    """
+    from .tracking.checkpoint_store import CheckpointStore, S3Config
+    from .tracking.registry import ALL_MODELS, ModelRegistry
+
+    store = CheckpointStore(S3Config.from_env())
+    registry = ModelRegistry(args.registry_root, checkpoint_store=store)
+    total = sum(len(registry.versions(name)) for name in ALL_MODELS)
+    print(
+        f"registry-pull: {total} registered version(s) across {len(ALL_MODELS)} "
+        f"models at {args.registry_root}"
+    )
+    return 0
 
 
 def cmd_splits(args: argparse.Namespace) -> int:
@@ -484,6 +517,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--end", type=int, default=2026)
     p.add_argument("--seed", type=int, default=20260806)
     p.set_defaults(func=cmd_splits)
+
+    p = sub.add_parser(
+        "registry-pull",
+        help="hydrate a local registry.json from durable storage (R2/S3) if missing (#91)",
+    )
+    p.add_argument(
+        "--registry-root", dest="registry_root",
+        default=str(Path.home() / ".anemoi" / "registry"),
+    )
+    p.set_defaults(func=cmd_registry_pull)
 
     p = sub.add_parser("ablation", help="run the #9 capacity-vs-sample-size ablation")
     p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")

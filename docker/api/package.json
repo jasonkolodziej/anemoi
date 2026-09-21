@@ -1,0 +1,19 @@
+{
+	"name": "anemoi-api-real-container",
+	"private": true,
+	"version": "0.1.0",
+	"description": "Worker + Cloudflare Container front door for real-mode Anemoi-API (issue #91).",
+	"scripts": {
+		"dev": "env -u DOCKER_HOST wrangler dev",
+		"cf:deploy": "env -u DOCKER_HOST wrangler deploy",
+		"types": "wrangler types",
+		"check": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@cloudflare/containers": "^0.3.7",
+		"@types/node": "^26.6.2",
+		"typescript": "^5.9.3",
+		"wrangler": "^4.136.1"
+	},
+	"packageManager": "pnpm@12.5.1+sha512.e3f305bc784a2bc89f5ad3b6138889470fae8d2af5f36b61216ec91c2c3d64089775f9de38aac331044ea40f245cb0d5666392dfdf65824e1907ef6a2c62de5f"
+}

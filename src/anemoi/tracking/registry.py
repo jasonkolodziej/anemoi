@@ -26,6 +26,12 @@ GROUP1_MODELS: tuple[str, ...] = ("lstm", "cnn", "transformer", "gnn", "pinn")
 DERIVED_MODELS: tuple[str, ...] = ("diffusion", "fusion")
 ALL_MODELS: tuple[str, ...] = GROUP1_MODELS + DERIVED_MODELS
 
+#: Durable-storage key `registry.json` is mirrored to/hydrated from, when a
+#: `checkpoint_store` is provided -- see `ModelRegistry`'s docstring. Same
+#: bucket `tracking.checkpoint_store.CheckpointStore` already uploads real
+#: checkpoints to, a fixed prefix so every writer/reader agrees on it.
+REGISTRY_STORE_KEY = "registry/registry.json"
+
 
 class Stage(str, Enum):
     NONE = "none"
@@ -76,18 +82,33 @@ class ModelVersion:
 
 
 class ModelRegistry:
-    """Local-first registry with an optional MLflow mirror.
+    """Local-first registry with an optional MLflow mirror and an optional
+    durable-storage (R2/S3) mirror.
 
     ``mlflow_client`` is any object exposing MLflow's model-registry surface; it
     is duck-typed so tests can pass a stub and so an MLflow outage degrades to
     the local store instead of failing the run.
+
+    ``checkpoint_store`` is any object exposing
+    ``tracking.checkpoint_store.CheckpointStore``'s ``upload``/``download``/
+    ``exists`` surface (duck-typed the same way), and exists for a different
+    reason than the MLflow mirror: MLflow is a one-way mirror humans browse,
+    but ``registry.json`` itself is never read back from it (`versions`/
+    `latest`/`production` only ever read local state -- see `_load`). A
+    process with no local ``registry.json`` at all (a fresh Cloudflare
+    Container's ephemeral disk being the motivating case -- issue #91) has
+    nothing to load from unless something durable holds a copy. When set,
+    a missing local file is hydrated from ``checkpoint_store`` on
+    construction, and every real save is mirrored back to it -- same
+    never-fail-the-caller contract as the MLflow mirror below.
     """
 
-    def __init__(self, root: Path | str, mlflow_client=None) -> None:
+    def __init__(self, root: Path | str, mlflow_client=None, checkpoint_store=None) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self._path = self.root / "registry.json"
         self._mlflow = mlflow_client
+        self._checkpoint_store = checkpoint_store
         self._versions: dict[str, list[ModelVersion]] = {}
         self._pins: dict[str, dict] = {}
         self._load()
@@ -95,6 +116,8 @@ class ModelRegistry:
     # ---- persistence -----------------------------------------------------
 
     def _load(self) -> None:
+        if not self._path.exists():
+            self._pull_from_checkpoint_store()
         if not self._path.exists():
             return
         raw = json.loads(self._path.read_text())
@@ -113,6 +136,27 @@ class ModelRegistry:
             "pins": self._pins,
         }
         self._path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        self._push_to_checkpoint_store()
+
+    # ---- durable-storage mirror -------------------------------------------
+
+    def _pull_from_checkpoint_store(self) -> None:
+        if self._checkpoint_store is None:
+            return
+        try:
+            if self._checkpoint_store.exists(REGISTRY_STORE_KEY):
+                bucket = self._checkpoint_store.config.bucket
+                self._checkpoint_store.download(f"s3://{bucket}/{REGISTRY_STORE_KEY}", self._path)
+        except Exception:  # noqa: BLE001 - starting empty must never crash construction
+            pass
+
+    def _push_to_checkpoint_store(self) -> None:
+        if self._checkpoint_store is None:
+            return
+        try:
+            self._checkpoint_store.upload(self._path, REGISTRY_STORE_KEY)
+        except Exception:  # noqa: BLE001 - tracking must never fail a training run
+            self._checkpoint_store = None
 
     @property
     def mlflow_available(self) -> bool:

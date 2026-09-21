@@ -39,6 +39,13 @@ def create_app() -> FastAPI:
         description="Many winds. One forecast. Developer interface over the Anemoi reference implementation.",
         version=__api_version__,
         openapi_tags=TAGS_METADATA,
+        # Starlette's own debug mode: an unhandled exception returns its
+        # real traceback in the response body instead of a bare "Internal
+        # Server Error". Off by default (never leak internals in normal
+        # operation) -- opt in only to debug a deployment where the
+        # container's own stdout/stderr isn't easily reachable (e.g.
+        # Cloudflare Containers without SSH access configured).
+        debug=bool(os.environ.get("ANEMOI_API_DEBUG")),
     )
 
     origins = os.environ.get("ANEMOI_API_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
