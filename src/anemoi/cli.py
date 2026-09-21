@@ -261,7 +261,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         standardization_tags,
     )
     from .tracking.mlflow_client import mlflow_client_from_env
-    from .tracking.registry import ModelRegistry
+    from .tracking.registry import ModelRegistry, Stage
     from .training.promotion import MetricSet, evaluate_promotion
 
     tracks = parse_hurdat2_file(args.hurdat2)
@@ -369,6 +369,16 @@ def cmd_train(args: argparse.Namespace) -> int:
     )
     for reason in decision.reasons:
         print(f"  {reason}")
+    # The decision alone was computed and printed but never actually applied
+    # -- every real version stayed Stage.NONE regardless of what this line
+    # printed. Production stays deliberately unapplied: evaluate_promotion's
+    # own require_manual_gate=True default (unchanged here) means
+    # promote_to_production is always False by construction; only an
+    # explicit, human-run promotion should move a version to production
+    # (Scope v2.1 SS5.3 Stage 6).
+    if decision.promote_to_staging:
+        registry.transition(args.model, version.version, Stage.STAGING)
+        print(f"  -> transitioned {args.model} v{version.version} to staging")
     return 0
 
 

@@ -18,6 +18,7 @@ from anemoi.data.besttrack import Fix, Track, TrackQuality
 from anemoi.data.gridded_cache import FetchCacheReport
 from anemoi.data.sources import Flavor
 from anemoi.data.splits import STAGE_B_BOUNDARIES
+from anemoi.tracking.registry import ModelRegistry, Stage
 from anemoi.training.curriculum import Curriculum, CurriculumRun, StageResult
 
 
@@ -207,6 +208,36 @@ def test_cmd_train_passes_streaming_batch_size_and_num_workers_through(
     assert captured["streaming"] is True
     assert captured["batch_size"] == 8
     assert captured["num_workers"] == 2
+
+
+def test_cmd_train_actually_transitions_a_promotable_candidate_to_staging(
+    tmp_path, monkeypatch
+):
+    """A real, previously-undiscovered bug: `evaluate_promotion`'s decision
+    was computed and printed but never applied -- every real version stayed
+    Stage.NONE regardless of a `staging=True` print, so no real cycle could
+    ever find an eligible model (#91's Cloudflare deployment work is what
+    surfaced this: /v1/registry showed every version at stage=none despite
+    training logs claiming otherwise)."""
+    monkeypatch.setattr(
+        "anemoi.training.real_run.run_lstm_curriculum",
+        lambda *args, **kwargs: _fake_curriculum_run("lstm"),
+    )
+    _fake_checkpoint_store(monkeypatch)
+    monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [])
+
+    registry_root = tmp_path / "registry"
+    args = argparse.Namespace(
+        model="lstm", hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
+        era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
+        registry_root=str(registry_root), streaming=False, batch_size=None,
+        num_workers=0,
+    )
+    assert cli.cmd_train(args) == 0
+
+    registry = ModelRegistry(registry_root)  # a fresh read, not the same in-memory object
+    assert registry.latest("lstm").version == 1
+    assert registry.latest("lstm").stage is Stage.STAGING
 
 
 # --- cmd_train_schedule dispatch ---------------------------------------------

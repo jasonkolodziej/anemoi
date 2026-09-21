@@ -20,7 +20,7 @@ from types import SimpleNamespace
 import pytest
 
 from anemoi.data.sources import Flavor
-from anemoi.tracking.registry import ModelRegistry
+from anemoi.tracking.registry import ModelRegistry, Stage
 from anemoi.tracking.tags import ExecutionMode
 from anemoi.training.curriculum import Curriculum, CurriculumRun, StageResult, stage_b
 from anemoi.training.orchestrator import Mode, Task, build_schedule, run_schedule
@@ -158,6 +158,40 @@ def test_registers_the_result_with_the_real_promotion_decision(runner):
     assert decision.model_name == "lstm"
     assert decision.promote_to_staging  # no incumbent -- first version always stages
     assert runner.registry.latest("lstm").version == 1
+    # The decision alone being True is not enough -- it must actually be
+    # applied to the registry, or no real cycle can ever find an eligible
+    # version (`real_inference_cycle.py`/`real_inference_ensemble.py` both
+    # only ever look at `registry.production`/`registry.in_stage(STAGING)`).
+    assert runner.registry.latest("lstm").stage is Stage.STAGING
+
+
+def test_a_non_promotable_candidate_is_not_transitioned(runner, monkeypatch):
+    """A worse-than-incumbent second run must stay Stage.NONE -- the
+    registry's own `transition` must only ever be called when the real
+    decision says to, not unconditionally."""
+    task = Task(
+        name="lstm", kind="train", depends_on=(), execution_mode=ExecutionMode.SEQUENTIAL,
+        gpu_memory_gb=8, hours_low=1.0, hours_high=2.0,
+    )
+    runner(task)
+    assert runner.registry.latest("lstm").stage is Stage.STAGING
+
+    worse_metrics = dict(FAKE_METRICS_VALUES)
+    worse_metrics["track_error_48h_nm"] = FAKE_METRICS_VALUES["track_error_48h_nm"] * 10
+
+    def _worse_curriculum_run(*args, **kwargs):
+        run, _metrics, artifacts = _fake_curriculum_run("lstm")
+        metrics = MetricSet(split="val", flavor=Flavor.GDAS_FINETUNE, values=worse_metrics)
+        return run, metrics, artifacts
+
+    monkeypatch.setattr("anemoi.training.real_run.run_lstm_curriculum", _worse_curriculum_run)
+    runner(task)
+
+    assert runner.registry.latest("lstm").version == 2
+    assert not runner.promotions["lstm"].promote_to_staging
+    assert runner.registry.latest("lstm").stage is Stage.NONE
+    # The real, already-staged v1 must be untouched by the failed v2 attempt.
+    assert runner.registry.get("lstm", 1).stage is Stage.STAGING
 
 
 def test_second_run_compares_against_the_first_as_incumbent(runner):

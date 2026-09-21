@@ -36,7 +36,13 @@ from ..tracking.experiment_tracking import (
     log_curriculum_stages,
     standardization_tags,
 )
-from ..tracking.registry import DERIVED_MODELS, GROUP1_MODELS, ModelRegistry, latent_signature
+from ..tracking.registry import (
+    DERIVED_MODELS,
+    GROUP1_MODELS,
+    ModelRegistry,
+    Stage,
+    latent_signature,
+)
 from .curriculum import CurriculumRun
 from .orchestrator import OrchestrationError, RunOutcome, Task
 from .promotion import MetricSet, PromotionDecision, evaluate_promotion
@@ -287,6 +293,19 @@ class RealOrchestratorRunner:
         )
         decision = evaluate_promotion(task.name, run, val_metrics, incumbent_val_metrics=incumbent)
         self.promotions[task.name] = decision
+        # The decision alone was computed and reported (in this task's own
+        # RunOutcome.detail below) but never actually applied -- every real
+        # version stayed Stage.NONE regardless of `staging=True` in that
+        # detail string, confirmed against a real registry.json (#91's
+        # Cloudflare deployment work: no version was ever staging/production,
+        # so no real cycle could ever find one to run). Production stays
+        # deliberately unapplied here -- `evaluate_promotion`'s own
+        # `require_manual_gate=True` default (unchanged by either real
+        # caller) means `promote_to_production` is always False by
+        # construction; only an explicit, human-run promotion should move
+        # a version to production (Scope v2.1 §5.3 Stage 6).
+        if decision.promote_to_staging:
+            self.registry.transition(task.name, version.version, Stage.STAGING)
 
         return RunOutcome(
             task=task.name, ok=True,
