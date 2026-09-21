@@ -127,6 +127,10 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
+# Local demo API state (anemoi.api.demo_state.DemoState's default root --
+# generated the moment `uv run python -m anemoi.api` runs, in whatever cwd)
+.anemoi-api-demo/
+
 # Environments
 .env
 .venv

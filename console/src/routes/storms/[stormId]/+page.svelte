@@ -12,7 +12,7 @@
 	import IntensityPDFChart from '$lib/components/anemoi/IntensityPDFChart.svelte';
 	import RIFlagBanner from '$lib/components/anemoi/RIFlagBanner.svelte';
 	import FlagsList from '$lib/components/anemoi/FlagsList.svelte';
-	import { cycleLabel, formatLatLon, formatUtc } from '$lib/utils';
+	import { cycleLabel, floorSynoptic, formatLatLon, formatUtc } from '$lib/utils';
 
 	const stormId = $derived(page.params.stormId!);
 
@@ -20,7 +20,7 @@
 	let cycle = $state<CycleResult | null>(null);
 	let error = $state<string | null>(null);
 	let running = $state(false);
-	let cycleInput = $state(cycleLabel(new Date()));
+	let cycleInput = $state(cycleLabel(floorSynoptic(new Date())));
 	let members = $state(20);
 	let worstCase = $state(false);
 
