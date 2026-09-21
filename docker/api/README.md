@@ -10,12 +10,14 @@ binding routes requests into the container). Types (`Env`,
 `ExportedHandler`, container/DO runtime types) are generated, not
 hand-written -- see "Regenerating types" below.
 
-## Status: deployed (2026-09-21)
+## Status: deployed and serving real storms (2026-09-21)
 
 Live at `https://anemoi-api-real.jasonkolodziej.workers.dev`. `GET /v1/health`
-returns `{"state_mode": "real", "torch_available": true, ...}` -- confirms
-the container actually boots and serves real-mode FastAPI traffic, not
-just that the build succeeds.
+returns `{"state_mode": "real", "torch_available": true, ...}`, and
+`GET /v1/storms` returns real 2023-season HURDAT2 storms (confirmed
+stable across several requests, ~150-200ms once warm) -- the HURDAT2 gap
+below is resolved. Real *cycles* (`POST .../cycles`) are not yet real,
+though -- see the registry-data gap below, still open.
 
 Spike findings (all confirmed, not just built-then-assumed):
 
@@ -33,7 +35,7 @@ Spike findings (all confirmed, not just built-then-assumed):
 issue #91) stands; Proposal B (Python Workers demo + real-mode off
 Cloudflare) is not needed as a fallback.
 
-## Three real problems hit during the actual deploy, and their fixes
+## Four real problems hit during the actual deploy, and their fixes
 
 Worth recording -- none of these were visible from the local `docker
 build` spike alone, only from a real `wrangler deploy` attempt:
@@ -67,31 +69,34 @@ build` spike alone, only from a real `wrangler deploy` attempt:
    still needs the manual override. Cloudflare's own container tooling
    has a documented, unresolved podman incompatibility
    ([workers-sdk#9755](https://github.com/cloudflare/workers-sdk/issues/9755)).
+4. **A transient 500 on `/v1/storms` right after the HURDAT2 fix landed,
+   that turned out not to be a real bug.** Its response body was plain
+   text `Internal Server Error`, not FastAPI's JSON error shape -- a sign
+   it came from Cloudflare's own edge/platform layer (e.g. mid
+   provisioning) rather than the Python app. `wrangler containers ssh`
+   couldn't confirm this directly (needs an `authorized_keys` config this
+   deployment doesn't have, and its own instances kept scaling back to
+   `inactive` faster than a manual SSH attempt could catch one -- see the
+   `ANEMOI_API_DEBUG` addition below, added specifically because this was
+   otherwise unreachable). Several follow-up requests all returned clean
+   200s, confirming it wasn't a real, reproducible bug in the app.
 
-## What's genuinely still needed before this serves real data
+`anemoi.api.main.create_app` also gained `ANEMOI_API_DEBUG` (off by
+default) while chasing the above -- when set, an unhandled exception
+returns its real traceback in the response body (Starlette's own debug
+mode) instead of a bare "Internal Server Error." Kept permanently since
+container log access here is genuinely hard to get to (see problem 4).
 
-Secrets (`wrangler secret put`) alone are not enough for two reasons
-found by tracing the actual code paths, not assumed:
+## What's genuinely still needed before this serves real forecasts
 
-- **`HURDAT2_PATH`** has to point at a real file *inside the container* --
-  and there is no way to get one there except baking it into the image or
-  fetching it at startup. Local `docker run -v host/path:/container/path`
-  has no equivalent on Cloudflare Containers: they are ephemeral (a fresh
-  filesystem on every cold start, per Cloudflare's own docs) and there is
-  no host machine to mount a volume from in the first place -- `wrangler
-  secret put HURDAT2_PATH` only sets an env var, it does not put a file
-  anywhere, so pointing it at a path with nothing behind it just moves the
-  crash from "unset" to "file not found." The two real options: `COPY` the
-  archive into the image at build time (sourced from NHC's public archive,
-  <https://www.nhc.noaa.gov/data/hurdat/> -- simplest, right choice for a
-  static historical file that rarely changes), or fetch it over the
-  network in the container's startup command before `uvicorn` runs (only
-  worth it if it needs to update without a rebuild). **Do not set
-  `HURDAT2_PATH` as a secret without also doing one of these** -- it is a
-  deploy-time footgun otherwise: the container will boot fine (`/v1/health`
-  stays green) and only fail later, on the first request that touches
-  `RealState`.
-- **The real registry data.** `tracking.registry.ModelRegistry`
+- ~~`HURDAT2_PATH`~~ **Done.** The archive is fetched from NHC's public
+  URL at Docker build time (not `COPY`'d from a committed file -- 6.8MB
+  of static data doesn't belong in git history) and `HURDAT2_PATH` is set
+  via `ENV` in the `Dockerfile`, so it's already present when the
+  container starts. Containers have ephemeral disk with no host to mount
+  a volume from, so this genuinely couldn't have been solved by a secret
+  alone -- a secret only sets an env var, it doesn't put a file anywhere.
+- **The real registry data -- still open.** `tracking.registry.ModelRegistry`
   (`src/anemoi/tracking/registry.py:86-115`) reads registered model
   versions from a single local JSON file (`registry.json`, default
   `~/.anemoi/registry/`) -- there is no S3/MLflow read path at all,
@@ -120,17 +125,17 @@ Also not done, per #91's remaining scope:
 ```bash
 docker build -f docker/api/Dockerfile -t anemoi-api-real:spike .
 docker run --rm -p 8080:8080 \
-  -v /path/to/hurdat2.txt:/data/hurdat2.txt:ro \
-  -e HURDAT2_PATH=/data/hurdat2.txt \
   -e S3_ARTIFACT_API_ENDPOINT=... -e S3_ARTIFACT_BUCKET=... \
   -e S3_ARTIFACT_ACCESS_KEYID=... -e S3_ARTIFACT_SECRET_ACCESS_KEY=... \
   anemoi-api-real:spike
 curl http://127.0.0.1:8080/v1/health
+curl http://127.0.0.1:8080/v1/storms   # real HURDAT2 storms, baked into the image
 ```
 
-The `-v` host-volume mount above is exactly what does **not** carry over
-to the real Cloudflare deploy below -- see "What's genuinely still needed"
-for why `HURDAT2_PATH` needs a different answer there.
+`HURDAT2_PATH` needs no override here -- the image fetches the real
+archive at build time and sets it via `ENV` (see the Dockerfile). Pass
+`-e HURDAT2_PATH=... -v host/path:...` only if you want to point at a
+*different* archive than the one baked in.
 
 ## Deploying
 
@@ -162,9 +167,8 @@ A plain JSON blob piped via `echo` puts the real secret values in your
 shell history; prefer a `KEY=VALUE` file (e.g. a scratch copy of the
 relevant `S3_ARTIFACT_*` lines from the repo's own `.env`) over that.
 
-Deliberately no `wrangler secret put HURDAT2_PATH` above -- see "What's
-genuinely still needed" for why that specific one is a footgun, not just
-a missing step.
+No `wrangler secret put HURDAT2_PATH` here -- it's baked into the image
+at build time instead, see "What's genuinely still needed" above.
 
 Then deploy:
 
