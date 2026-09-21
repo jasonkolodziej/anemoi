@@ -1,0 +1,36 @@
+{
+	// Cloudflare Containers config for issue #91's primary proposal: real-mode
+	// Anemoi-API (torch inference, see ../Dockerfile) as a real linux/amd64
+	// container, fronted by this Worker. Not yet deployed -- this repo has no
+	// Cloudflare account credentials wired in; `npx wrangler deploy` from
+	// this directory (with `wrangler login` done first) is the real next
+	// step once that's available. See README.md for required env/secrets.
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "anemoi-api-real",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-09-21",
+
+	"containers": [
+		{
+			"class_name": "AnemoiRealApi",
+			"image": "./Dockerfile",
+			"max_instances": 3,
+		},
+	],
+
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "ANEMOI_REAL_API",
+				"class_name": "AnemoiRealApi",
+			},
+		],
+	},
+
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["AnemoiRealApi"],
+		},
+	],
+}
