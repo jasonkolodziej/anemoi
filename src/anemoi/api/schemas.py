@@ -97,6 +97,11 @@ class CyclePayload(BaseModel):
     ri_probability: float
     cone: list[ConeSegmentOut]
     flags: list[str]
+    #: The real coastal reference point `landfall_probability` was computed
+    #: against -- `None` whenever the run_cycle request didn't supply one
+    #: (the same condition that leaves `products.landfall_probability` `None`).
+    coastline_lat: float | None = None
+    coastline_lon: float | None = None
 
 
 class IntensityPercentiles(BaseModel):

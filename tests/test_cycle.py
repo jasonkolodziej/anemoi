@@ -229,6 +229,24 @@ def test_payload_is_json_shaped_and_carries_the_cone():
     assert payload["cycle"] == "20260806_06Z"
     assert len(payload["cone"]) == len(LEADS)
     assert {"lead_hours", "lat", "lon", "radius_nm", "basis"} <= set(payload["cone"][0])
+    # No coastline requested -- must be null, not silently defaulted.
+    assert payload["coastline_lat"] is None
+    assert payload["coastline_lon"] is None
+
+
+def test_payload_echoes_the_real_coastline_point_it_was_computed_against():
+    """A caller-supplied coastline point (landfall_probability's own real
+    reference point) must round-trip on the payload -- a console rendering
+    a landfall marker/panel needs to know which point was actually used,
+    not just that landfall_probability came back non-null."""
+    plan = plan_cycle(T, LatencyOracle())
+    out = run_cycle(
+        plan, make_fix(), deterministic_fn, good_ensemble, coastline=(29.3, -94.8),
+    )
+    assert out.products.landfall_probability is not None
+    payload = out.payload()
+    assert payload["coastline_lat"] == 29.3
+    assert payload["coastline_lon"] == -94.8
 
 
 # --- helpers ---------------------------------------------------------------

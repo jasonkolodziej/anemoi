@@ -4,6 +4,7 @@
 	 * reveal, not per-element hover choreography (frontend-design guidance). */
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import type { IntensityPercentiles } from '$lib/api/types';
+	import { saffirSimpson } from '$lib/utils';
 
 	interface Props {
 		pdf: IntensityPercentiles[];
@@ -44,6 +45,15 @@
 		for (let v = 0; v <= maxWind; v += step) lines.push(v);
 		return lines;
 	});
+
+	// Real peak intensity -- the fused (p50) track's own maximum, not a
+	// separate estimate. `reduce` rather than `Math.max(...)` so the lead
+	// hour it occurs at comes along with the value.
+	const peak = $derived(
+		sorted.length === 0
+			? null
+			: sorted.reduce((best, d) => (d.p50 > best.p50 ? d : best), sorted[0]),
+	);
 </script>
 
 <Card>
@@ -59,11 +69,11 @@
 					<line x1={PAD.left} x2={W - PAD.right} y1={y(gy)} y2={y(gy)} stroke="var(--color-border)" stroke-width="1" />
 					<text x="4" y={y(gy) + 3} class="font-data" font-size="9" fill="var(--color-text-faint)">{gy}</text>
 				{/each}
-				<path d={bandPath('p10', 'p90')} fill="var(--color-boreas)" opacity="0.12" />
-				<path d={bandPath('p25', 'p75')} fill="var(--color-boreas)" opacity="0.25" />
-				<path d={linePath('p50')} fill="none" stroke="var(--color-boreas)" stroke-width="2" />
+				<path d={bandPath('p10', 'p90')} fill="var(--color-fusion)" opacity="0.12" />
+				<path d={bandPath('p25', 'p75')} fill="var(--color-fusion)" opacity="0.25" />
+				<path d={linePath('p50')} fill="none" stroke="var(--color-fusion)" stroke-width="2" />
 				{#each sorted as d, i (d.lead_hours)}
-					<circle cx={x(i)} cy={y(d.p50)} r="2.5" fill="var(--color-boreas)" />
+					<circle cx={x(i)} cy={y(d.p50)} r="2.5" fill={saffirSimpson(d.p50).color} />
 					<text
 						x={x(i)}
 						y={H - 6}
@@ -75,6 +85,19 @@
 				{/each}
 			</svg>
 			<p class="mt-1 text-[11px] text-text-faint">Wind speed (kt) vs. forecast lead time.</p>
+			{#if peak}
+				<div class="mt-3 flex items-baseline gap-2 border-t border-border pt-2">
+					<span class="text-[11px] text-text-faint">peak intensity</span>
+					<span class="font-data text-sm font-medium text-text">{peak.p50.toFixed(0)}kt</span>
+					<span
+						class="font-data rounded-sm px-1.5 py-0.5 text-[10px] font-medium text-bg"
+						style={`background: ${saffirSimpson(peak.p50).color}`}
+					>
+						{saffirSimpson(peak.p50).label}
+					</span>
+					<span class="text-[11px] text-text-faint">at +{peak.lead_hours}h</span>
+				</div>
+			{/if}
 		{/if}
 	</CardContent>
 </Card>

@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { getStorm, runCycle, getCycle } from '$lib/api/endpoints';
+	import { getStorm, runCycle, getCycle, getSkew } from '$lib/api/endpoints';
 	import { ApiError } from '$lib/api/client';
-	import type { StormDetail, CycleResult } from '$lib/api/types';
+	import type { StormDetail, CycleResult, SkewReportOut } from '$lib/api/types';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
@@ -24,6 +24,15 @@
 	let cycleInput = $state(cycleLabel(floorSynoptic(new Date())));
 	let members = $state(20);
 	let worstCase = $state(false);
+	// Optional -- landfall_probability is null unless a coastal reference
+	// point is supplied (postprocess.landfall_probability needs one to
+	// measure ensemble members' closest approach against).
+	let coastlineLat = $state<string>('');
+	let coastlineLon = $state<string>('');
+	// System-wide (not scoped to this storm) -- the real §4.6.3 ERA5T-vs-
+	// operational skew audit, the same data /monitoring shows. Loaded
+	// once, not re-fetched per storm/cycle switch.
+	let skew = $state<SkewReportOut | null>(null);
 	// Shared between ConeMap (real per-model map lines) and
 	// ModelStatusPanel (the Model Pantheon list) -- hovering either one
 	// isolates the same model on both.
@@ -42,13 +51,25 @@
 		}
 	}
 
-	onMount(load);
+	onMount(() => {
+		load();
+		getSkew().then((r) => (skew = r)).catch(() => {});
+	});
 
 	async function handleRunCycle() {
 		running = true;
 		error = null;
 		try {
-			cycle = await runCycle(stormId, { cycle: cycleInput, members, worst_case: worstCase });
+			const lat = coastlineLat.trim() === '' ? null : Number(coastlineLat);
+			const lon = coastlineLon.trim() === '' ? null : Number(coastlineLon);
+			cycle = await runCycle(stormId, {
+				cycle: cycleInput,
+				members,
+				worst_case: worstCase,
+				...(lat !== null && lon !== null && Number.isFinite(lat) && Number.isFinite(lon)
+					? { coastline_lat: lat, coastline_lon: lon }
+					: {}),
+			});
 			storm = await getStorm(stormId);
 		} catch (e) {
 			error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
@@ -119,6 +140,29 @@
 						class="font-data w-20 rounded-md border border-border-strong bg-bg px-2.5 py-1.5 text-xs text-text"
 					/>
 				</div>
+				<div>
+					<label for="coastline-lat-input" class="mb-1 block text-[11px] text-text-faint">
+						coastline lat/lon <span class="normal-case text-text-faint/70">(landfall, optional)</span>
+					</label>
+					<div class="flex gap-1">
+						<input
+							id="coastline-lat-input"
+							type="text"
+							inputmode="decimal"
+							placeholder="lat"
+							bind:value={coastlineLat}
+							class="font-data w-16 rounded-md border border-border-strong bg-bg px-2 py-1.5 text-xs text-text"
+						/>
+						<input
+							id="coastline-lon-input"
+							type="text"
+							inputmode="decimal"
+							placeholder="lon"
+							bind:value={coastlineLon}
+							class="font-data w-16 rounded-md border border-border-strong bg-bg px-2 py-1.5 text-xs text-text"
+						/>
+					</div>
+				</div>
 				<Button onclick={handleRunCycle} disabled={running}>
 					{running ? 'Running…' : 'Run cycle'}
 				</Button>
@@ -132,13 +176,20 @@
 
 			<div class="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
 				<div class="space-y-6">
-					<ConeMap
-						history={storm.history}
-						forecastTrack={cycle.products.deterministic_track}
-						cone={cycle.payload.cone}
-						perModelTracks={cycle.products.per_model_tracks}
-						bind:hoveredModel
-					/>
+					<Card>
+						<CardHeader><CardTitle>Wind Rose Projection</CardTitle></CardHeader>
+						<CardContent>
+							<ConeMap
+								history={storm.history}
+								forecastTrack={cycle.products.deterministic_track}
+								cone={cycle.payload.cone}
+								perModelTracks={cycle.products.per_model_tracks}
+								coastlineLat={cycle.payload.coastline_lat}
+								coastlineLon={cycle.payload.coastline_lon}
+								bind:hoveredModel
+							/>
+						</CardContent>
+					</Card>
 					<IntensityPDFChart pdf={cycle.products.intensity_pdf} />
 				</div>
 				<div class="space-y-6">
@@ -153,8 +204,39 @@
 							<div class="flex justify-between"><span class="text-text-faint">vitals</span><Badge variant="outline">{cycle.payload.vitals}</Badge></div>
 							<div class="flex justify-between"><span class="text-text-faint">NWP lag</span><span class="font-data text-text">{cycle.payload.nwp_cycle_lag_hours}h</span></div>
 							<div class="flex justify-between"><span class="text-text-faint">ensemble</span><span class="font-data text-text">{cycle.payload.ensemble_size} members</span></div>
-							<div class="flex justify-between"><span class="text-text-faint">landfall prob.</span><span class="font-data text-text">{cycle.products.landfall_probability !== null ? `${(cycle.products.landfall_probability * 100).toFixed(0)}%` : '—'}</span></div>
 							<div class="flex justify-between"><span class="text-text-faint">delivered</span><Badge variant={cycle.on_time ? 'outline' : 'default'}>{cycle.on_time ? 'on time' : 'late'}</Badge></div>
+						</CardContent>
+					</Card>
+					<Card>
+						<CardHeader><CardTitle>Landfall Projection</CardTitle></CardHeader>
+						<CardContent class="space-y-2 text-xs">
+							{#if cycle.products.landfall_probability !== null}
+								<div class="flex items-baseline justify-between">
+									<span class="text-text-faint">probability</span>
+									<span
+										class="font-data text-xl font-medium"
+										class:text-status-degraded={cycle.products.landfall_probability > 0.35}
+										class:text-text={cycle.products.landfall_probability <= 0.35}
+									>
+										{(cycle.products.landfall_probability * 100).toFixed(0)}%
+									</span>
+								</div>
+								<div class="flex justify-between">
+									<span class="text-text-faint">reference point</span>
+									<span class="font-data text-text">{formatLatLon(cycle.payload.coastline_lat ?? 0, cycle.payload.coastline_lon ?? 0)}</span>
+								</div>
+								<div class="flex justify-between">
+									<span class="text-text-faint">threshold</span>
+									<span class="font-data text-text">60nm, any lead</span>
+								</div>
+								<p class="pt-1 text-[11px] text-text-faint">
+									Fraction of Skiron ensemble members passing within 60nm of the reference point at any forecast lead.
+								</p>
+							{:else}
+								<p class="text-text-faint">
+									No coastal reference point was set for this cycle -- enter one above ("coastline lat/lon") and re-run to get a real landfall probability.
+								</p>
+							{/if}
 						</CardContent>
 					</Card>
 					<Card>
@@ -169,6 +251,29 @@
 			<Card>
 				<CardContent class="py-8 text-center text-sm text-text-faint">
 					No cycle has been run for this storm yet. Set a cycle label and run one above.
+				</CardContent>
+			</Card>
+		{/if}
+
+		{#if skew}
+			<Card class="mt-8">
+				<CardHeader>
+					<CardTitle>Verification</CardTitle>
+					<div class="flex items-center gap-2">
+						<Badge variant={skew.alert ? 'default' : 'outline'}>{skew.alert ? 'alert' : 'nominal'}</Badge>
+						<a href="/monitoring" class="text-[11px] text-text-faint hover:text-text-muted">full monitoring &rarr;</a>
+					</div>
+				</CardHeader>
+				<CardContent>
+					<p class="mb-3 text-[11px] text-text-faint">
+						System-wide {skew.lead_hours}h-lead ERA5T-vs-operational skew audit (§4.6.3) -- not specific to {storm.storm_id}, the same rolling window every storm's page shows.
+					</p>
+					<div class="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+						<div><p class="text-text-faint">mean track delta</p><p class="font-data mt-1 text-sm text-text">{skew.mean_track_delta_nm.toFixed(1)} nm</p></div>
+						<div><p class="text-text-faint">mean |intensity delta|</p><p class="font-data mt-1 text-sm text-text">{skew.mean_abs_intensity_delta_kt.toFixed(1)} kt</p></div>
+						<div><p class="text-text-faint">intensity bias</p><p class="font-data mt-1 text-sm text-text">{skew.intensity_bias_kt >= 0 ? '+' : ''}{skew.intensity_bias_kt.toFixed(1)} kt</p></div>
+						<div><p class="text-text-faint">samples</p><p class="font-data mt-1 text-sm text-text">{skew.n}</p></div>
+					</div>
 				</CardContent>
 			</Card>
 		{/if}

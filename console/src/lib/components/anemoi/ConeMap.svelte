@@ -41,10 +41,23 @@
 	 * and clickable (each entry toggles its own layer's real MapLibre
 	 * `visibility`), not just a static key the way the concept mock's
 	 * map-embedded legend was.
+	 *
+	 * "Wind Rose Projection" v1.2 pass: adopted the concept's real-data
+	 * ideas, not its literal geometry. Each forecast point's dot is now
+	 * colored by its own real `wind_kt` (`$lib/utils.SAFFIR_SIMPSON`, the
+	 * real external NHC classification, not this app's invention), the
+	 * current-fix pulse rate now scales with real `max_wind_kt`, and a
+	 * real landfall reference marker renders at `CyclePayload.
+	 * coastline_lat/lon` when the cycle was run with one. Deliberately
+	 * NOT adopted: concentric fixed-radius "lead time" rings around the
+	 * current fix -- on a real geographic map (unlike the concept's
+	 * stylized SVG) a storm's real ground speed varies, so a static ring
+	 * at some radius doesn't correspond to "reachable by hour N" in any
+	 * honest way; drawing one would be a real, if subtle, fabrication.
 	 */
 	import 'svelte-maplibre-gl/vite';
 	import { onMount, untrack } from 'svelte';
-	import type { Map as MaplibreMap } from 'maplibre-gl';
+	import type { Map as MaplibreMap, ExpressionSpecification } from 'maplibre-gl';
 	import {
 		MapLibre,
 		GeoJSONSource,
@@ -56,7 +69,7 @@
 		AttributionControl,
 	} from 'svelte-maplibre-gl';
 	import type { ConeSegmentOut, FixOut, TrackPointOut } from '$lib/api/types';
-	import { cn } from '$lib/utils';
+	import { cn, SAFFIR_SIMPSON, saffirSimpson } from '$lib/utils';
 	import { colorFor } from '$lib/branding';
 
 	interface Props {
@@ -69,6 +82,11 @@
 		 * cross-component hover-to-isolate, the concept mock's own
 		 * `hovered` state, now backed by real per-model geometry. */
 		hoveredModel?: string | null;
+		/** The real coastal reference point `landfall_probability` was
+		 * computed against (`CyclePayload.coastline_lat/lon`) -- null
+		 * whenever the cycle didn't request one. */
+		coastlineLat?: number | null;
+		coastlineLon?: number | null;
 	}
 	let {
 		history,
@@ -76,6 +94,8 @@
 		cone,
 		perModelTracks = {},
 		hoveredModel = $bindable(null),
+		coastlineLat = null,
+		coastlineLon = null,
 	}: Props = $props();
 
 	const DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
@@ -100,6 +120,7 @@
 		action: '#60a5fa',
 		textFaint: '#64748b',
 		bg: '#0a0e17',
+		statusDegraded: '#fb923c',
 	});
 
 	onMount(() => {
@@ -108,6 +129,7 @@
 			action: resolveColor('--color-action'),
 			textFaint: resolveColor('--color-text-faint'),
 			bg: resolveColor('--color-bg'),
+			statusDegraded: resolveColor('--color-status-degraded'),
 		};
 	});
 
@@ -162,12 +184,23 @@
 		},
 	});
 
+	// Real Saffir-Simpson step expression (`$lib/utils.SAFFIR_SIMPSON`,
+	// ascending by threshold -- MapLibre's own `step` requires that
+	// order) -- each forecast point's dot is colored by its own real
+	// `wind_kt`, the map-side half of "intensity indication".
+	const intensityColorExpr: ExpressionSpecification = (() => {
+		const ascending = [...SAFFIR_SIMPSON].sort((a, b) => a.min - b.min);
+		const expr: unknown[] = ['step', ['get', 'wind_kt'], ascending[0].color];
+		for (let i = 1; i < ascending.length; i++) expr.push(ascending[i].min, ascending[i].color);
+		return expr as ExpressionSpecification;
+	})();
+
 	const forecastPoints = $derived({
 		type: 'FeatureCollection' as const,
 		features: forecastTrack.map((t) => ({
 			type: 'Feature' as const,
 			properties: {
-				label: `${t.lead_hours}h · ${t.wind_kt.toFixed(0)}kt`,
+				label: `${t.lead_hours}h · ${t.wind_kt.toFixed(0)}kt · ${saffirSimpson(t.wind_kt).label}`,
 				lead_hours: t.lead_hours,
 				wind_kt: t.wind_kt,
 			},
@@ -176,6 +209,15 @@
 	});
 
 	const currentFix = $derived(history.length > 0 ? history[history.length - 1] : null);
+
+	// Wind-speed-scaled pulse: a real, monotonic mapping from the current
+	// fix's own `max_wind_kt` to the marker's ping animation duration --
+	// stronger storms pulse faster. Clamped to a sane range so a very weak
+	// (or, at the top end, a Cat 5) storm still reads as an animation, not
+	// a flicker or a near-static marker.
+	const pulseMs = $derived(
+		currentFix ? Math.max(700, Math.min(2600, 2600 - currentFix.max_wind_kt * 11)) : 2000,
+	);
 
 	// Wind speed per forecast point is real (`TrackPointOut.wind_kt`),
 	// surfaced directly in each point's permanent label below instead of
@@ -210,6 +252,9 @@
 			...history.map((f) => [f.lon, f.lat] as [number, number]),
 			...forecastTrack.map((t) => [t.lon, t.lat] as [number, number]),
 			...cone.map((c) => [c.lon, c.lat] as [number, number]),
+			...(coastlineLat !== null && coastlineLon !== null
+				? [[coastlineLon, coastlineLat] as [number, number]]
+				: []),
 		];
 		if (points.length === 0) return null;
 		const lons = points.map((p) => p[0]);
@@ -234,6 +279,7 @@
 		forecast: true,
 		cone: true,
 		models: true,
+		landfall: true,
 	});
 	function vis(on: boolean): 'visible' | 'none' {
 		return on ? 'visible' : 'none';
@@ -348,9 +394,9 @@
 		<CircleLayer
 			layout={{ visibility: vis(visible.forecast) }}
 			paint={{
-				'circle-radius': 4,
-				'circle-color': colors.bg,
-				'circle-stroke-color': colors.fusion,
+				'circle-radius': 5,
+				'circle-color': intensityColorExpr,
+				'circle-stroke-color': colors.bg,
 				'circle-stroke-width': 1.5,
 			}}
 		/>
@@ -372,10 +418,20 @@
 				<span class="relative flex h-3 w-3">
 					<span
 						class="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60"
-						style={`background: ${colors.action}`}
+						style={`background: ${colors.action}; animation-duration: ${pulseMs}ms`}
 					></span>
 					<span class="relative block h-3 w-3 rounded-full" style={`background: ${colors.action}`}></span>
 				</span>
+			{/snippet}
+		</Marker>
+	{/if}
+
+	{#if coastlineLat !== null && coastlineLon !== null && visible.landfall}
+		<Marker lnglat={[coastlineLon, coastlineLat]}>
+			{#snippet content()}
+				<svg width="16" height="16" viewBox="0 0 16 16" aria-label="Landfall reference point">
+					<path d="M8 1 L14.5 14 L1.5 14 Z" fill={colors.statusDegraded} stroke={colors.bg} stroke-width="1.5" />
+				</svg>
 			{/snippet}
 		</Marker>
 	{/if}
@@ -439,6 +495,19 @@
 			)}
 		>
 			<span class="h-2 w-2 rounded-full" style={`background: ${colors.textFaint}`}></span>individual model tracks
+		</button>
+	{/if}
+	{#if coastlineLat !== null && coastlineLon !== null}
+		<button
+			type="button"
+			aria-pressed={visible.landfall}
+			onclick={() => (visible.landfall = !visible.landfall)}
+			class={cn(
+				'flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-surface-raised',
+				!visible.landfall && 'opacity-40',
+			)}
+		>
+			<span class="h-2 w-2 rounded-full" style={`background: ${colors.statusDegraded}`}></span>landfall reference
 		</button>
 	{/if}
 </div>
