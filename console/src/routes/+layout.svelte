@@ -2,6 +2,7 @@
 	import '../app.css';
 	import { page } from '$app/state';
 	import HurricaneIcon from '$lib/components/anemoi/HurricaneIcon.svelte';
+	import MobileNav from '$lib/components/anemoi/MobileNav.svelte';
 	import { cn } from '$lib/utils';
 
 	let { children } = $props();
@@ -21,8 +22,11 @@
 	}
 </script>
 
-<div class="flex min-h-screen">
-	<aside class="flex w-56 shrink-0 flex-col border-r border-border bg-surface">
+<div class="flex min-h-screen flex-col md:flex-row">
+	<!-- Desktop: persistent rail. A fixed 224px sidebar eats over half a
+	     phone viewport, so this is `md:`-and-up only -- see MobileNav for
+	     the small-screen equivalent below. -->
+	<aside class="hidden w-56 shrink-0 flex-col border-r border-border bg-surface md:flex">
 		<a href="/" class="flex items-center gap-2.5 border-b border-border px-4 py-4">
 			<HurricaneIcon size={26} />
 			<div>
@@ -49,6 +53,18 @@
 			Scope v2.1 · Reference implementation
 		</div>
 	</aside>
+
+	<!-- Mobile: a slim top bar + off-canvas drawer instead of the rail. -->
+	<header
+		class="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-border bg-surface px-4 py-3 md:hidden"
+	>
+		<a href="/" class="flex items-center gap-2">
+			<HurricaneIcon size={22} />
+			<p class="font-display text-sm font-semibold leading-none text-text">Anemoi</p>
+		</a>
+		<MobileNav {nav} />
+	</header>
+
 	<main class="min-w-0 flex-1 overflow-y-auto">
 		{@render children?.()}
 	</main>

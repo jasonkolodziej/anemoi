@@ -68,7 +68,7 @@
 					{formatLatLon(storm.latest_fix.lat, storm.latest_fix.lon)} · {storm.latest_fix.max_wind_kt}kt · {formatUtc(storm.latest_fix.valid_time)}
 				</p>
 			</div>
-			<div class="flex items-end gap-2">
+			<div class="flex flex-wrap items-end gap-2">
 				<div>
 					<label for="cycle-input" class="mb-1 block text-[11px] text-text-faint">cycle label</label>
 					<input
