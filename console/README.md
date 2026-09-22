@@ -8,7 +8,7 @@ Client-rendered SPA end to end (`routes/+layout.ts` sets `ssr = false`) — ther
 
 Every saturated colour in this app identifies one Anemoi model — the six wind-god colours plus Fusion's neutral — copied from `anemoi.branding` into `src/lib/branding.ts`. Everything else (chrome, interactive states) draws from a single neutral scale plus one dedicated action-blue that appears nowhere in the god palette. Tokens live in `src/app.css`'s `@theme` block (Tailwind v4, CSS-first config).
 
-Type: Inter Variable (display/headings) / Geist Variable (UI, self-hosted via `@fontsource-variable`) / Geist Mono (data — coordinates, cycle labels, durations only, never UI labels; still a Google Fonts `<link>`, no `@fontsource-variable/geist-mono` package exists). Glass ("bubble") is the default surface for `Card` and app chrome — see `src/app.css`'s own comments for where each token comes from and why.
+Type: Inter Variable (display/headings) / Geist Variable (UI, self-hosted via `@fontsource-variable`) / Geist Mono (data — coordinates, cycle labels, durations only, never UI labels; still a Google Fonts `<link>`, no `@fontsource-variable/geist-mono` package exists). `Card` and app chrome use a flat `bg-surface` fill — see `src/app.css`'s own comments for where each token comes from and why.
 
 ## Getting started
 

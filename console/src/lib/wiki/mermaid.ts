@@ -17,7 +17,7 @@ export async function renderMermaidDiagrams(container: HTMLElement): Promise<voi
 		// Themed onto Anemoi's actual palette (see src/app.css's neutral
 		// scale + --color-action) rather than Mermaid's stock 'dark' theme --
 		// same "alias third-party tokens onto our brand" approach as the
-		// shadcn-svelte compatibility layer and the glass tokens.
+		// shadcn-svelte compatibility layer.
 		mermaid.initialize({
 			startOnLoad: false,
 			theme: 'base',
