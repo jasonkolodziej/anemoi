@@ -22,6 +22,12 @@ export interface WindGod {
 	architecture: string;
 	module: Module;
 	persona: string;
+	/** Short real architecture label, e.g. for a Model Pantheon subtitle
+	 * -- unlike the other fields, not mirrored from `anemoi.branding`
+	 * (it has no equivalent field), but not invented either: taken
+	 * verbatim from each god's own wiki Model-Catalog.md section
+	 * heading ("Boreas — LSTM / GRU — models/lstm.py" etc.). */
+	role: string;
 }
 
 export const GODS: WindGod[] = [
@@ -32,7 +38,8 @@ export const GODS: WindGod[] = [
 		color: '#06B6D4',
 		architecture: 'lstm',
 		module: 'Anemoi-Core',
-		persona: 'Fast, violent, first to arrive. The sprinter.'
+		persona: 'Fast, violent, first to arrive. The sprinter.',
+		role: 'LSTM / GRU'
 	},
 	{
 		slug: 'notus',
@@ -41,7 +48,8 @@ export const GODS: WindGod[] = [
 		color: '#F59E0B',
 		architecture: 'transformer',
 		module: 'Anemoi-Core',
-		persona: 'Heavy, deliberate, sees the whole sky. The strategist.'
+		persona: 'Heavy, deliberate, sees the whole sky. The strategist.',
+		role: 'Transformer'
 	},
 	{
 		slug: 'eurus',
@@ -50,7 +58,8 @@ export const GODS: WindGod[] = [
 		color: '#EF4444',
 		architecture: 'gnn',
 		module: 'Anemoi-Core',
-		persona: 'Unpredictable, turbulent, inner-core specialist. The maverick.'
+		persona: 'Unpredictable, turbulent, inner-core specialist. The maverick.',
+		role: 'GNN'
 	},
 	{
 		slug: 'zephyrus',
@@ -59,7 +68,8 @@ export const GODS: WindGod[] = [
 		color: '#10B981',
 		architecture: 'cnn',
 		module: 'Anemoi-Core',
-		persona: 'Gentle, visual, spring-like. The observer.'
+		persona: 'Gentle, visual, spring-like. The observer.',
+		role: 'CNN / U-Net / ResNet'
 	},
 	{
 		slug: 'kaikias',
@@ -68,7 +78,8 @@ export const GODS: WindGod[] = [
 		color: '#8B5CF6',
 		architecture: 'pinn',
 		module: 'Anemoi-Core',
-		persona: 'Rigid, constrained, unyielding. The disciplinarian.'
+		persona: 'Rigid, constrained, unyielding. The disciplinarian.',
+		role: 'PINN / Neural ODE'
 	},
 	{
 		slug: 'skiron',
@@ -77,7 +88,8 @@ export const GODS: WindGod[] = [
 		color: '#EC4899',
 		architecture: 'diffusion',
 		module: 'Anemoi-Spread',
-		persona: 'Generative, spreading, mist-like. The oracle.'
+		persona: 'Generative, spreading, mist-like. The oracle.',
+		role: 'Diffusion'
 	}
 ];
 

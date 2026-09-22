@@ -8,6 +8,6 @@
 	let { class: className, children, ...rest }: Props = $props();
 </script>
 
-<div class={cn('flex items-center justify-between gap-3 px-4 py-3', className)} {...rest}>
+<div class={cn('flex items-baseline justify-between gap-3 border-b border-border px-4 py-3', className)} {...rest}>
 	{@render children?.()}
 </div>

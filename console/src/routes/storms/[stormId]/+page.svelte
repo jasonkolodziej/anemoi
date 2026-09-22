@@ -68,7 +68,24 @@
 	{#if storm}
 		<header class="mt-2 mb-6 flex flex-wrap items-end justify-between gap-4">
 			<div>
-				<h1 class="font-display text-2xl font-semibold text-text">{storm.storm_id}</h1>
+				<div class="flex items-center gap-2">
+					<h1 class="font-display text-2xl font-semibold text-text">{storm.storm_id}</h1>
+					{#if cycle}
+						{@const nContributing = Object.keys(cycle.products.contributors).length}
+						{@const nTotal = nContributing + Object.keys(cycle.products.missing_model_reasons).length}
+						{#if nTotal > 0}
+							<span
+								class="font-data rounded-full border px-2 py-0.5 text-[10px] tracking-wide uppercase"
+								class:border-status-online={nContributing === nTotal}
+								class:text-status-online={nContributing === nTotal}
+								class:border-border-strong={nContributing !== nTotal}
+								class:text-text-faint={nContributing !== nTotal}
+							>
+								{nContributing}/{nTotal} models contributing
+							</span>
+						{/if}
+					{/if}
+				</div>
 				<p class="mt-1 font-data text-sm text-text-muted">
 					{formatLatLon(storm.latest_fix.lat, storm.latest_fix.lon)} · {storm.latest_fix.max_wind_kt}kt · {formatUtc(storm.latest_fix.valid_time)}
 				</p>

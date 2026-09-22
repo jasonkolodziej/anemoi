@@ -3,14 +3,15 @@
 	 * "Model Pantheon" -- fusion contribution weights per model, in the
 	 * brand's own listing order (north, south, east, west, then
 	 * diagonals). Richer than a plain weight-bar list, modeled on the
-	 * original branding-brief concept mock's own "Model Pantheon" panel
-	 * (direction badge, persona, hover-to-highlight) -- but only using
-	 * real data already defined in `$lib/branding` (persona/direction/
-	 * architecture mirror `anemoi.branding` exactly) or returned by the
-	 * API (`contributors`). The concept mock also showed per-model
-	 * latency; there's no real per-model timing anywhere in the API
-	 * response today, so unlike weight/persona/direction this isn't
-	 * fabricated here.
+	 * v1.2 concept mock's own "Model Pantheon" panel (always-visible
+	 * role subtitle, direction badge, hover-to-highlight) -- but only
+	 * using real data: `$lib/branding`'s persona/direction/architecture
+	 * mirror `anemoi.branding` exactly, `role` is real wiki content (see
+	 * `WindGod.role`'s own doc comment), weight is the real API
+	 * response. The concept mock also showed per-model latency and a
+	 * training/degraded status dot; neither has any real backing
+	 * anywhere in the API today, so unlike role/weight/persona/
+	 * direction those aren't fabricated here.
 	 *
 	 * `hoveredModel` is bindable (keyed by architecture slug, e.g.
 	 * "lstm", matching `CycleProducts.per_model_tracks`'s own keys) so
@@ -83,6 +84,7 @@
 					</span>
 					<span class="font-data text-xs text-text-muted">{(row.weight * 100).toFixed(0)}%</span>
 				</div>
+				<div class="font-data text-[10.5px] text-text-faint">{row.god.role}</div>
 				<div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-surface-raised">
 					<div
 						class="h-full rounded-full transition-[width]"
