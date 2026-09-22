@@ -14,7 +14,14 @@
 	// answers -- never claims "real" before confirming it.
 	let stateMode = $state<'demo' | 'real'>('demo');
 
-	onMount(async () => {
+	// Real storm/intensity data and "today" itself both go stale on a tab
+	// left open -- neither was ever re-fetched before, only loaded once at
+	// mount. `getSchedule`'s own plan_day is a pure function of the date
+	// (no wall-clock dependency once a date is picked, confirmed against
+	// its real implementation), so re-deriving `today` fresh on every poll
+	// is what actually fixes day rollover -- not a timer that just re-asks
+	// for the same stale date forever.
+	async function load() {
 		try {
 			const today = cycleLabel(new Date()).slice(0, 8); // YYYYMMDD
 			const isoDate = `${today.slice(0, 4)}-${today.slice(4, 6)}-${today.slice(6, 8)}`;
@@ -22,9 +29,16 @@
 			storms = s;
 			plans = sched.plans;
 			stateMode = h.state_mode;
+			error = null; // a later successful poll must clear an earlier outage banner
 		} catch (e) {
 			error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
 		}
+	}
+
+	onMount(() => {
+		load();
+		const interval = setInterval(load, 60_000);
+		return () => clearInterval(interval);
 	});
 </script>
 
