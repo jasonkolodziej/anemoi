@@ -193,13 +193,19 @@ REGISTRY: dict[str, DataSource] = {
         ),
         DataSource(
             key="ensemble_perturbations",
-            provider="GEFS / ECMWF EPS",
+            provider="GEFS (implemented, data.real_ensemble) / ECMWF EPS (not implemented)",
             role=Role.OPERATIONAL,
             typical_latency=4 * _H,
             max_latency=6 * _H,
             fmt="GRIB2",
-            retention="rolling 1yr",
-            notes="Anemoi-Spread conditioning; t-6 members valid at t.",
+            retention="2017-01-01-present in noaa-gefs-pds (verified via direct "
+            "S3 listing, 2026-09-22) -- not the unverified 'rolling 1yr' this "
+            "entry previously claimed",
+            notes="Anemoi-Spread conditioning; t-6 members valid at t. Real "
+            "fetch reuses real_gridded's GDAS_LEVEL_MESSAGES/_parse_grib2_index "
+            "directly -- confirmed live that GEFS's .idx carries the exact "
+            "same messages in the identical format. Fetch only, no Anemoi-"
+            "Spread conditioning contract wired in yet (nothing consumes it).",
         ),
     )
 }
