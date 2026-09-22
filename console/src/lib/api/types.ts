@@ -108,6 +108,11 @@ export interface CycleProducts {
 	 * slug (lstm/cnn/transformer/gnn/pinn) -- real, not derived; empty for
 	 * the synthetic fallback and demo cycles. */
 	per_model_tracks: Record<string, TrackPointOut[]>;
+	/** Why each Group 1 model that *isn't* in `contributors`/`per_model_tracks`
+	 * was skipped, keyed the same way (architecture slug) -- real, not
+	 * derived after the fact. Empty for the synthetic fallback and demo
+	 * cycles. */
+	missing_model_reasons: Record<string, string>;
 	intensity_pdf: IntensityPercentiles[];
 	landfall_probability: number | null;
 	notes: string[];
