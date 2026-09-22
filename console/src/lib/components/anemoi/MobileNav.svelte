@@ -13,15 +13,9 @@
 	import { cn } from '$lib/utils';
 	import HurricaneIcon from './HurricaneIcon.svelte';
 
-	interface NavChild {
-		href: string;
-		label: string;
-		matches: string[];
-	}
 	interface NavItem {
 		href: string;
 		label: string;
-		children?: NavChild[];
 	}
 	interface Props {
 		nav: NavItem[];
@@ -32,9 +26,6 @@
 	function isActive(href: string): boolean {
 		if (href === '/') return page.url.pathname === '/';
 		return page.url.pathname.startsWith(href);
-	}
-	function isActiveChild(child: NavChild): boolean {
-		return child.matches.includes(page.url.pathname);
 	}
 </script>
 
@@ -87,24 +78,6 @@
 					>
 						{item.label}
 					</a>
-					{#if item.children}
-						<div class="ml-3 space-y-0.5 border-l border-border py-0.5 pl-2">
-							{#each item.children as child (child.href)}
-								<a
-									href={child.href}
-									onclick={() => (open = false)}
-									class={cn(
-										'block rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors',
-										isActiveChild(child)
-											? 'bg-surface-raised text-text'
-											: 'text-text-muted hover:bg-surface-raised/60 hover:text-text'
-									)}
-								>
-									{child.label}
-								</a>
-							{/each}
-						</div>
-					{/if}
 				{/each}
 			</nav>
 			<div class="border-t border-border p-3 text-[10px] text-text-faint">

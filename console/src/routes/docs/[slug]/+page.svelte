@@ -31,5 +31,5 @@
 			</div>
 		</CardContent>
 	</Card>
-	<OnThisPage container={contentEl} currentSlug={data.slug} currentTitle={data.title} />
+	<OnThisPage container={contentEl} refreshKey={data.slug} related={data.related} />
 </div>

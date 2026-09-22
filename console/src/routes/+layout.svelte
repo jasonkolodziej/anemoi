@@ -4,21 +4,8 @@
 	import HurricaneIcon from '$lib/components/anemoi/HurricaneIcon.svelte';
 	import MobileNav from '$lib/components/anemoi/MobileNav.svelte';
 	import { cn } from '$lib/utils';
-	import sections from '$lib/wiki-content/sections.json';
 
 	let { children } = $props();
-
-	// Docs' own categories (Concepts/Data/Training/etc, parsed at build time
-	// from the wiki's own Home.md "page index" -- scripts/sync-wiki.mjs)
-	// nest directly under Docs here, not as a separate sidebar column.
-	// Individual page titles ("System Architecture", "Data Sources", ...)
-	// live in the "On This Page" panel instead (OnThisPage.svelte), together
-	// with the current page's own subsections.
-	const docsChildren = sections.map((s) => ({
-		href: `/docs/${s.pages[0]?.slug ?? ''}`,
-		label: s.name,
-		matches: s.pages.map((p) => `/docs/${p.slug}`)
-	}));
 
 	const nav = [
 		{ href: '/', label: 'Storms' },
@@ -27,15 +14,12 @@
 		{ href: '/registry', label: 'Registry' },
 		{ href: '/monitoring', label: 'Monitoring' },
 		{ href: '/retraining', label: 'Retraining' },
-		{ href: '/docs', label: 'Docs', children: docsChildren }
+		{ href: '/docs', label: 'Docs' }
 	];
 
 	function isActive(href: string): boolean {
 		if (href === '/') return page.url.pathname === '/';
 		return page.url.pathname.startsWith(href);
-	}
-	function isActiveChild(child: { matches: string[] }): boolean {
-		return child.matches.includes(page.url.pathname);
 	}
 </script>
 
@@ -74,23 +58,6 @@
 				>
 					{item.label}
 				</a>
-				{#if item.children}
-					<div class="ml-3 space-y-0.5 border-l border-border py-0.5 pl-2">
-						{#each item.children as child (child.href)}
-							<a
-								href={child.href}
-								class={cn(
-									'block rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors',
-									isActiveChild(child)
-										? 'bg-surface-raised text-text'
-										: 'text-text-muted hover:bg-surface-raised/60 hover:text-text'
-								)}
-							>
-								{child.label}
-							</a>
-						{/each}
-					</div>
-				{/if}
 			{/each}
 		</nav>
 		<div class="border-t border-border p-3 text-[10px] text-text-faint">
