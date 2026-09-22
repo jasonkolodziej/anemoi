@@ -146,13 +146,21 @@ REGISTRY: dict[str, DataSource] = {
         ),
         DataSource(
             key="dropsonde",
-            provider="NOAA / AFRC",
+            provider="NOAA / AFRC (implemented, data.real_dropsonde)",
             role=Role.OPERATIONAL,
             typical_latency=1 * _H,
             max_latency=3 * _H,
             fmt="BUFR / NetCDF",
             retention="permanent",
-            notes="Event-driven; absent for most cycles.",
+            notes=(
+                "Event-driven; absent for most cycles. Real per-level "
+                "profile decode via eccodes' BUFR reader -- standard WMO "
+                "descriptors (pressure/airTemperature/dewpointTemperature/ "
+                "windSpeed/windDirection/nonCoordinateGeopotentialHeight), "
+                "no proprietary format to reverse-engineer. Confirmed live: "
+                "levels are surface-first (pressure decreases monotonically "
+                "through the array)."
+            ),
         ),
         DataSource(
             key="microwave",
