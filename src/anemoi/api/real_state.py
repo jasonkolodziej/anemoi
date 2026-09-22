@@ -56,6 +56,12 @@ _ACTIVE_WINDOW = timedelta(days=14)
 #: often than that just re-requests the same bulletin.
 _LIVE_STORMS_TTL = timedelta(minutes=30)
 
+#: How long the registered-model registry stays valid before a real cycle
+#: re-pulls it -- real promotions/registrations only ever happen once per
+#: training run (hours apart) or a rare manual promotion, so this is
+#: deliberately less aggressive than `_LIVE_STORMS_TTL`.
+_REGISTRY_TTL = timedelta(minutes=15)
+
 #: Real forecast lead times every real deterministic_fn/ensemble_fn this
 #: module builds shares -- matches models.base.DEFAULT_LEADS.
 _LEAD_HOURS = (12, 24, 36, 48, 72, 96, 120)
@@ -143,6 +149,17 @@ class RealState:
             "REGISTRY_ROOT", str(Path.home() / ".anemoi" / "registry"),
         )
         self.registry = ModelRegistry(registry_root)
+        #: Re-pulled on a TTL from run_cycle (below), not just once here --
+        #: this registry was built with no checkpoint_store (construction
+        #: must not need S3 credentials just to serve GET /storms), so its
+        #: one-time `_load` only ever reads whatever `anemoi registry-pull`
+        #: wrote to local disk at container cold-start (docker/api
+        #: Dockerfile's CMD). Without a periodic reload, a long-lived warm
+        #: container (same singleton-instance behaviour as the live-storms
+        #: staleness above) would never see a training run's new
+        #: registrations/promotions until its next cold start.
+        self._registry_fetched_at: datetime | None = None
+
         #: Built lazily (`_checkpoint_store` property) -- listing/reading
         #: real storms needs no S3 credentials at all, only running a real
         #: cycle does, and real deployments shouldn't have to configure
@@ -212,6 +229,28 @@ class RealState:
         except KeyError as exc:
             raise LookupError(f"unknown storm {storm_id!r}") from exc
 
+    def _refresh_registry(self) -> None:
+        """Re-pull the real registry if the last pull is stale (or there
+        hasn't been one yet). Best-effort, same degrade-not-crash contract
+        as `_refresh_live_storms`: `ModelRegistry.reload`'s own pull
+        already swallows a durable-storage failure internally, so the
+        only new failure mode here is resolving a checkpoint store at
+        all, which is worth guarding explicitly since a real cycle must
+        still run (on whatever registry state it already has) rather than
+        500 just because a periodic background refresh couldn't reach
+        S3/R2."""
+        now = datetime.now(UTC)
+        if (
+            self._registry_fetched_at is not None
+            and now - self._registry_fetched_at < _REGISTRY_TTL
+        ):
+            return
+        try:
+            self.registry.reload(self._checkpoint_store)
+        except Exception:  # noqa: BLE001 - a stale registry must never block a real cycle
+            pass
+        self._registry_fetched_at = now
+
     # ---- cycles --------------------------------------------------------
 
     def run_cycle(
@@ -230,6 +269,7 @@ class RealState:
         from ..training.real_inference_cycle import build_real_deterministic_fn
         from ..training.real_inference_ensemble import build_real_ensemble_fn
 
+        self._refresh_registry()
         storm = self.get_storm(storm_id)
         target = parse_cycle_label(cycle)
         oracle = LatencyOracle(use_max_latency=worst_case)

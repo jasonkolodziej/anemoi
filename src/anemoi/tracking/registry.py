@@ -98,9 +98,13 @@ class ModelRegistry:
     process with no local ``registry.json`` at all (a fresh Cloudflare
     Container's ephemeral disk being the motivating case -- issue #91) has
     nothing to load from unless something durable holds a copy. When set,
-    a missing local file is hydrated from ``checkpoint_store`` on
-    construction, and every real save is mirrored back to it -- same
-    never-fail-the-caller contract as the MLflow mirror below.
+    local state is always reconciled against ``checkpoint_store`` at
+    construction -- not just hydrated once when local is entirely missing
+    -- since a persistent-disk process (the training VM) would otherwise
+    never see state another process wrote to the same durable store (see
+    `_load`'s own comment for the real incident this closes). Every real
+    save is mirrored back to it -- same never-fail-the-caller contract as
+    the MLflow mirror below.
     """
 
     def __init__(self, root: Path | str, mlflow_client=None, checkpoint_store=None) -> None:
@@ -116,8 +120,21 @@ class ModelRegistry:
     # ---- persistence -----------------------------------------------------
 
     def _load(self) -> None:
-        if not self._path.exists():
-            self._pull_from_checkpoint_store()
+        # Always reconcile with the durable mirror when one is configured,
+        # not just when no local file exists at all -- a persistent-disk
+        # process (the training VM's real case: registry.json survives
+        # across runs) would otherwise never see state written by any
+        # *other* process sharing the same durable store (the deployed
+        # API's own ModelRegistry instance, a manual promotion, a
+        # different machine's training run). Found for real: a manual
+        # promotion applied only to the deployed container's registry.json
+        # was silently discarded the next time the VM ran a full training
+        # pass and pushed its own (unaware, stale) local copy back over
+        # it. Durable storage is the real shared source of truth here, so
+        # it wins whenever it has something -- safe to do unconditionally
+        # at construction time since no writes from *this* process have
+        # happened yet.
+        self._pull_from_checkpoint_store()
         if not self._path.exists():
             return
         raw = json.loads(self._path.read_text())
@@ -126,6 +143,28 @@ class ModelRegistry:
             for name, versions in raw.get("versions", {}).items()
         }
         self._pins = raw.get("pins", {})
+
+    def reload(self, checkpoint_store=None) -> None:
+        """Re-run `_load` -- re-pulls from the durable mirror (when
+        configured) and re-reads whatever ends up on local disk. Exists
+        for a long-lived process (a warm Cloudflare Containers singleton
+        instance, per `docker/api/README.md`'s own documented "a redeploy
+        does not restart an already-running instance") that would
+        otherwise only ever see the registry state that existed at its own
+        construction time, for its entire warm lifetime -- the same class
+        of staleness `_load`'s own reconciliation fix addresses at
+        construction, just needing a way to re-trigger it later too.
+
+        ``checkpoint_store``, if given, replaces this instance's mirror
+        before reloading -- for a caller that (like `api.real_state
+        .RealState`) deliberately builds its `ModelRegistry` with no
+        checkpoint_store at construction (listing/reading real storms
+        needs no S3 credentials at all), and only wants to pay for
+        resolving one lazily, the first time a real reload is actually
+        needed."""
+        if checkpoint_store is not None:
+            self._checkpoint_store = checkpoint_store
+        self._load()
 
     def _save(self) -> None:
         payload = {

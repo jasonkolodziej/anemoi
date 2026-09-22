@@ -329,29 +329,59 @@ def test_pull_from_checkpoint_store_hydrates_a_missing_local_registry(tmp_path):
     assert reader.latest("lstm").run_id == "a"
 
 
-def test_pull_is_skipped_when_a_local_registry_already_exists(tmp_path):
-    """Local disk (the normal VM case, where registry.json already exists
-    from prior runs) always wins -- no need to touch durable storage."""
+def test_pull_reconciles_with_durable_storage_even_when_local_already_exists(tmp_path):
+    """A persistent local registry.json (the VM's real case -- it survives
+    across training runs on its persistent disk) must not shadow durable
+    storage forever. A real incident this closes: a manual promotion
+    applied only to the deployed container's registry.json was silently
+    discarded the next time the training VM ran a full pass and pushed
+    its own (unaware, stale) local copy back over it -- because
+    construction only ever pulled when local was entirely missing.
+    Durable storage is the real shared source of truth multiple
+    independent processes write to, so it must win at construction even
+    when a local file is already present."""
+    remote_path = tmp_path / "remote.json"
+    writer = ModelRegistry(tmp_path / "writer", checkpoint_store=None)
+    writer.register(
+        "lstm", run_id="remote-truth", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS,
+    )
+    remote_path.write_text((writer.root / "registry.json").read_text())
 
-    class ExplodingStore:
+    class FakeStore:
         config = _FakeS3Config()
 
         def exists(self, key):
-            raise AssertionError("should not be called when a local file already exists")
+            return True
 
         def download(self, uri, local_path):
-            raise AssertionError("should not be called when a local file already exists")
+            local_path.write_text(remote_path.read_text())
 
         def upload(self, local_path, key):
             pass
 
-    reg = ModelRegistry(tmp_path, checkpoint_store=ExplodingStore())
+    local_root = tmp_path / "local"
+    stale = ModelRegistry(local_root, checkpoint_store=None)
+    stale.register(
+        "lstm", run_id="stale-local-only", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS,
+    )
+    assert stale.latest("lstm").run_id == "stale-local-only"
+
+    # A fresh instance over the same (already-populated) local root, now
+    # with a checkpoint_store configured, must reflect durable storage's
+    # real state, not the stale local one.
+    reconciled = ModelRegistry(local_root, checkpoint_store=FakeStore())
+    assert reconciled.latest("lstm").run_id == "remote-truth"
+
+
+def test_pull_is_skipped_entirely_without_a_checkpoint_store(tmp_path):
+    """No checkpoint_store at all (e.g. a plain local-only CLI run) must
+    never attempt any durable-storage call -- local disk stays the only
+    source of truth, unchanged from before."""
+    reg = ModelRegistry(tmp_path, checkpoint_store=None)
     reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
 
-    # A second instance over the same root has a local file already -- must
-    # not call the (exploding) checkpoint store's read path.
-    reg2 = ModelRegistry(tmp_path, checkpoint_store=ExplodingStore())
-    assert len(reg2.versions("lstm")) == 1
+    reg2 = ModelRegistry(tmp_path, checkpoint_store=None)
+    assert reg2.latest("lstm").run_id == "a"
 
 
 def test_pull_failure_degrades_to_an_empty_registry(tmp_path):
