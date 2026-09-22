@@ -222,6 +222,63 @@ def test_real_state_merges_a_live_storm(client, monkeypatch):
     assert r.status_code == 201
 
 
+def test_run_cycle_picks_up_a_registry_change_mid_warm_lifetime(
+    tmp_path, hurdat2_file, monkeypatch,
+):
+    """A real incident this covers: `RealState.registry` was built once
+    at construction with no checkpoint_store (listing storms must not
+    need S3 credentials), so a long-lived warm container instance never
+    saw a training run's new registrations/promotions until its next
+    cold start -- the same class of staleness `_refresh_live_storms`'s
+    TTL already fixed for storms, now fixed for the registry too."""
+    from anemoi.api.real_state import RealState
+    from anemoi.data.sources import Flavor
+    from anemoi.tracking.registry import ModelRegistry, Stage
+
+    monkeypatch.setattr("anemoi.data.live_atcf.fetch_live_tracks", lambda: [])
+
+    durable = tmp_path / "durable.json"
+
+    class FakeStore:
+        class config:
+            bucket = "fake"
+
+        def exists(self, key):
+            return durable.exists()
+
+        def download(self, uri, local_path):
+            local_path.write_text(durable.read_text())
+
+        def upload(self, local_path, key):
+            durable.write_text(local_path.read_text())
+
+    state = RealState(
+        hurdat2_path=str(hurdat2_file),
+        registry_root=str(tmp_path / "container-local"),
+        checkpoint_store=FakeStore(),
+    )
+    assert state.registry.versions("cnn") == []
+
+    # A separate ModelRegistry instance (simulating a training run
+    # completing elsewhere) registers and stages a real cnn version,
+    # pushed to the same durable store this container's registry mirrors.
+    writer = ModelRegistry(tmp_path / "writer", checkpoint_store=FakeStore())
+    v = writer.register(
+        "cnn", run_id="external-run", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 200.0},
+    )
+    writer.transition("cnn", v.version, Stage.STAGING)
+
+    # Force the TTL to look expired without waiting real minutes.
+    state._registry_fetched_at = None
+    state._refresh_registry()
+
+    versions = state.registry.versions("cnn")
+    assert len(versions) == 1
+    assert versions[0].run_id == "external-run"
+    assert versions[0].stage == Stage.STAGING
+
+
 def test_demo_state_is_unaffected_by_default(tmp_path, monkeypatch):
     """Without ANEMOI_API_REAL_STATE set at all, the API must behave
     exactly as before -- DemoState, unchanged."""
