@@ -13,6 +13,7 @@ router = APIRouter(prefix="/registry", tags=["registry"], dependencies=[Depends(
 
 @router.get("", response_model=list[schemas.RegistryEntry])
 def list_registry(state=Depends(state_dependency)) -> list[schemas.RegistryEntry]:
+    state.refresh_registry_if_stale()
     out = []
     for name in ALL_MODELS:
         versions = state.registry.versions(name)
@@ -33,6 +34,7 @@ def list_registry(state=Depends(state_dependency)) -> list[schemas.RegistryEntry
 
 @router.get("/{model}", response_model=schemas.RegistryEntry)
 def get_model_registry(model: str, state=Depends(state_dependency)) -> schemas.RegistryEntry:
+    state.refresh_registry_if_stale()
     versions = state.registry.versions(model)
     if not versions:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"no registered versions for {model!r}")
@@ -48,6 +50,7 @@ def get_model_registry(model: str, state=Depends(state_dependency)) -> schemas.R
 
 @router.get("/pins/active", response_model=schemas.ActivePin | None)
 def get_active_pin(state=Depends(state_dependency)) -> schemas.ActivePin | None:
+    state.refresh_registry_if_stale()
     pin = state.registry.active_pin()
     if pin is None:
         return None

@@ -347,12 +347,74 @@ def test_run_cycle_picks_up_a_registry_change_mid_warm_lifetime(
 
     # Force the TTL to look expired without waiting real minutes.
     state._registry_fetched_at = None
-    state._refresh_registry()
+    state.refresh_registry_if_stale()
 
     versions = state.registry.versions("cnn")
     assert len(versions) == 1
     assert versions[0].run_id == "external-run"
     assert versions[0].stage == Stage.STAGING
+
+
+def test_registry_route_refreshes_a_stale_registry(client, tmp_path, monkeypatch):
+    """A real, found gap: `_refresh_registry`/`refresh_registry_if_stale`
+    was only ever called from `run_cycle` -- every registry-reading route
+    (`/v1/registry`, `/v1/registry/{model}`, `/v1/registry/pins/active`)
+    read `state.registry` directly and could serve a stale in-memory copy
+    for the container's entire warm lifetime, found live: a real `anemoi
+    registry-reconcile` write never appeared on `/v1/registry` until an
+    unrelated `run_cycle` call happened to trigger a refresh.
+
+    Uses a real durable-mirror stand-in (a FakeStore backed by a shared
+    file), the same construction `test_run_cycle_picks_up_a_registry_
+    change_mid_warm_lifetime` already uses -- registry synchronisation is
+    always via the real R2/S3 mirror in production, never a shared local
+    directory, so this is what a real external write (a training run,
+    `anemoi registry-reconcile`) actually looks like."""
+    from anemoi.api.real_state import get_real_state
+    from anemoi.data.sources import Flavor
+    from anemoi.tracking.registry import ModelRegistry, Stage
+
+    durable = tmp_path / "durable.json"
+
+    class FakeStore:
+        class config:
+            bucket = "fake"
+
+        def exists(self, key):
+            return durable.exists()
+
+        def download(self, uri, local_path):
+            local_path.write_text(durable.read_text())
+
+        def upload(self, local_path, key):
+            durable.write_text(local_path.read_text())
+
+    monkeypatch.setattr(
+        "anemoi.tracking.checkpoint_store.S3Config",
+        type("FakeS3Config", (), {"from_env": staticmethod(lambda: "fake-config")}),
+    )
+    monkeypatch.setattr(
+        "anemoi.tracking.checkpoint_store.CheckpointStore", lambda config: FakeStore()
+    )
+
+    state = get_real_state()
+    assert state.registry.versions("cnn") == []
+
+    # A separate ModelRegistry instance mirroring to the same durable
+    # store -- simulating a real external write this container's own
+    # in-memory copy has no way to know about yet.
+    writer = ModelRegistry(tmp_path / "writer", checkpoint_store=FakeStore())
+    v = writer.register(
+        "cnn", run_id="external-run", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 200.0},
+    )
+    writer.transition("cnn", v.version, Stage.STAGING)
+
+    state._registry_fetched_at = None  # force the TTL to look expired
+
+    r = client.get("/v1/registry/cnn")
+    assert r.status_code == 200
+    assert any(v["run_id"] == "external-run" for v in r.json()["versions"])
 
 
 def test_demo_state_is_unaffected_by_default(tmp_path, monkeypatch):

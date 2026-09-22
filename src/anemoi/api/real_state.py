@@ -229,7 +229,7 @@ class RealState:
         except KeyError as exc:
             raise LookupError(f"unknown storm {storm_id!r}") from exc
 
-    def _refresh_registry(self) -> None:
+    def refresh_registry_if_stale(self) -> None:
         """Re-pull the real registry if the last pull is stale (or there
         hasn't been one yet). Best-effort, same degrade-not-crash contract
         as `_refresh_live_storms`: `ModelRegistry.reload`'s own pull
@@ -238,7 +238,17 @@ class RealState:
         all, which is worth guarding explicitly since a real cycle must
         still run (on whatever registry state it already has) rather than
         500 just because a periodic background refresh couldn't reach
-        S3/R2."""
+        S3/R2.
+
+        Public (not `_refresh_registry`, its name before this) because
+        `api.routers.registry` needs to call it too -- found for real: a
+        registry write from outside this process (e.g. `anemoi registry-
+        reconcile`, a real one-off registry correction run this session)
+        never appeared on a live `/v1/registry` response for up to
+        `_REGISTRY_TTL`, since only `run_cycle` ever triggered a refresh.
+        Every other registry-reading route was silently serving a stale
+        in-memory copy no cycle had happened to refresh yet.
+        """
         now = datetime.now(UTC)
         if (
             self._registry_fetched_at is not None
@@ -269,7 +279,7 @@ class RealState:
         from ..training.real_inference_cycle import build_real_deterministic_fn
         from ..training.real_inference_ensemble import build_real_ensemble_fn
 
-        self._refresh_registry()
+        self.refresh_registry_if_stale()
         storm = self.get_storm(storm_id)
         target = parse_cycle_label(cycle)
         # `LatencyOracle`/`plan_cycle` have no wall-clock concept of "now" --
