@@ -232,7 +232,7 @@ requires-dist = [
     { name = "gcsfs", marker = "extra == 'gridded'", specifier = ">=2024.1" },
     { name = "httpx2", marker = "extra == 'dev'", specifier = ">=2.0" },
     { name = "mlflow", marker = "extra == 'tracking'", specifier = ">=2.12" },
-    { name = "numpy", specifier = ">=1.26" },
+    { name = "numpy", specifier = ">=2.4.6" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "pyyaml", specifier = ">=6.0" },
