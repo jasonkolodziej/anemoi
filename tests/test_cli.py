@@ -438,6 +438,14 @@ def _reconcile_args(tmp_path, **overrides) -> argparse.Namespace:
     return argparse.Namespace(**defaults)
 
 
+# Candidacy requires a real, loadable checkpoint (arch_params tag +
+# checkpoint_uri) -- see test_registry_reconcile_skips_an_unloadable_
+# version_even_with_better_metrics below for the real bug this guards.
+# Every other reconcile test registers "loadable" versions via this so
+# they still exercise the metric/staging logic they're actually about.
+_LOADABLE = dict(tags={"arch_params": "{}"}, checkpoint_uri="s3://fake/ckpt.pt")
+
+
 def test_registry_reconcile_re_stages_the_real_best_existing_version(tmp_path, monkeypatch, capsys):
     """The exact live bug this closes: a worse v3 reached staging (comparing
     against v2, not the true champion v1) while a better v1 sat unstaged.
@@ -449,14 +457,17 @@ def test_registry_reconcile_re_stages_the_real_best_existing_version(tmp_path, m
     v1 = registry.register(
         "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE,
         metrics={"track_error_48h_nm": 274.3},
+        **_LOADABLE,
     )
     registry.register(
         "lstm", run_id="b", input_flavor=Flavor.GDAS_FINETUNE,
         metrics={"track_error_48h_nm": 274.6},
+        **_LOADABLE,
     )
     v3 = registry.register(
         "lstm", run_id="c", input_flavor=Flavor.GDAS_FINETUNE,
         metrics={"track_error_48h_nm": 300.0},
+        **_LOADABLE,
     )
     registry.transition("lstm", v3.version, Stage.STAGING)
 
@@ -478,10 +489,12 @@ def test_registry_reconcile_dry_run_reports_without_transitioning(tmp_path, monk
     registry.register(
         "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE,
         metrics={"track_error_48h_nm": 274.3},
+        **_LOADABLE,
     )
     v2 = registry.register(
         "lstm", run_id="b", input_flavor=Flavor.GDAS_FINETUNE,
         metrics={"track_error_48h_nm": 300.0},
+        **_LOADABLE,
     )
     registry.transition("lstm", v2.version, Stage.STAGING)
 
@@ -508,10 +521,12 @@ def test_registry_reconcile_ignores_nan_metrics(tmp_path, monkeypatch, capsys):
     registry.register(
         "cnn", run_id="a", input_flavor=Flavor.GDAS_FINETUNE,
         metrics={"track_error_48h_nm": float("nan")},
+        **_LOADABLE,
     )
     v2 = registry.register(
         "cnn", run_id="b", input_flavor=Flavor.GDAS_FINETUNE,
         metrics={"track_error_48h_nm": 250.0},
+        **_LOADABLE,
     )
     registry.transition("cnn", v2.version, Stage.STAGING)
 
@@ -534,16 +549,19 @@ def test_registry_reconcile_warns_when_it_desyncs_a_derived_models_signature(
     v1 = registry.register(
         "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE,
         metrics={"track_error_48h_nm": 274.3},
+        **_LOADABLE,
     )
     v2 = registry.register(
         "lstm", run_id="b", input_flavor=Flavor.GDAS_FINETUNE,
         metrics={"track_error_48h_nm": 300.0},
+        **_LOADABLE,
     )
     registry.transition("lstm", v2.version, Stage.STAGING)
     fusion = registry.register(
         "fusion", run_id="c", input_flavor=Flavor.GDAS_FINETUNE,
         metrics={"track_error_48h_nm": 250.0},
         latent_signature=f"lstmv{v2.version}-cnnv1-transformerv1-gnnv1-pinnv1",
+        **_LOADABLE,
     )
     registry.transition("fusion", fusion.version, Stage.STAGING)
 
@@ -552,6 +570,38 @@ def test_registry_reconcile_warns_when_it_desyncs_a_derived_models_signature(
     out = capsys.readouterr().out
     assert f"lstm: re-staged v{v1.version}" in out
     assert "fusion v" in out and "latent_signature" in out and "no longer includes lstm" in out
+
+
+def test_registry_reconcile_skips_an_unloadable_version_even_with_better_metrics(
+    tmp_path, monkeypatch, capsys
+):
+    """The real live bug this closes: reconcile staged lstm v1 (registered
+    before #78, no `arch_params` tag) over a real, loadable v2 purely
+    because v1's metric was better on paper. Every real cycle then hit
+    `InferenceLoadError: lstm v1 has no 'arch_params' tag` and lstm never
+    contributed at all. A version missing `arch_params`/`checkpoint_uri`
+    must never be a reconcile candidate, no matter how it scores."""
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+
+    registry = ModelRegistry(tmp_path / "registry")
+    registry.register(  # pre-#78: better metric, but not loadable
+        "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 200.0},
+    )
+    v2 = registry.register(  # worse metric, but real and loadable
+        "lstm", run_id="b", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 300.0},
+        **_LOADABLE,
+    )
+
+    args = _reconcile_args(tmp_path)
+    assert cli.cmd_registry_reconcile(args) == 0
+    out = capsys.readouterr().out
+    assert f"lstm: re-staged v{v2.version}" in out
+
+    fresh = ModelRegistry(tmp_path / "registry")
+    assert fresh.in_stage("lstm", Stage.STAGING).version == v2.version
 
 
 def test_registry_reconcile_never_touches_a_model_with_a_production_version(
@@ -564,10 +614,12 @@ def test_registry_reconcile_never_touches_a_model_with_a_production_version(
     v1 = registry.register(
         "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE,
         metrics={"track_error_48h_nm": 300.0},
+        **_LOADABLE,
     )
     registry.register(
         "lstm", run_id="b", input_flavor=Flavor.GDAS_FINETUNE,
         metrics={"track_error_48h_nm": 274.3},
+        **_LOADABLE,
     )
     registry.transition("lstm", v1.version, Stage.PRODUCTION)  # the worse one, deliberately
 
