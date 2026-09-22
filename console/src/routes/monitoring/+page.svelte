@@ -35,12 +35,12 @@
 					<CardTitle>Skew audit — {skew.lead_hours}h lead</CardTitle>
 					<Badge variant={skew.alert ? 'default' : 'outline'}>{skew.alert ? 'alert' : 'nominal'}</Badge>
 				</CardHeader>
-				<CardContent class="grid grid-cols-3 gap-4 text-xs">
+				<CardContent class="grid grid-cols-1 gap-4 text-xs sm:grid-cols-3">
 					<div><p class="text-text-faint">mean track delta</p><p class="font-data mt-1 text-text">{skew.mean_track_delta_nm.toFixed(1)} nm</p></div>
 					<div><p class="text-text-faint">mean |intensity delta|</p><p class="font-data mt-1 text-text">{skew.mean_abs_intensity_delta_kt.toFixed(1)} kt</p></div>
 					<div><p class="text-text-faint">samples</p><p class="font-data mt-1 text-text">{skew.n}</p></div>
 					{#each skew.reasons as reason (reason)}
-						<p class="col-span-3 text-text-muted">{reason}</p>
+						<p class="text-text-muted sm:col-span-3">{reason}</p>
 					{/each}
 				</CardContent>
 			</Card>
