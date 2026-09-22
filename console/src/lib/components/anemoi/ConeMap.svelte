@@ -24,29 +24,59 @@
 	 * grow with the map's real geographic scale when zooming, the same
 	 * real-distance correctness the old `nmToPx` conversion had.
 	 *
-	 * Layout/interaction (in-map legend, a hover popup per forecast
-	 * point, a pulsing current-fix marker) is deliberately modeled on the
-	 * original branding-brief concept mock's `WindRoseMap` -- but only
-	 * where real data supports it. That concept also drew per-model
-	 * divergent tracks and raw Skiron ensemble-member polylines; neither
-	 * exists in the real API today (`CycleProducts.contributors` is
-	 * fusion weights only, no per-model track geometry; `ConeSegmentOut`
-	 * is one aggregate radius per lead time, not per-member positions),
-	 * so this doesn't fabricate them -- the real cone-circle rendering
-	 * already here is the honest equivalent of that spread.
+	 * Layout/interaction (in-map legend, a pulsing current-fix marker,
+	 * per-model tracks) is deliberately modeled on the original
+	 * branding-brief concept mock's `WindRoseMap` -- but only where real
+	 * data supports it. Per-model tracks *are* real (`per_model_tracks`
+	 * per contributing Group 1 model, keyed by architecture slug):
+	 * `training.real_inference_cycle.build_real_deterministic_fn`
+	 * already computes each model's own prediction before fusing them,
+	 * it just used to be discarded once fusion had it -- surfaced
+	 * end-to-end for this. The concept mock's raw Skiron ensemble-member
+	 * polylines are a different story: `ConeSegmentOut` is one aggregate
+	 * radius per lead time, not per-member positions, so there is no
+	 * real per-member geometry to draw -- the cone-circle rendering
+	 * already here is the honest equivalent of that spread, and its own
+	 * legend entry says so ("cone/spread"). The legend itself is real
+	 * and clickable (each entry toggles its own layer's real MapLibre
+	 * `visibility`), not just a static key the way the concept mock's
+	 * map-embedded legend was.
 	 */
 	import 'svelte-maplibre-gl/vite';
 	import { onMount, untrack } from 'svelte';
 	import type { Map as MaplibreMap } from 'maplibre-gl';
-	import { MapLibre, GeoJSONSource, FillLayer, LineLayer, CircleLayer, SymbolLayer, Marker } from 'svelte-maplibre-gl';
+	import {
+		MapLibre,
+		GeoJSONSource,
+		FillLayer,
+		LineLayer,
+		CircleLayer,
+		SymbolLayer,
+		Marker,
+		AttributionControl,
+	} from 'svelte-maplibre-gl';
 	import type { ConeSegmentOut, FixOut, TrackPointOut } from '$lib/api/types';
+	import { cn } from '$lib/utils';
+	import { colorFor } from '$lib/branding';
 
 	interface Props {
 		history: FixOut[];
 		forecastTrack: TrackPointOut[];
 		cone: ConeSegmentOut[];
+		perModelTracks?: Record<string, TrackPointOut[]>;
+		/** Bindable so a sibling panel (Model Pantheon) can drive which
+		 * model's track is isolated on the map, and vice versa -- real
+		 * cross-component hover-to-isolate, the concept mock's own
+		 * `hovered` state, now backed by real per-model geometry. */
+		hoveredModel?: string | null;
 	}
-	let { history, forecastTrack, cone }: Props = $props();
+	let {
+		history,
+		forecastTrack,
+		cone,
+		perModelTracks = {},
+		hoveredModel = $bindable(null),
+	}: Props = $props();
 
 	const DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 	const NM_TO_KM = 1.852;
@@ -147,17 +177,33 @@
 
 	const currentFix = $derived(history.length > 0 ? history[history.length - 1] : null);
 
-	// Real available data only -- no per-model tracks or ensemble-member
-	// tracks are exposed by the API today (`CycleProducts.contributors`
-	// is weights-only, `ConeSegmentOut` is an aggregate radius per lead
-	// time, not per-member geometry), so unlike a from-scratch concept
-	// mock this can't draw those without inventing data. Wind speed per
-	// forecast point *is* real (`TrackPointOut.wind_kt`), surfaced
-	// directly in each point's permanent label below instead of behind a
-	// hover popup (tried first; MapLibre's per-layer mouseenter hit-test
-	// never fired reliably against the small 4px circles in real
-	// browser testing, and the always-visible label already surfaces the
-	// same information without needing it).
+	// Wind speed per forecast point is real (`TrackPointOut.wind_kt`),
+	// surfaced directly in each point's permanent label below instead of
+	// behind a hover popup (tried first; MapLibre's per-layer mouseenter
+	// hit-test never fired reliably against the small 4px circles in
+	// real browser testing, and the always-visible label already
+	// surfaces the same information without needing it).
+
+	const modelSlugs = $derived(Object.keys(perModelTracks));
+
+	// One Feature per model rather than one shared FeatureCollection --
+	// `hoveredModel` needs each model's own layer independently
+	// dimmable/highlightable via its own `line-opacity`/`line-width`, not
+	// a single shared paint expression across all of them.
+	const perModelLines = $derived(
+		modelSlugs.map((slug) => ({
+			slug,
+			color: colorFor(slug),
+			feature: {
+				type: 'Feature' as const,
+				properties: {},
+				geometry: {
+					type: 'LineString' as const,
+					coordinates: perModelTracks[slug].map((t) => [t.lon, t.lat]),
+				},
+			},
+		})),
+	);
 
 	const bounds = $derived.by((): [[number, number], [number, number]] | null => {
 		const points = [
@@ -173,6 +219,25 @@
 			[Math.max(...lons), Math.max(...lats)],
 		];
 	});
+
+	// A real, clickable legend (not just a static key) -- each entry
+	// toggles its own layer's visibility via MapLibre's `visibility`
+	// layout property, which just hides/shows already-rendered geometry
+	// (no re-fetch, no source rebuild). "Spread" has no separate toggle
+	// of its own: the cone *is* this app's real representation of
+	// spread (see the module docstring for why raw per-member polylines
+	// -- what the concept mock drew -- aren't real data here), so
+	// toggling "cone" toggles the same thing.
+	let visible = $state({
+		currentFix: true,
+		archiveTrack: true,
+		forecast: true,
+		cone: true,
+		models: true,
+	});
+	function vis(on: boolean): 'visible' | 'none' {
+		return on ? 'visible' : 'none';
+	}
 
 	let map = $state<MaplibreMap | undefined>();
 	// A plain boolean, not `map` itself -- `bind:map` gets rewritten by
@@ -215,35 +280,73 @@
 	bind:map
 	class="h-[380px] w-full rounded-md border border-border"
 	style={DARK_STYLE}
-	attributionControl={{ compact: true }}
+	attributionControl={false}
 >
+	<!-- Moved off bottom-left (MapLibre's default) -- that's exactly
+	     where the real, clickable legend below now lives, and the two
+	     controls overlapping there was a real, found-for-real bug: the
+	     attribution link's own click target sat on top of the legend's
+	     "cone/spread" toggle at the map's default size, silently
+	     swallowing clicks meant for the legend. -->
+	<AttributionControl compact position="top-right" />
+
 	<GeoJSONSource data={coneFeatures}>
-		<FillLayer paint={{ 'fill-color': colors.fusion, 'fill-opacity': 0.05 }} />
+		<FillLayer
+			layout={{ visibility: vis(visible.cone) }}
+			paint={{ 'fill-color': colors.fusion, 'fill-opacity': 0.05 }}
+		/>
 		<LineLayer
 			filter={['==', ['get', 'basis'], 'climatology']}
+			layout={{ visibility: vis(visible.cone) }}
 			paint={{ 'line-color': colors.fusion, 'line-width': 1, 'line-opacity': 0.35, 'line-dasharray': [2, 2] }}
 		/>
 		<LineLayer
 			filter={['!=', ['get', 'basis'], 'climatology']}
+			layout={{ visibility: vis(visible.cone) }}
 			paint={{ 'line-color': colors.fusion, 'line-width': 1, 'line-opacity': 0.35 }}
 		/>
 	</GeoJSONSource>
 
 	<GeoJSONSource data={historyLine}>
 		<LineLayer
+			layout={{ visibility: vis(visible.archiveTrack) }}
 			paint={{ 'line-color': colors.textFaint, 'line-width': 1.5, 'line-dasharray': [2, 3] }}
 		/>
 	</GeoJSONSource>
 
+	<!-- Per-model tracks, drawn under the fused consensus track (below)
+	     so the consensus stays the visually dominant line -- real per-
+	     model geometry, see the module docstring. `hoveredModel` is bound
+	     from Model Pantheon's own hover (dims the rest of these lines to
+	     25%) -- one-directional, not two-way: MapLibre's per-layer
+	     mouseenter hit-testing on these lines didn't fire reliably in
+	     real browser testing (the same finding as the forecast-point
+	     hover popup, tried and dropped earlier in this file's history),
+	     and the original concept mock's own hover only ever lived on the
+	     panel side anyway, never on the map lines themselves. -->
+	{#each perModelLines as { slug, color, feature } (slug)}
+		<GeoJSONSource data={feature}>
+			<LineLayer
+				layout={{ visibility: vis(visible.models) }}
+				paint={{
+					'line-color': color,
+					'line-width': hoveredModel === slug ? 3 : 2,
+					'line-opacity': hoveredModel === null ? 0.6 : hoveredModel === slug ? 1 : 0.25,
+				}}
+			/>
+		</GeoJSONSource>
+	{/each}
+
 	<GeoJSONSource data={forecastLine}>
 		<LineLayer
 			paint={{ 'line-color': colors.fusion, 'line-width': 2.5 }}
-			layout={{ 'line-cap': 'round' }}
+			layout={{ 'line-cap': 'round', visibility: vis(visible.forecast) }}
 		/>
 	</GeoJSONSource>
 
 	<GeoJSONSource data={forecastPoints}>
 		<CircleLayer
+			layout={{ visibility: vis(visible.forecast) }}
 			paint={{
 				'circle-radius': 4,
 				'circle-color': colors.bg,
@@ -257,12 +360,13 @@
 				'text-size': 10,
 				'text-offset': [0.9, -0.6],
 				'text-anchor': 'left',
+				visibility: vis(visible.forecast),
 			}}
 			paint={{ 'text-color': colors.textFaint }}
 		/>
 	</GeoJSONSource>
 
-	{#if currentFix}
+	{#if currentFix && visible.currentFix}
 		<Marker lnglat={[currentFix.lon, currentFix.lat]}>
 			{#snippet content()}
 				<span class="relative flex h-3 w-3">
@@ -278,12 +382,65 @@
 </MapLibre>
 
 <div
-	class="pointer-events-none absolute bottom-3 left-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-bg/85 px-2.5 py-1.5 text-[11px] text-text-faint backdrop-blur-sm"
+	class="absolute bottom-3 left-3 flex flex-wrap items-center gap-x-1 gap-y-1 rounded-md border border-border bg-bg/85 px-1.5 py-1 text-[11px] text-text-faint backdrop-blur-sm"
 >
-	<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-action"></span>current fix</span>
-	<span class="flex items-center gap-1.5"><span class="inline-block h-px w-4 border-t border-dashed border-text-faint"></span>archive track</span>
-	<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-fusion"></span>forecast (fusion)</span>
-	<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-fusion opacity-20"></span>cone (dashed = climatology fallback)</span>
+	<button
+		type="button"
+		aria-pressed={visible.currentFix}
+		onclick={() => (visible.currentFix = !visible.currentFix)}
+		class={cn(
+			'flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-surface-raised',
+			!visible.currentFix && 'opacity-40',
+		)}
+	>
+		<span class="h-2 w-2 rounded-full bg-action"></span>current fix
+	</button>
+	<button
+		type="button"
+		aria-pressed={visible.archiveTrack}
+		onclick={() => (visible.archiveTrack = !visible.archiveTrack)}
+		class={cn(
+			'flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-surface-raised',
+			!visible.archiveTrack && 'opacity-40',
+		)}
+	>
+		<span class="inline-block h-px w-4 border-t border-dashed border-text-faint"></span>archive track
+	</button>
+	<button
+		type="button"
+		aria-pressed={visible.forecast}
+		onclick={() => (visible.forecast = !visible.forecast)}
+		class={cn(
+			'flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-surface-raised',
+			!visible.forecast && 'opacity-40',
+		)}
+	>
+		<span class="h-2 w-2 rounded-full bg-fusion"></span>forecast (fusion)
+	</button>
+	<button
+		type="button"
+		aria-pressed={visible.cone}
+		onclick={() => (visible.cone = !visible.cone)}
+		class={cn(
+			'flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-surface-raised',
+			!visible.cone && 'opacity-40',
+		)}
+	>
+		<span class="h-2 w-2 rounded-full bg-fusion opacity-20"></span>cone/spread (dashed = climatology fallback)
+	</button>
+	{#if modelSlugs.length > 0}
+		<button
+			type="button"
+			aria-pressed={visible.models}
+			onclick={() => (visible.models = !visible.models)}
+			class={cn(
+				'flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-surface-raised',
+				!visible.models && 'opacity-40',
+			)}
+		>
+			<span class="h-2 w-2 rounded-full" style={`background: ${colors.textFaint}`}></span>individual model tracks
+		</button>
+	{/if}
 </div>
 </div>
 

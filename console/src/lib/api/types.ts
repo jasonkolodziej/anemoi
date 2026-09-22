@@ -104,6 +104,10 @@ export interface TrackPointOut {
 export interface CycleProducts {
 	deterministic_track: TrackPointOut[];
 	contributors: Record<string, number>;
+	/** Each contributing Group 1 model's own track, keyed by architecture
+	 * slug (lstm/cnn/transformer/gnn/pinn) -- real, not derived; empty for
+	 * the synthetic fallback and demo cycles. */
+	per_model_tracks: Record<string, TrackPointOut[]>;
 	intensity_pdf: IntensityPercentiles[];
 	landfall_probability: number | null;
 	notes: string[];
