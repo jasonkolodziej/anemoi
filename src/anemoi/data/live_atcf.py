@@ -56,29 +56,42 @@ def _get(url: str) -> str:
         raise LiveAtcfError(f"GET {url} failed: {exc}") from exc
 
 
-def fetch_current_storm_ids() -> list[str]:
-    """Real, currently-active storm ids (e.g. ``AL062026``) from NHC's own
-    ``CurrentStorms.json`` index."""
+def fetch_current_storms() -> list[tuple[str, str | None]]:
+    """Real, currently-active ``(storm_id, name)`` pairs (e.g.
+    ``("AL062026", "Fay")``) from NHC's own ``CurrentStorms.json`` index --
+    the same index that carries the public name every other NHC product
+    (and nhc.noaa.gov's own storm list) uses."""
     text = _get(CURRENT_STORMS_URL)
     try:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
         raise LiveAtcfError(f"CurrentStorms.json was not valid JSON: {exc}") from exc
-    return [s["id"].upper() for s in data.get("activeStorms", []) if "id" in s]
+    return [
+        (s["id"].upper(), s.get("name") or None)
+        for s in data.get("activeStorms", [])
+        if "id" in s
+    ]
 
 
-def fetch_live_track(storm_id: str) -> Track:
+def fetch_current_storm_ids() -> list[str]:
+    """Real, currently-active storm ids (e.g. ``AL062026``) from NHC's own
+    ``CurrentStorms.json`` index."""
+    return [storm_id for storm_id, _name in fetch_current_storms()]
+
+
+def fetch_live_track(storm_id: str, name: str | None = None) -> Track:
     """Real WORKING-quality `Track` for one currently-active storm -- its
     full real accumulated TC-Vitals history, not just the latest fix, so a
     live storm's track shows real recent movement the same way an archive
-    storm's does."""
+    storm's does. ``name`` comes from ``CurrentStorms.json`` (TC-Vitals
+    bulletins themselves carry no name), not from this fetch."""
     url = TCVITALS_ARCH_URL.format(storm_id=storm_id.lower())
     fixes = [f for f in parse_tcvitals(_get(url)) if f.storm_id == storm_id]
     if not fixes:
         raise LiveAtcfError(f"{storm_id}: tcvitals-arch had no parseable fixes")
     fixes.sort(key=lambda f: f.valid_time)
     deduped = [f for i, f in enumerate(fixes) if i == 0 or f.valid_time != fixes[i - 1].valid_time]
-    return Track(storm_id=storm_id, fixes=tuple(deduped))
+    return Track(storm_id=storm_id, fixes=tuple(deduped), name=name)
 
 
 def fetch_live_tracks() -> list[Track]:
@@ -88,13 +101,13 @@ def fetch_live_tracks() -> list[Track]:
     index itself is unreachable -- callers must keep working with
     whatever real archive data they already have."""
     try:
-        storm_ids = fetch_current_storm_ids()
+        storms = fetch_current_storms()
     except LiveAtcfError:
         return []
     tracks: list[Track] = []
-    for storm_id in storm_ids:
+    for storm_id, name in storms:
         try:
-            tracks.append(fetch_live_track(storm_id))
+            tracks.append(fetch_live_track(storm_id, name=name))
         except (LiveAtcfError, ValueError):
             continue
     return tracks

@@ -78,6 +78,20 @@ def test_multi_storm_file_produces_one_track_per_storm():
     assert {t.storm_id for t in tracks} == {"AL011999", "AL022005"}
 
 
+def test_header_name_is_parsed_onto_the_track():
+    (track,) = parse_hurdat2(STORM_TWO)
+    assert track.name == "TESTSTORM"
+
+
+def test_unnamed_sentinel_becomes_none_not_the_literal_string():
+    text = f"""\
+AL031999,       UNNAMED,     1,
+19990825, 0000,  , TS, 12.0N,  35.0W,  40, 1005, {RADII},
+"""
+    (track,) = parse_hurdat2(text)
+    assert track.name is None
+
+
 def test_storm_with_no_representable_fixes_is_skipped_entirely():
     text = f"""\
 AL031999,      ALLMISSING,     1,

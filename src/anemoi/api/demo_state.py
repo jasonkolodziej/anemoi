@@ -44,6 +44,12 @@ class StormState:
         return self.track.season
 
     @property
+    def name(self) -> str | None:
+        # `data.synthetic` mints storm_ids, not names -- None here (never a
+        # fabricated one) is the honest answer for a fully synthetic storm.
+        return self.track.name
+
+    @property
     def latest_fix(self) -> Fix:
         return self.track.fixes[-1]
 

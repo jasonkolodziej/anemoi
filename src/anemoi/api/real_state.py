@@ -83,6 +83,10 @@ class RealStormState:
         return self.track.season
 
     @property
+    def name(self) -> str | None:
+        return self.track.name
+
+    @property
     def latest_fix(self) -> Fix:
         return self.track.fixes[-1]
 

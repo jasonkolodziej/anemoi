@@ -141,6 +141,9 @@ export interface FixOut {
 
 export interface StormSummary {
 	storm_id: string;
+	/** The storm's public name (e.g. "Fay"), when the source carries one --
+	 * null for an unnamed archive storm or a fully synthetic demo storm. */
+	name: string | null;
 	season: number;
 	active: boolean;
 	latest_fix: FixOut;

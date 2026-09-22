@@ -20,7 +20,12 @@
 <a href={`/storms/${storm.storm_id}`} class="hover-lift block">
 	<Card class="h-full hover:border-border-strong">
 		<CardHeader>
-			<CardTitle>{storm.storm_id}</CardTitle>
+			<CardTitle>
+				{storm.storm_id}
+				{#if storm.name}
+					<span class="font-display font-normal text-text-muted">{storm.name}</span>
+				{/if}
+			</CardTitle>
 			<span class="font-data text-xs text-text-faint">{storm.season}</span>
 		</CardHeader>
 		<CardContent class="space-y-2">

@@ -105,7 +105,12 @@
 		<header class="mt-2 mb-6 flex flex-wrap items-end justify-between gap-4">
 			<div>
 				<div class="flex items-center gap-2">
-					<h1 class="font-display text-2xl font-semibold text-text">{storm.storm_id}</h1>
+					<h1 class="font-display text-2xl font-semibold text-text">
+						{storm.storm_id}
+						{#if storm.name}
+							<span class="font-normal text-text-muted">{storm.name}</span>
+						{/if}
+					</h1>
 					{#if !storm.trained_basin}
 						<span
 							class="font-data rounded-full border border-status-degraded/40 px-2 py-0.5 text-[10px] tracking-wide text-status-degraded uppercase"

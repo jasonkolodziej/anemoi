@@ -24,6 +24,7 @@ def _storm_summary(storm, cycle: str | None = None) -> schemas.StormSummary:
     basin = storm_basin(storm.storm_id)
     return schemas.StormSummary(
         storm_id=storm.storm_id,
+        name=storm.name,
         season=storm.season,
         active=storm.active,
         latest_fix=schemas.FixOut(
