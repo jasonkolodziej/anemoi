@@ -27,9 +27,14 @@
  * or model badge, same rule as the two tokens it's built from.
  */
 @theme {
-	--font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
-	--font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-	--font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+	/* Typeface swap (explicit request, overriding the Branding Brief's own
+	   Space Grotesk/Inter/JetBrains Mono choice) -- matches getarcaneapp/
+	   arcane's frontend/src/routes/layout.css: Montserrat Variable for body,
+	   Geist Mono Variable for both display and data, the same font playing
+	   both roles there too. */
+	--font-display: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+	--font-sans: 'Montserrat', ui-sans-serif, system-ui, sans-serif;
+	--font-mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
 	/* Neutral scale -- Branding Brief v1.2 "Storm Dark" (abyss/deep/stratus/
 	   cirrus/cumulus, console/tmp/TrainingRunTimeline_v2-2.jsx's `C`). Blue-
@@ -76,6 +81,28 @@
 	--radius-sm: 0.25rem;
 	--radius-md: 0.375rem;
 	--radius-lg: 0.5rem;
+
+	/* Glass ("bubble") surface tokens -- ported from getarcaneapp/arcane's
+	   frontend/src/routes/layout.css at the user's request. No
+	   backdrop-filter in the source class either: the glass read comes
+	   entirely from a tinted radial gradient over a translucent
+	   background-color plus a soft layered shadow, not an actual blur --
+	   apt here too, since there's nothing behind these panels but a flat
+	   page background for a blur to act on. glass-tint reuses --color-action
+	   (this app's one interactive hue outside the god palette), the same
+	   role --primary plays in the source. Single dark-only set: this
+	   console has no light mode to branch on (html.color-scheme is dark
+	   unconditionally, above). */
+	--glass-base: var(--color-surface);
+	--glass-tint: var(--color-action);
+	--glass-shadow-color: oklch(0% 0 0 / 0.32);
+	--shadow-glass-sm: 0 1px 2px color-mix(in oklab, var(--glass-shadow-color) 40%, transparent);
+	--shadow-glass-md:
+		0 2px 8px -4px color-mix(in oklab, var(--glass-shadow-color) 55%, transparent),
+		0 4px 16px -8px color-mix(in oklab, var(--glass-shadow-color) 35%, transparent);
+	--shadow-glass-lg:
+		0 10px 24px -14px color-mix(in oklab, var(--glass-shadow-color) 65%, transparent),
+		0 24px 48px -24px color-mix(in oklab, var(--glass-shadow-color) 45%, transparent);
 }
 
 @layer base {
@@ -130,5 +157,58 @@
 	}
 	50% {
 		box-shadow: 0 0 0 6px color-mix(in oklab, var(--color-fusion) 0%, transparent);
+	}
+}
+
+/* Glass utilities -- ported alongside the tokens above. `.bubble` doesn't
+   bake in a border-radius the way the source's does: this app applies
+   `rounded-lg` separately (Card) or omits it (the full-bleed sidebar/mobile
+   header/drawer, where a rounded rail would look broken against a flush
+   viewport edge) -- one class, both shapes, no specificity fights with
+   Tailwind's own radius utilities. */
+@layer utilities {
+	.bubble {
+		background:
+			radial-gradient(120% 100% at 10% 0%, color-mix(in oklab, var(--glass-tint) 9%, transparent) 0%, transparent 60%),
+			radial-gradient(120% 100% at 100% 0%, color-mix(in oklab, var(--glass-base) 14%, transparent) 0%, transparent 60%);
+		background-color: color-mix(in oklab, var(--glass-base) 92%, transparent);
+		box-shadow: var(--shadow-glass-md);
+	}
+
+	.bubble-shadow {
+		box-shadow: var(--shadow-glass-sm);
+	}
+
+	.bubble-shadow-lg {
+		box-shadow: var(--shadow-glass-lg);
+	}
+
+	.bubble-outline {
+		background:
+			linear-gradient(var(--glass-base), var(--glass-base)) padding-box,
+			linear-gradient(135deg, color-mix(in oklab, var(--glass-tint) 34%, transparent), transparent 60%) border-box;
+		border: 1px solid transparent;
+	}
+
+	/* Reduced-motion is already handled globally (@layer base above) --
+	   transition-duration: 0.001ms !important covers these too. */
+	.hover-lift {
+		transition:
+			transform 160ms ease,
+			box-shadow 160ms ease;
+	}
+	.hover-lift:hover {
+		transform: translateY(-1px);
+		box-shadow: 0 8px 20px -12px color-mix(in oklab, var(--glass-shadow-color) 72%, transparent);
+	}
+	.hover-lift:active {
+		transform: translateY(0) scale(0.98);
+	}
+
+	.pressable {
+		transition: transform 110ms ease;
+	}
+	.pressable:active {
+		transform: scale(0.97);
 	}
 }

@@ -26,7 +26,7 @@
 	<!-- Desktop: persistent rail. A fixed 224px sidebar eats over half a
 	     phone viewport, so this is `md:`-and-up only -- see MobileNav for
 	     the small-screen equivalent below. -->
-	<aside class="hidden w-56 shrink-0 flex-col border-r border-border bg-surface md:flex">
+	<aside class="bubble hidden w-56 shrink-0 flex-col border-r border-border/60 md:flex">
 		<a href="/" class="flex items-center gap-2.5 border-b border-border px-4 py-4">
 			<HurricaneIcon size={26} />
 			<div>
@@ -56,7 +56,7 @@
 
 	<!-- Mobile: a slim top bar + off-canvas drawer instead of the rail. -->
 	<header
-		class="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-border bg-surface px-4 py-3 md:hidden"
+		class="bubble sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-border/60 px-4 py-3 md:hidden"
 	>
 		<a href="/" class="flex items-center gap-2">
 			<HurricaneIcon size={22} />
