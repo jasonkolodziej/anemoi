@@ -181,6 +181,16 @@ def test_build_real_deterministic_fn_combines_all_four_real_models(tmp_path):
         # times -- at least one model's own lat differs from the fused one.
         assert not np.allclose(track_arr[:, 0], forecast.lats)
 
+    # pinn was never registered in this test -- its real skip reason must
+    # be kept, not discarded just because the other four contributed.
+    # Real precedent for needing this: a console user asking "why isn't
+    # this model weighing in" for a *partial* cycle (four out of five
+    # models still produces a real, usable forecast, but silently drops
+    # the fifth's own reason once at least one succeeds).
+    assert forecast.missing_model_reasons == {
+        "pinn": "no registered staging/production version",
+    }
+
 
 @pytest.mark.torch
 def test_build_real_deterministic_fn_uses_the_real_learned_fusion_with_all_five(tmp_path):

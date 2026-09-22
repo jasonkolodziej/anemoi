@@ -129,6 +129,7 @@ def test_real_state_run_cycle_degrades_to_the_synthetic_fallback(client):
     # copies of the fused track -- the console's map only draws real
     # per-model lines when this is non-empty.
     assert body["products"]["per_model_tracks"] == {}
+    assert body["products"]["missing_model_reasons"] == {}
 
     # #100: the real reason must be captured (always, cheap), even though
     # this test doesn't expose it over HTTP (ANEMOI_API_DEBUG unset).

@@ -130,6 +130,11 @@ class CycleProducts(BaseModel):
     #: derived after the fact. Empty for the synthetic fallback and demo
     #: cycles (neither runs a real per-model forward pass).
     per_model_tracks: dict[str, list[TrackPointOut]]
+    #: Why each Group 1 model that *isn't* in `contributors`/`per_model_
+    #: tracks` was skipped, keyed the same way (architecture slug). Real,
+    #: not derived after the fact -- see `DeterministicForecast.missing_
+    #: model_reasons`. Empty for the synthetic fallback and demo cycles.
+    missing_model_reasons: dict[str, str]
     intensity_pdf: list[IntensityPercentiles]
     landfall_probability: float | None
     notes: list[str]

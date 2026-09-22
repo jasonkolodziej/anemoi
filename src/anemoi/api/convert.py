@@ -107,6 +107,7 @@ def cycle_products_out(output: CycleOutput) -> s.CycleProducts:
         deterministic_track=track,
         contributors=dict(det.contributors),
         per_model_tracks=per_model_tracks,
+        missing_model_reasons=dict(det.missing_model_reasons),
         intensity_pdf=pdf,
         landfall_probability=output.products.landfall_probability,
         notes=list(output.products.notes),
