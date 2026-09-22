@@ -82,6 +82,14 @@ class DemoState:
     def list_storms(self) -> list[StormState]:
         return list(self.storms.values())
 
+    def refresh_registry_if_stale(self) -> None:
+        """No-op -- the demo registry lives only in this process's own
+        memory for its whole lifetime, nothing external ever writes to it,
+        so there is nothing to re-pull. Exists so `api.routers.registry`
+        can call it unconditionally regardless of which state backend is
+        active, matching every other "exact same public surface" method."""
+        return
+
     def get_storm(self, storm_id: str) -> StormState:
         try:
             return self.storms[storm_id]
