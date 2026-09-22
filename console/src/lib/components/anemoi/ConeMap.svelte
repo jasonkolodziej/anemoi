@@ -1,32 +1,45 @@
 <script lang="ts">
 	/**
-	 * Track + cone of uncertainty, plotted as a local equirectangular
-	 * projection (cos(lat)-corrected) rather than a tile map -- at synoptic
-	 * scale (a few hundred nm) the distortion is negligible, and it keeps
-	 * this console self-contained with no external tile dependency.
+	 * Track + cone of uncertainty on a real interactive MapLibre map
+	 * (svelte-maplibre-gl -- https://svelte-maplibre-gl.mierune.dev/docs/
+	 * quickstart), replacing the previous hand-rolled equirectangular SVG
+	 * projection. Pan/zoom is the point of this change -- the old
+	 * self-contained "zero runtime network calls" approach (a bundled
+	 * Natural Earth coastline extract) is deliberately traded away here
+	 * for a real basemap; `dark-matter-gl-style` (CartoDB, no API key)
+	 * keeps the map itself matching this app's dark theme rather than
+	 * introducing a jarring light/satellite basemap.
 	 *
-	 * Real coastlines, not just a synthetic graticule: `atlantic-coastline-
-	 * 110m.json` is Natural Earth's 110m land dataset (public domain, no
-	 * attribution required), clipped to the HURDAT2 Atlantic basin's actual
-	 * range (lon -100..15, lat -5..65) and simplified to ~0.02 degree
-	 * tolerance -- 25 features, ~40KB, bundled at build time. Still zero
-	 * runtime network calls/tile server -- it's drawn through the exact same
-	 * `project()` function as the track/cone, just real polygons instead of
-	 * a grid line pattern.
+	 * "Keep the current styling usage": every data layer's color is
+	 * still this app's actual brand tokens (`--color-fusion`,
+	 * `--color-action`, `--color-text-faint`, `--color-bg`), not new
+	 * hardcoded hex -- `resolveColor` reads them from the DOM at runtime
+	 * (MapLibre paint properties need real color strings, not a raw
+	 * `var(--x)` reference, since the GL renderer parses them itself
+	 * rather than going through the browser's CSS cascade). The legend
+	 * now floats over the map itself (bottom-left), not below it.
 	 *
-	 * The forecast track is drawn in the Fusion neutral colour: it *is* the
-	 * consensus of all six models, so it takes the "no single god" colour by
-	 * the same logic the brief gives Anemoi-Fusion itself.
+	 * Cone circles are real geodesic polygons (`geoCircle`), not
+	 * MapLibre's screen-space `circle-radius` -- a 300nm cone must shrink/
+	 * grow with the map's real geographic scale when zooming, the same
+	 * real-distance correctness the old `nmToPx` conversion had.
+	 *
+	 * Layout/interaction (in-map legend, a hover popup per forecast
+	 * point, a pulsing current-fix marker) is deliberately modeled on the
+	 * original branding-brief concept mock's `WindRoseMap` -- but only
+	 * where real data supports it. That concept also drew per-model
+	 * divergent tracks and raw Skiron ensemble-member polylines; neither
+	 * exists in the real API today (`CycleProducts.contributors` is
+	 * fusion weights only, no per-model track geometry; `ConeSegmentOut`
+	 * is one aggregate radius per lead time, not per-member positions),
+	 * so this doesn't fabricate them -- the real cone-circle rendering
+	 * already here is the honest equivalent of that spread.
 	 */
+	import 'svelte-maplibre-gl/vite';
+	import { onMount, untrack } from 'svelte';
+	import type { Map as MaplibreMap } from 'maplibre-gl';
+	import { MapLibre, GeoJSONSource, FillLayer, LineLayer, CircleLayer, SymbolLayer, Marker } from 'svelte-maplibre-gl';
 	import type { ConeSegmentOut, FixOut, TrackPointOut } from '$lib/api/types';
-	import coastlineData from '$lib/data/atlantic-coastline-110m.json';
-
-	type GeoRing = [number, number][];
-	type GeoPolygon = GeoRing[];
-	type CoastlineFeature = {
-		geometry: { type: 'Polygon'; coordinates: GeoPolygon } | { type: 'MultiPolygon'; coordinates: GeoPolygon[] };
-	};
-	const COASTLINE = coastlineData as unknown as { features: CoastlineFeature[] };
 
 	interface Props {
 		history: FixOut[];
@@ -35,145 +48,262 @@
 	}
 	let { history, forecastTrack, cone }: Props = $props();
 
-	const W = 640;
-	const H = 380;
-	const PAD = 28;
-	const NM_PER_DEG_LAT = 60;
+	const DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+	const NM_TO_KM = 1.852;
+	const EARTH_RADIUS_KM = 6371.0088;
 
-	const allPoints = $derived([
-		...history.map((f) => ({ lat: f.lat, lon: f.lon })),
-		...forecastTrack.map((t) => ({ lat: t.lat, lon: t.lon })),
-		...cone.map((c) => ({ lat: c.lat, lon: c.lon }))
-	]);
+	// Resolves a CSS custom property (as authored on :root, e.g. an
+	// oklch() value) to the browser-normalized rgb() string MapLibre's own
+	// color parser can read -- var(--x) itself only means something to the
+	// browser's CSS cascade, not to MapLibre's paint-property parser.
+	function resolveColor(varName: string): string {
+		const el = document.createElement('span');
+		el.style.color = `var(${varName})`;
+		document.body.appendChild(el);
+		const rgb = getComputedStyle(el).color;
+		el.remove();
+		return rgb;
+	}
 
-	const bounds = $derived.by(() => {
-		if (allPoints.length === 0) return { minLat: 0, maxLat: 1, minLon: 0, maxLon: 1 };
-		const lats = allPoints.map((p) => p.lat);
-		const lons = allPoints.map((p) => p.lon);
-		const pad = 1.5;
-		return {
-			minLat: Math.min(...lats) - pad,
-			maxLat: Math.max(...lats) + pad,
-			minLon: Math.min(...lons) - pad,
-			maxLon: Math.max(...lons) + pad
+	let colors = $state({
+		fusion: '#f8fafc',
+		action: '#60a5fa',
+		textFaint: '#64748b',
+		bg: '#0a0e17',
+	});
+
+	onMount(() => {
+		colors = {
+			fusion: resolveColor('--color-fusion'),
+			action: resolveColor('--color-action'),
+			textFaint: resolveColor('--color-text-faint'),
+			bg: resolveColor('--color-bg'),
 		};
 	});
 
-	const midLatCos = $derived(Math.cos(((bounds.minLat + bounds.maxLat) / 2) * (Math.PI / 180)));
-
-	function project(lat: number, lon: number): { x: number; y: number } {
-		const spanLat = bounds.maxLat - bounds.minLat || 1;
-		const spanLon = (bounds.maxLon - bounds.minLon) * midLatCos || 1;
-		const scale = Math.min((W - PAD * 2) / spanLon, (H - PAD * 2) / spanLat);
-		const x = W / 2 + (lon - (bounds.minLon + bounds.maxLon) / 2) * midLatCos * scale;
-		const y = H / 2 - (lat - (bounds.minLat + bounds.maxLat) / 2) * scale;
-		return { x, y };
+	// Standard spherical destination-point formula (bearing swept 0..360)
+	// -- the same real-world-distance circle Turf.js's `circle()` produces.
+	function geoCircle(lat: number, lon: number, radiusNm: number, points = 64): [number, number][] {
+		const angularDist = (radiusNm * NM_TO_KM) / EARTH_RADIUS_KM;
+		const latRad = (lat * Math.PI) / 180;
+		const lonRad = (lon * Math.PI) / 180;
+		const ring: [number, number][] = [];
+		for (let i = 0; i <= points; i++) {
+			const bearing = (i / points) * 2 * Math.PI;
+			const lat2 = Math.asin(
+				Math.sin(latRad) * Math.cos(angularDist) +
+					Math.cos(latRad) * Math.sin(angularDist) * Math.cos(bearing),
+			);
+			const lon2 =
+				lonRad +
+				Math.atan2(
+					Math.sin(bearing) * Math.sin(angularDist) * Math.cos(latRad),
+					Math.cos(angularDist) - Math.sin(latRad) * Math.sin(lat2),
+				);
+			ring.push([(lon2 * 180) / Math.PI, (lat2 * 180) / Math.PI]);
+		}
+		return ring;
 	}
 
-	function nmToPx(nm: number): number {
-		const spanLat = bounds.maxLat - bounds.minLat || 1;
-		const scale = (H - PAD * 2) / spanLat;
-		return (nm / NM_PER_DEG_LAT) * scale;
-	}
+	const coneFeatures = $derived({
+		type: 'FeatureCollection' as const,
+		features: cone.map((seg) => ({
+			type: 'Feature' as const,
+			properties: { basis: seg.basis },
+			geometry: { type: 'Polygon' as const, coordinates: [geoCircle(seg.lat, seg.lon, seg.radius_nm)] },
+		})),
+	});
 
-	const historyPath = $derived(
-		history.map((f, i) => {
-			const p = project(f.lat, f.lon);
-			return `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`;
-		}).join(' ')
-	);
-	const forecastPath = $derived(
-		forecastTrack.map((t, i) => {
-			const p = project(t.lat, t.lon);
-			return `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`;
-		}).join(' ')
-	);
-	const forecastLength = $derived(forecastTrack.length * 40); // rough stroke length for the reveal animation
+	const historyLine = $derived({
+		type: 'Feature' as const,
+		properties: {},
+		geometry: {
+			type: 'LineString' as const,
+			coordinates: history.map((f) => [f.lon, f.lat]),
+		},
+	});
 
-	function ringPath(ring: GeoRing): string {
-		return ring.map(([lon, lat], i) => {
-			const p = project(lat, lon);
-			return `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`;
-		}).join(' ') + ' Z';
-	}
-	function polygonPath(rings: GeoPolygon): string {
-		return rings.map(ringPath).join(' ');
-	}
-	// The SVG viewBox clips anything outside 0..W/0..H by default (root
-	// <svg> is UA-styled overflow:hidden) -- no need to pre-filter features
-	// by bounds, the 25-feature dataset is cheap to project in full every time.
-	const coastlinePaths = $derived(
-		COASTLINE.features.map((f) =>
-			f.geometry.type === 'Polygon' ? polygonPath(f.geometry.coordinates) : f.geometry.coordinates.map(polygonPath).join(' ')
-		)
-	);
+	const forecastLine = $derived({
+		type: 'Feature' as const,
+		properties: {},
+		geometry: {
+			type: 'LineString' as const,
+			coordinates: forecastTrack.map((t) => [t.lon, t.lat]),
+		},
+	});
+
+	const forecastPoints = $derived({
+		type: 'FeatureCollection' as const,
+		features: forecastTrack.map((t) => ({
+			type: 'Feature' as const,
+			properties: {
+				label: `${t.lead_hours}h · ${t.wind_kt.toFixed(0)}kt`,
+				lead_hours: t.lead_hours,
+				wind_kt: t.wind_kt,
+			},
+			geometry: { type: 'Point' as const, coordinates: [t.lon, t.lat] },
+		})),
+	});
+
+	const currentFix = $derived(history.length > 0 ? history[history.length - 1] : null);
+
+	// Real available data only -- no per-model tracks or ensemble-member
+	// tracks are exposed by the API today (`CycleProducts.contributors`
+	// is weights-only, `ConeSegmentOut` is an aggregate radius per lead
+	// time, not per-member geometry), so unlike a from-scratch concept
+	// mock this can't draw those without inventing data. Wind speed per
+	// forecast point *is* real (`TrackPointOut.wind_kt`), surfaced
+	// directly in each point's permanent label below instead of behind a
+	// hover popup (tried first; MapLibre's per-layer mouseenter hit-test
+	// never fired reliably against the small 4px circles in real
+	// browser testing, and the always-visible label already surfaces the
+	// same information without needing it).
+
+	const bounds = $derived.by((): [[number, number], [number, number]] | null => {
+		const points = [
+			...history.map((f) => [f.lon, f.lat] as [number, number]),
+			...forecastTrack.map((t) => [t.lon, t.lat] as [number, number]),
+			...cone.map((c) => [c.lon, c.lat] as [number, number]),
+		];
+		if (points.length === 0) return null;
+		const lons = points.map((p) => p[0]);
+		const lats = points.map((p) => p[1]);
+		return [
+			[Math.min(...lons), Math.min(...lats)],
+			[Math.max(...lons), Math.max(...lats)],
+		];
+	});
+
+	let map = $state<MaplibreMap | undefined>();
+	// A plain boolean, not `map` itself -- `bind:map` gets rewritten by
+	// MapLibre.svelte's own internal move/zoom listener on every pan (it
+	// keeps the binding live for imperative access), and a raw `$state`/
+	// `$bindable` write always signals "changed" to a directly-dependent
+	// effect regardless of reference equality. `$derived` output, unlike
+	// that, is compared by value before propagating -- `mapReady` only
+	// actually changes once (false -> true, on mount), so depending on it
+	// instead of `map` breaks what was an infinite fitBounds loop, found
+	// for real: every user pan re-ran this effect, which called
+	// fitBounds again, which fired another move event, forever
+	// (`effect_update_depth_exceeded`).
+	const mapReady = $derived(!!map);
+
+	// A plain (non-reactive) last-fitted-bounds guard, not just the
+	// mapReady/untrack decoupling above -- found for real that wasn't
+	// sufficient on its own: fitBounds's own move/moveend events feed
+	// back into MapLibre.svelte's internal center/zoom<->camera sync
+	// effect closely enough that this effect kept re-scheduling several
+	// times for the *same* bounds value before settling, tripping
+	// Svelte's effect_update_depth_exceeded guard. Comparing against the
+	// last value actually fitted -- not just "did a dependency change" --
+	// makes every re-schedule after the first a no-op regardless of why
+	// Svelte re-ran this effect, which is what actually stopped it.
+	let lastFittedBounds: string | undefined;
+
+	$effect(() => {
+		if (!mapReady || !bounds) return;
+		const key = JSON.stringify(bounds);
+		if (key === lastFittedBounds) return;
+		lastFittedBounds = key;
+		const m = untrack(() => map);
+		m?.fitBounds(bounds, { padding: 48, duration: 0 });
+	});
 </script>
 
-<svg viewBox={`0 0 ${W} ${H}`} class="w-full rounded-md border border-border bg-surface" role="img" aria-label="Storm track and cone of uncertainty">
-	<defs>
-		<pattern id="graticule" width="40" height="40" patternUnits="userSpaceOnUse">
-			<path d="M 40 0 L 0 0 0 40" fill="none" stroke="var(--color-border)" stroke-width="0.5" />
-		</pattern>
-	</defs>
-	<rect width={W} height={H} fill="url(#graticule)" />
-
-	<!-- Real coastlines (Natural Earth 110m, see the header comment) --
-	     drawn under the track/cone, in the neutral surface tone so land
-	     reads as geographic context, not as a competing data colour. -->
-	{#each coastlinePaths as d, i (i)}
-		<path {d} fill="var(--color-surface-raised)" stroke="var(--color-border-strong)" stroke-width="1" fill-rule="evenodd" />
-	{/each}
-
-	<!-- Cone of uncertainty: overlapping circles per lead time, dashed ring
-	     when the segment fell back to climatology (build_cone's honesty guard). -->
-	{#each cone as seg (seg.lead_hours)}
-		{@const p = project(seg.lat, seg.lon)}
-		<circle
-			cx={p.x}
-			cy={p.y}
-			r={nmToPx(seg.radius_nm)}
-			fill="var(--color-fusion)"
-			opacity="0.05"
+<div class="relative">
+<MapLibre
+	bind:map
+	class="h-[380px] w-full rounded-md border border-border"
+	style={DARK_STYLE}
+	attributionControl={{ compact: true }}
+>
+	<GeoJSONSource data={coneFeatures}>
+		<FillLayer paint={{ 'fill-color': colors.fusion, 'fill-opacity': 0.05 }} />
+		<LineLayer
+			filter={['==', ['get', 'basis'], 'climatology']}
+			paint={{ 'line-color': colors.fusion, 'line-width': 1, 'line-opacity': 0.35, 'line-dasharray': [2, 2] }}
 		/>
-		<circle
-			cx={p.x}
-			cy={p.y}
-			r={nmToPx(seg.radius_nm)}
-			fill="none"
-			stroke="var(--color-fusion)"
-			stroke-width="1"
-			stroke-dasharray={seg.basis === 'climatology' ? '3 3' : 'none'}
-			opacity="0.35"
+		<LineLayer
+			filter={['!=', ['get', 'basis'], 'climatology']}
+			paint={{ 'line-color': colors.fusion, 'line-width': 1, 'line-opacity': 0.35 }}
 		/>
-	{/each}
+	</GeoJSONSource>
 
-	<!-- Historical (archive) track -->
-	<path d={historyPath} fill="none" stroke="var(--color-text-faint)" stroke-width="1.5" stroke-dasharray="2 3" />
+	<GeoJSONSource data={historyLine}>
+		<LineLayer
+			paint={{ 'line-color': colors.textFaint, 'line-width': 1.5, 'line-dasharray': [2, 3] }}
+		/>
+	</GeoJSONSource>
 
-	<!-- Forecast track -- fusion consensus, single reveal on mount -->
-	<path
-		d={forecastPath}
-		fill="none"
-		stroke="var(--color-fusion)"
-		stroke-width="2.5"
-		stroke-linecap="round"
-		style={`--cone-length: ${forecastLength}px; stroke-dasharray: var(--cone-length); animation: cone-draw 900ms ease-out forwards;`}
-	/>
-	{#each forecastTrack as t (t.lead_hours)}
-		{@const p = project(t.lat, t.lon)}
-		<circle cx={p.x} cy={p.y} r="3" fill="var(--color-bg)" stroke="var(--color-fusion)" stroke-width="1.5" />
-		<text x={p.x + 6} y={p.y - 6} class="font-data" font-size="9" fill="var(--color-text-faint)">{t.lead_hours}h</text>
-	{/each}
+	<GeoJSONSource data={forecastLine}>
+		<LineLayer
+			paint={{ 'line-color': colors.fusion, 'line-width': 2.5 }}
+			layout={{ 'line-cap': 'round' }}
+		/>
+	</GeoJSONSource>
 
-	{#if history.length > 0}
-		{@const p = project(history[history.length - 1].lat, history[history.length - 1].lon)}
-		<circle cx={p.x} cy={p.y} r="4.5" fill="var(--color-action)" />
+	<GeoJSONSource data={forecastPoints}>
+		<CircleLayer
+			paint={{
+				'circle-radius': 4,
+				'circle-color': colors.bg,
+				'circle-stroke-color': colors.fusion,
+				'circle-stroke-width': 1.5,
+			}}
+		/>
+		<SymbolLayer
+			layout={{
+				'text-field': ['get', 'label'],
+				'text-size': 10,
+				'text-offset': [0.9, -0.6],
+				'text-anchor': 'left',
+			}}
+			paint={{ 'text-color': colors.textFaint }}
+		/>
+	</GeoJSONSource>
+
+	{#if currentFix}
+		<Marker lnglat={[currentFix.lon, currentFix.lat]}>
+			{#snippet content()}
+				<span class="relative flex h-3 w-3">
+					<span
+						class="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60"
+						style={`background: ${colors.action}`}
+					></span>
+					<span class="relative block h-3 w-3 rounded-full" style={`background: ${colors.action}`}></span>
+				</span>
+			{/snippet}
+		</Marker>
 	{/if}
-</svg>
-<div class="mt-2 flex flex-wrap items-center gap-4 text-[11px] text-text-faint">
-	<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm border border-border-strong bg-surface-raised"></span>land</span>
+</MapLibre>
+
+<div
+	class="pointer-events-none absolute bottom-3 left-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-bg/85 px-2.5 py-1.5 text-[11px] text-text-faint backdrop-blur-sm"
+>
 	<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-action"></span>current fix</span>
 	<span class="flex items-center gap-1.5"><span class="inline-block h-px w-4 border-t border-dashed border-text-faint"></span>archive track</span>
 	<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-fusion"></span>forecast (fusion)</span>
 	<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-fusion opacity-20"></span>cone (dashed = climatology fallback)</span>
 </div>
+</div>
+
+<style>
+	/* MapLibre's own AttributionControl ships hardcoded as a white pill
+	   (`hsla(0,0%,100%,.5)`, maplibre-gl.css) -- CARTO/OSM's terms require
+	   real attribution to stay visible, so this restyles it to the dark
+	   theme rather than hiding it outright. It's rendered by the library
+	   itself outside this component's own markup, so a scoped <style>
+	   block can't reach it without :global(). */
+	:global(.maplibregl-ctrl-attrib) {
+		background-color: var(--color-surface) !important;
+		color: var(--color-text-faint) !important;
+		border-radius: 0.375rem;
+	}
+	:global(.maplibregl-ctrl-attrib a) {
+		color: var(--color-text-faint) !important;
+	}
+	:global(.maplibregl-ctrl-attrib-button) {
+		background-color: transparent !important;
+		filter: invert(1) grayscale(1) opacity(0.6);
+	}
+</style>
