@@ -32,5 +32,15 @@ export default defineConfig({
 	],
 	server: {
 		port: 5173
+	},
+	// maplibre-gl's worker is loaded via svelte-maplibre-gl/vite's
+	// `?worker&url` import -- Vite 8's Rolldown-based dependency optimizer
+	// fails to resolve that special query suffix during pre-bundling
+	// ("UNLOADABLE_DEPENDENCY", found running this for real), even though
+	// the target file genuinely exists on disk. Excluding both from
+	// optimizeDeps skips that broken pre-bundling step; the browser then
+	// loads them as native ESM instead, which resolves the worker fine.
+	optimizeDeps: {
+		exclude: ['maplibre-gl', 'svelte-maplibre-gl']
 	}
 });
