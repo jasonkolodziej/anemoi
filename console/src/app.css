@@ -256,6 +256,10 @@
 	}
 	.wiki-prose :where(h1, h2, h3, h4) {
 		font-family: var(--font-display);
+		/* So a #heading anchor (direct link, or the On This Page rail)
+		   doesn't land flush against -- or hidden under -- the sticky
+		   search bar (docs/+layout.svelte) once scrolled. */
+		scroll-margin-top: 5rem;
 	}
 	.wiki-prose :where(code):not(:where(pre code)) {
 		font-family: var(--font-mono);
@@ -266,6 +270,18 @@
 	.wiki-prose pre {
 		border: 1px solid var(--color-border);
 		border-radius: var(--radius-md);
+	}
+	/* @tailwindcss/typography's `prose` doesn't wrap <table> in a scroll
+	   container itself -- without this, a table with a wide cell (a long
+	   wrapped paragraph in one column, e.g. Data-Sources.md's Registry
+	   table) has no width constraint at all and bleeds straight through
+	   the right-hand On This Page rail rather than scrolling within its
+	   own column. display:block + overflow-x:auto makes the <table>
+	   itself the scroll container, no wrapper div needed. */
+	.wiki-prose table {
+		display: block;
+		max-width: 100%;
+		overflow-x: auto;
 	}
 	.wiki-prose a {
 		text-decoration: none;

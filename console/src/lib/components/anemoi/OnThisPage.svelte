@@ -65,7 +65,7 @@
 
 {#if headings.length > 0 || related.length > 0}
 	<div data-slot="sidebar-wrapper" class="hidden w-48 shrink-0 xl:block">
-		<nav data-slot="sidebar" class="sticky top-20 space-y-6">
+		<nav data-slot="sidebar" class="sticky top-20 space-y-6 bg-bg py-1">
 			{#if headings.length > 0}
 				<div>
 					<p class="font-display mb-2 text-[11px] font-semibold tracking-wide text-text-faint uppercase">
