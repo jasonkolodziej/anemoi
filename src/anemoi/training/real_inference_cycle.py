@@ -70,6 +70,27 @@ def _build_live_x(name: str, track: Track, current: Fix, cache_dir: Path | str):
     raise InferenceCycleError(f"no real live feature builder for {name!r}")
 
 
+def _compute_env_features(track: Track, current: Fix, cache_dir: Path | str) -> np.ndarray | None:
+    """This cycle's real environment feature vector (#148's drift-detection
+    live sample) -- one extra `_current_fields` call, independent of which
+    Group 1 models go on to contribute, so it's available even on a cycle
+    where every model itself fails for an unrelated reason (a missing
+    checkpoint, say). Returns ``None`` under the same real conditions
+    `real_inference_live`'s other builders already return ``None`` for: no
+    cached/live gridded field, or a non-finite environment vector (a
+    storm-centred box entirely over land)."""
+    from ..data.features import compute_environment_features
+    from .real_inference_live import _current_fields
+
+    fields = _current_fields(track, current, cache_dir)
+    if fields is None:
+        return None
+    try:
+        return compute_environment_features(fields).values
+    except ValueError:
+        return None
+
+
 def _run_pinn(
     registry: ModelRegistry, checkpoint_store: CheckpointStore,
     track: Track, current: Fix, cache_dir: Path | str,
@@ -315,6 +336,7 @@ def build_real_deterministic_fn(
         # produce the exact same "didn't contribute" outcome, and told apart
         # only by which reason each model actually got.
         reasons: dict[str, str] = {}
+        env_features = _compute_env_features(track, current, cache_dir)
 
         for name in _GROUP1_LIVE_MODELS:
             if name == "pinn":
@@ -388,6 +410,7 @@ def build_real_deterministic_fn(
             target_time=plan.target_time, lead_hours=DEFAULT_LEADS,
             lats=lats, lons=lons, winds_kt=winds, contributors=contributors,
             per_model_tracks=dict(per_model_abs), missing_model_reasons=dict(reasons),
+            env_features=env_features,
         )
 
     return deterministic_fn

@@ -64,6 +64,14 @@ class DeterministicForecast:
     #: least one contributes. Empty for the synthetic fallback and
     #: `DemoState`.
     missing_model_reasons: dict[str, str] = field(default_factory=dict)
+    #: This cycle's real `data.features.FEATURE_NAMES`-shaped environment
+    #: vector (shear/SST/OHC/RH/vorticity/PI/IVT), computed once from the
+    #: same storm-centred `GriddedFields` the Group 1 models used -- real
+    #: drift detection's live sample (#148). `None` when no real gridded
+    #: field was available this cycle (the same conditions that leave
+    #: `per_model_tracks` empty). Never set for the synthetic fallback or
+    #: `DemoState`.
+    env_features: np.ndarray | None = None
 
     def at(self, lead: int) -> tuple[float, float, float]:
         i = self.lead_hours.index(lead)

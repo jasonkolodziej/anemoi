@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import warnings
 from datetime import UTC, datetime
+from pathlib import Path
 
+import numpy as np
 import pytest
 
 pytest.importorskip("fastapi")
@@ -433,3 +435,133 @@ def test_demo_state_is_unaffected_by_default(tmp_path, monkeypatch):
     r = demo_client.get("/v1/storms")
     assert r.status_code == 200
     assert len(r.json()) == 5  # DemoState's own synthetic seed: 5 storms
+
+
+# --- real drift detection (#148) --------------------------------------------
+
+
+def _get_real_state(client):
+    """The live RealState singleton behind `client` -- built lazily on
+    first request, so trigger one before reaching into it. Real drift
+    bookkeeping is exercised directly against the instance below, since
+    fully registering real torch models just to reach a real (non-
+    synthetic-fallback) cycle is already covered in depth by
+    test_real_inference_cycle.py; what's under test here is RealState's
+    own bookkeeping/wiring, not the model math."""
+    from anemoi.api import real_state
+
+    client.get("/v1/storms")
+    assert real_state._REAL_STATE is not None
+    return real_state._REAL_STATE
+
+
+def _make_deterministic_forecast(env_features=None, contributors=None):
+    from anemoi.inference.cycle import DeterministicForecast
+
+    return DeterministicForecast(
+        target_time=datetime(2026, 9, 1, tzinfo=UTC), lead_hours=(48,),
+        lats=np.array([20.0]), lons=np.array([-60.0]), winds_kt=np.array([50.0]),
+        contributors=contributors or {}, env_features=env_features,
+    )
+
+
+class _FakeCycleOutput:
+    """A minimal stand-in for CycleOutput -- `_record_drift_sample` only
+    ever reads `.deterministic.env_features`/`.deterministic.contributors`
+    (see its own implementation), so a full CyclePlan/ForecastProducts
+    isn't needed to exercise it honestly."""
+
+    def __init__(self, deterministic):
+        self.deterministic = deterministic
+
+
+def test_drift_report_is_honest_zero_when_no_reference_has_been_fit(client):
+    state = _get_real_state(client)
+    report = state.drift_report("lstm")
+    assert report.n_live == 0
+    assert report.features == ()
+
+
+def test_drift_report_is_honest_zero_for_a_model_that_never_contributed(client, tmp_path):
+    """Even with a real reference fit and real live samples collected,
+    a model that has never itself contributed to a real cycle this
+    process's lifetime must not borrow another model's drift assessment."""
+    from anemoi.data.features import FEATURE_NAMES
+    from anemoi.data.sources import Flavor
+    from anemoi.monitoring.drift import ReferenceDistribution
+    from anemoi.monitoring.reference_store import save_reference
+
+    state = _get_real_state(client)
+    reference = ReferenceDistribution.fit(
+        np.random.default_rng(0).normal(0.0, 1.0, size=(50, len(FEATURE_NAMES))),
+        Flavor.GDAS_FINETUNE,
+    )
+    save_reference(reference, Path(state.registry.root) / "drift_reference.json")
+
+    for _ in range(40):
+        forecast = _make_deterministic_forecast(
+            env_features=np.random.default_rng(1).normal(0.0, 1.0, len(FEATURE_NAMES)),
+            contributors={"lstm": 1.0},
+        )
+        state._record_drift_sample(_FakeCycleOutput(forecast))
+
+    assert state.drift_report("lstm").n_live == 40
+    assert state.drift_report("cnn").n_live == 0  # cnn never contributed
+
+
+def test_drift_report_detects_real_drift_once_enough_samples_are_collected(client):
+    from anemoi.data.features import FEATURE_NAMES
+    from anemoi.data.sources import Flavor
+    from anemoi.monitoring.drift import ReferenceDistribution
+    from anemoi.monitoring.reference_store import save_reference
+
+    state = _get_real_state(client)
+    reference = ReferenceDistribution.fit(
+        np.random.default_rng(0).normal(0.0, 1.0, size=(50, len(FEATURE_NAMES))),
+        Flavor.GDAS_FINETUNE,
+    )
+    save_reference(reference, Path(state.registry.root) / "drift_reference.json")
+
+    # Too few samples yet -- honest n_live, not a fabricated drift verdict.
+    for _ in range(10):
+        forecast = _make_deterministic_forecast(
+            env_features=np.zeros(len(FEATURE_NAMES)), contributors={"lstm": 1.0},
+        )
+        state._record_drift_sample(_FakeCycleOutput(forecast))
+    early_report = state.drift_report("lstm")
+    assert early_report.n_live == 10
+    assert early_report.features == ()
+
+    # Real shift: live samples now centred well away from the reference mean.
+    for _ in range(30):
+        forecast = _make_deterministic_forecast(
+            env_features=np.full(len(FEATURE_NAMES), 10.0), contributors={"lstm": 1.0},
+        )
+        state._record_drift_sample(_FakeCycleOutput(forecast))
+
+    report = state.drift_report("lstm")
+    assert report.n_live == 40
+    assert report.alert is True
+
+
+def test_live_env_features_window_is_capped(client):
+    state = _get_real_state(client)
+    state._live_env_features_max = 5  # keep the test fast
+    for i in range(8):
+        forecast = _make_deterministic_forecast(
+            env_features=np.full(11, float(i)), contributors={"lstm": 1.0},
+        )
+        state._record_drift_sample(_FakeCycleOutput(forecast))
+    assert len(state._live_env_features) == 5
+    # Oldest samples are dropped, not the newest.
+    assert state._live_env_features[-1][0] == 7.0
+
+
+def test_env_features_none_is_not_recorded_as_a_sample(client):
+    state = _get_real_state(client)
+    forecast = _make_deterministic_forecast(env_features=None, contributors={"lstm": 1.0})
+    state._record_drift_sample(_FakeCycleOutput(forecast))
+    assert state._live_env_features == []
+    # The model still counts as having contributed, even without a real
+    # gridded field this specific cycle.
+    assert "lstm" in state._models_ever_contributed

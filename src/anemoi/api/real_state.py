@@ -39,7 +39,7 @@ from ..data.availability import LatencyOracle
 from ..data.besttrack import Fix, Track, TrackQuality
 from ..inference.cycle import CycleError, CycleOutput, DeterministicForecast, run_cycle
 from ..inference.scheduler import plan_cycle
-from ..monitoring.drift import DriftReport
+from ..monitoring.drift import DriftError, DriftReport, ReferenceDistribution, detect_feature_drift
 from ..monitoring.skew import SkewReport
 from ..tracking.registry import ModelRegistry
 
@@ -183,6 +183,30 @@ class RealState:
         #: /debug/last-deterministic-error (main.py) only *exposes* it, and
         #: only when ANEMOI_API_DEBUG is set.
         self.last_deterministic_error: str | None = None
+
+        #: Real drift-detection state (#148) -- a rolling in-memory window
+        #: of this process's own real `env_features` (shared across models:
+        #: `data.features.compute_environment_features` is model-agnostic,
+        #: computed once per cycle regardless of which Group 1 models
+        #: contributed). In-memory only, not durably persisted -- resets on
+        #: every cold start, a real gap worth knowing about rather than
+        #: silently accepting: a long-lived warm container accumulates real
+        #: signal over its own lifetime, but a container that recycles
+        #: often may rarely reach `detect_feature_drift`'s own 30-sample
+        #: minimum. Capped so memory use can't grow unbounded over a very
+        #: long-lived process.
+        self._live_env_features: list[np.ndarray] = []
+        self._live_env_features_max = 500
+        #: Which models have contributed to at least one real cycle this
+        #: process's lifetime -- `drift_report(model)` for a model that
+        #: never has is an honest n_live=0, not the shared assessment.
+        self._models_ever_contributed: set[str] = set()
+        #: Lazy, loaded at most once per process (not TTL-refreshed like
+        #: the registry -- a reference is fit rarely, offline, by
+        #: `anemoi drift-reference-fit`, not something that changes
+        #: mid-process the way registrations/promotions do).
+        self._drift_reference: ReferenceDistribution | None = None
+        self._drift_reference_load_attempted = False
 
     @property
     def _checkpoint_store(self):
@@ -357,7 +381,20 @@ class RealState:
         )
         with self._lock:
             storm.cycles[output.label] = output
+            self._record_drift_sample(output)
         return output
+
+    def _record_drift_sample(self, output: CycleOutput) -> None:
+        """Real drift-detection bookkeeping (#148) -- called under
+        `self._lock` from `run_cycle` itself, not a separate public
+        method, since a sample only exists in the context of a real cycle
+        that just ran."""
+        env_features = output.deterministic.env_features
+        if env_features is not None:
+            self._live_env_features.append(env_features)
+            if len(self._live_env_features) > self._live_env_features_max:
+                self._live_env_features = self._live_env_features[-self._live_env_features_max:]
+        self._models_ever_contributed.update(output.deterministic.contributors)
 
     def get_cycle(self, storm_id: str, cycle: str) -> CycleOutput:
         storm = self.get_storm(storm_id)
@@ -381,22 +418,72 @@ class RealState:
     # `DemoState`'s versions generate synthetic reference/live distributions
     # from `np.random.default_rng` -- fabricating numbers like that under a
     # *real* deployment would be actively misleading, not just incomplete.
-    # Real drift detection needs a real reference distribution (the
-    # standardisation stats each model's training run fit) compared against
-    # real live samples collected over time -- neither exists yet. Real skew
-    # needs a real paired ERA5T-vs-operational dataset, which requires a
-    # real ERA5T ingestion path this deployment doesn't have either. Both
-    # are real, separate pieces of future work, not something to fake here.
     #
-    # So: honest zero/empty reports, not synthetic ones and not a crash --
-    # `n_live=0`/`n=0` reads unambiguously as "nothing has been compared
-    # yet," and skew's `reasons` says so explicitly (drift's `DriftReport`
-    # has no free-text field to add the same explicit note to, but its
-    # `summary()` -- "no feature drift over 0 live samples" -- is
-    # self-explanatory given zero samples).
+    # Drift is now real (#148): `_record_drift_sample` (called from
+    # `run_cycle`) accumulates this process's own real `env_features` per
+    # cycle, `_get_drift_reference` lazily loads the real Stage B
+    # reference `anemoi drift-reference-fit` fits offline from cached
+    # GDAS fields, and `drift_report` below compares them via the real
+    # `monitoring.drift.detect_feature_drift`. Still degrades honestly,
+    # not by fabricating: `n_live=0` when no reference has been fit yet,
+    # a model hasn't contributed to a real cycle yet this process, or
+    # fewer than `detect_feature_drift`'s own minimum sample count has
+    # been collected.
+    #
+    # Skew remains unimplemented -- needs a real paired ERA5T-vs-
+    # operational dataset built from re-running the deterministic stack
+    # against ERA5T inputs for a cycle old enough to audit, not just an
+    # ERA5T fetch (which `data.real_gridded.open_era5` already provides;
+    # confirmed live 2026-09-22 that ARCO-ERA5's same store carries ERA5T
+    # up to `valid_time_stop_era5t`, ~6 days behind real time). A real,
+    # separate piece of future work.
+    #
+    # So skew's report stays honest zero/empty, not synthetic and not a
+    # crash -- `n=0` reads unambiguously as "nothing has been compared
+    # yet," and its `reasons` says so explicitly.
+
+    def _get_drift_reference(self) -> ReferenceDistribution | None:
+        """Lazy, at-most-once-per-process load of the real Stage B
+        reference `anemoi drift-reference-fit` fit offline -- best-effort,
+        same degrade-not-crash contract every other real fetch in this
+        module follows. Tried again only if it hasn't been tried at all
+        yet this process; a reference that's genuinely missing (nobody's
+        fit one yet) doesn't get retried on every single request."""
+        if self._drift_reference is not None or self._drift_reference_load_attempted:
+            return self._drift_reference
+        self._drift_reference_load_attempted = True
+        from ..monitoring.reference_store import load_reference
+
+        # Real gap this closes: `self._checkpoint_store` itself raises
+        # CheckpointStoreError when no real S3_ARTIFACT_* env is configured
+        # (confirmed live -- the same reason run_cycle's own deterministic
+        # fallback message mentions it, see #100). A local-only reference
+        # (no durable mirror configured at all) is still a real, valid
+        # deployment mode -- resolving the store must not prevent even
+        # attempting the local read.
+        try:
+            store = self._checkpoint_store
+        except Exception:  # noqa: BLE001 - see above: local-only must still work
+            store = None
+        try:
+            path = Path(self.registry.root) / "drift_reference.json"
+            self._drift_reference = load_reference(path, store)
+        except Exception:  # noqa: BLE001 - a missing/broken reference must never crash a cycle
+            self._drift_reference = None
+        return self._drift_reference
 
     def drift_report(self, model: str) -> DriftReport:
-        return DriftReport(features=(), n_live=0)
+        reference = self._get_drift_reference()
+        if reference is None or model not in self._models_ever_contributed:
+            return DriftReport(features=(), n_live=0)
+        live = np.array(self._live_env_features)
+        try:
+            return detect_feature_drift(reference, live)
+        except DriftError:
+            # Fewer than detect_feature_drift's own minimum (currently 30)
+            # real samples collected so far this process -- an honest
+            # empty report with the real count, not a fabricated one.
+            return DriftReport(features=(), n_live=live.shape[0])
 
     def skew_report(self, *, lead_hours: int = 48) -> SkewReport:
         now = datetime.now(UTC)
