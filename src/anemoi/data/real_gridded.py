@@ -32,10 +32,13 @@ this project's GDAS work runs on the Linux VM).
 
 **Neither source carries SST or OHC at these levels.** ERA5's store does
 have ``sea_surface_temperature``, used here. GDAS's atmospheric ``pgrb2``
-file does not carry SST at all (it is a separate NOAA product, e.g.
-RTG_SST). Neither source has ocean heat content (that needs an ocean
-reanalysis, e.g. GODAS/ORAS5). Where a value is a placeholder rather than a
-real read, it is a named constant with a docstring saying so -- see
+file does not carry SST at all (it is a separate NOAA product -- NCEI
+OISST v2.1, verified live 2026-09-22; **not** RTG_SST, which NCEP retired
+in February 2020, an earlier version of this line named). Neither source
+has ocean heat content (that needs an ocean reanalysis, e.g. GODAS/ORAS5,
+or NOAA OSPO's real ERDDAP OHC product -- see wiki Data-Sources.md).
+Where a value is a placeholder rather than a real read, it is a named
+constant with a docstring saying so -- see
 :func:`era5_to_gridded_fields` / :func:`gdas_to_gridded_fields`.
 """
 
