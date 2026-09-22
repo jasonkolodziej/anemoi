@@ -137,8 +137,12 @@ REGISTRY: dict[str, DataSource] = {
             role=Role.OPERATIONAL,
             typical_latency=15 * _M,
             max_latency=1 * _H,
-            fmt="JSON / NetCDF",
-            retention="rolling 3yr",
+            fmt="whitespace-separated text (not JSON/NetCDF -- corrected "
+            "2026-09-22 against the real realtime2 product; see data.real_ndbc)",
+            retention="rolling 45 days in the real-time product this reads "
+            "(data.real_ndbc); NDBC's separate historical archive holds "
+            "more, not fetched here -- corrected from the registry's "
+            "earlier unverified 'rolling 3yr'",
         ),
         DataSource(
             key="dropsonde",
