@@ -178,6 +178,10 @@ class ModelVersionOut(BaseModel):
     run_id: str
     metrics: dict[str, float]
     created_at: datetime
+    tags: dict[str, str]
+    input_flavor: str
+    latent_signature: str | None
+    checkpoint_uri: str | None
 
 
 class RegistryEntry(BaseModel):

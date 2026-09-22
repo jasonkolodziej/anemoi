@@ -120,6 +120,10 @@ def model_version_out(v: ModelVersion) -> s.ModelVersionOut:
         run_id=v.run_id,
         metrics=dict(v.metrics),
         created_at=v.created_at,
+        tags=dict(v.tags),
+        input_flavor=v.input_flavor.value,
+        latent_signature=v.latent_signature,
+        checkpoint_uri=v.checkpoint_uri,
     )
 
 

@@ -58,6 +58,7 @@
 						<TableHead>Latest</TableHead>
 						<TableHead>Production</TableHead>
 						<TableHead>Metrics</TableHead>
+						<TableHead>Provenance</TableHead>
 						<TableHead>Registered</TableHead>
 					</TableRow>
 				</TableHeader>
@@ -81,6 +82,35 @@
 							<TableCell class="font-data text-xs text-text-muted">
 								{#if e.latest}
 									{Object.entries(e.latest.metrics).map(([k, v]) => `${k}=${v.toFixed(2)}`).join(', ')}
+								{/if}
+							</TableCell>
+							<TableCell class="font-data text-xs text-text-faint">
+								{#if e.latest}
+									<div class="flex flex-wrap items-center gap-1.5">
+										{#if e.latest.checkpoint_uri}
+											<span class="max-w-56 truncate" title={e.latest.checkpoint_uri}>
+												{e.latest.checkpoint_uri}
+											</span>
+										{:else}
+											<span class="text-text-faint">no checkpoint_uri</span>
+										{/if}
+										{#if e.latest.tags?.arch_params}
+											<Badge variant="outline" title={e.latest.tags.arch_params}>arch_params</Badge>
+										{/if}
+									</div>
+									{#if e.latest.tags?.git_commit || e.latest.tags?.storm_split || e.latest.tags?.gpu_type}
+										<div class="mt-1 text-text-faint">
+											{[
+												e.latest.tags.git_commit ? e.latest.tags.git_commit.slice(0, 7) : null,
+												e.latest.tags.storm_split,
+												e.latest.tags.gpu_type
+											]
+												.filter(Boolean)
+												.join(' · ')}
+										</div>
+									{/if}
+								{:else}
+									—
 								{/if}
 							</TableCell>
 							<TableCell class="font-data text-xs text-text-faint">
