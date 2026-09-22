@@ -63,6 +63,29 @@ export function formatLatLon(lat: number, lon: number): string {
 	return `${Math.abs(lat).toFixed(1)}°${ns} ${Math.abs(lon).toFixed(1)}°${ew}`;
 }
 
+/** Real, external, standard NHC Saffir-Simpson wind-speed classification
+ * (knots) -- not this app's own invention, and deliberately a distinct
+ * color axis from `$lib/branding`'s six god colors (each identifies one
+ * model) and `--color-status-*` (model/cycle health): this is storm
+ * *severity*, driven by a track point's real `wind_kt`, not either of
+ * those. Every hex here is chosen to avoid colliding with a god/status
+ * token, so a colored intensity dot is never mistakable for a specific
+ * model's track line. */
+export const SAFFIR_SIMPSON: { min: number; label: string; color: string }[] = [
+	{ min: 137, label: 'CAT 5', color: '#9f1239' },
+	{ min: 113, label: 'CAT 4', color: '#b91c1c' },
+	{ min: 96, label: 'CAT 3', color: '#dc2626' },
+	{ min: 83, label: 'CAT 2', color: '#f97316' },
+	{ min: 64, label: 'CAT 1', color: '#facc15' },
+	{ min: 34, label: 'TS', color: '#38bdf8' },
+	{ min: 0, label: 'TD', color: '#64748b' },
+];
+
+/** The Saffir-Simpson bucket a real `windKt` value falls into. */
+export function saffirSimpson(windKt: number): { min: number; label: string; color: string } {
+	return SAFFIR_SIMPSON.find((c) => windKt >= c.min) ?? SAFFIR_SIMPSON[SAFFIR_SIMPSON.length - 1];
+}
+
 export function formatMinutes(min: number): string {
 	const sign = min < 0 ? '-' : '';
 	const abs = Math.abs(Math.round(min));

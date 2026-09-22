@@ -110,8 +110,12 @@ def test_run_cycle_matches_dissemination_shape(client):
     assert set(payload) == {
         "cycle", "issued_at", "advisory_deadline", "nwp_cycle_lag_hours",
         "vitals", "ensemble_size", "rapid_intensification", "ri_probability",
-        "cone", "flags",
+        "cone", "flags", "coastline_lat", "coastline_lon",
     }
+    # No coastline was requested -- both must be null, not silently
+    # defaulted to something that would render a fake landfall marker.
+    assert payload["coastline_lat"] is None
+    assert payload["coastline_lon"] is None
     assert body["products"]["intensity_pdf"]
     assert len(body["products"]["deterministic_track"]) == 7  # the seven lead times
 

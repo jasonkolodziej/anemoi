@@ -83,6 +83,10 @@ export interface CyclePayload {
 	ri_probability: number;
 	cone: ConeSegmentOut[];
 	flags: string[];
+	/** The real coastal reference point `landfall_probability` was computed
+	 * against -- null whenever the run_cycle request didn't supply one. */
+	coastline_lat: number | null;
+	coastline_lon: number | null;
 }
 
 export interface IntensityPercentiles {

@@ -77,6 +77,12 @@ class CycleOutput:
     products: ForecastProducts
     flags: tuple[str, ...]
     completed_at: datetime
+    #: The real coastal reference point `landfall_probability` was computed
+    #: against, echoed back so a caller can render it (e.g. a map marker)
+    #: without having to remember what it sent -- `None` whenever the
+    #: caller didn't supply one, the same condition that leaves `products.
+    #: landfall_probability` `None` too.
+    coastline: tuple[float, float] | None = None
 
     @property
     def label(self) -> str:
@@ -112,6 +118,8 @@ class CycleOutput:
                 for c in self.products.cone
             ],
             "flags": list(self.flags),
+            "coastline_lat": self.coastline[0] if self.coastline else None,
+            "coastline_lon": self.coastline[1] if self.coastline else None,
         }
 
 
@@ -247,6 +255,7 @@ def run_cycle(
         products=products,
         flags=tuple(flags),
         completed_at=now or plan.spread_ready_target,
+        coastline=coastline,
     )
 
 
