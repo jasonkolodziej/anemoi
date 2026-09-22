@@ -95,15 +95,15 @@ export const GODS: WindGod[] = [
 
 export const FUSION_COLOR = '#F8FAFC';
 export const FUNCTIONAL_COLORS = {
-	Eye: '#F8FAFC',
-	Cirrus: '#94A3B8',
-	Cumulus: '#64748B',
-	Landfall: '#F43F5E',
-	Clear: '#22D3EE'
+	Eye: '#F8FAFC', // oklch(98.42% 0.0034 247.86)
+	Cirrus: '#94A3B8', // oklch(71.07% 0.0351 256.79)
+	Cumulus: '#64748B', // oklch(55.44% 0.0407 257.42)
+	Landfall: '#F43F5E', // oklch(64.50% 0.2154 16.44)
+	Clear: '#22D3EE' // oklch(79.71% 0.1339 211.53)
 } as const;
 export const STRUCTURAL_COLORS: Record<'SE' | 'SW', string> = {
-	SE: '#FB923C', // Euronotus -- structural-only; repurposed as Training status in v3
-	SW: '#A3E635' // Lips -- structural-only; repurposed as Degraded status in v3
+	SE: '#FB923C', // Euronotus -- oklch(75.76% 0.1590 55.93); structural-only, repurposed as Training in v3
+	SW: '#A3E635' // Lips -- oklch(84.93% 0.2073 128.85); structural-only, repurposed as Degraded in v3
 };
 export const STATUS_COLORS = {
 	online: FUNCTIONAL_COLORS.Clear,
