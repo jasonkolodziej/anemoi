@@ -19,15 +19,27 @@
 	 * concept mock's own "hover a god to isolate its track" note, now
 	 * backed by real per-model geometry instead of a static claim with
 	 * nothing behind it.
+	 *
+	 * `missingModelReasons` (real, not derived -- see `CycleProducts`'s
+	 * own doc comment) answers "why isn't this god weighing in" for a
+	 * *partial* cycle: previously the only way to see this was a full
+	 * cycle failure (every model skipped); the common case of a few
+	 * models contributing and a few not had its own real reasons
+	 * discarded the moment at least one model succeeded.
 	 */
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import { GODS, GOD_ORDER, colorFor } from '$lib/branding';
 
 	interface Props {
 		contributors: Record<string, number>;
+		missingModelReasons?: Record<string, string>;
 		hoveredModel?: string | null;
 	}
-	let { contributors, hoveredModel = $bindable(null) }: Props = $props();
+	let {
+		contributors,
+		missingModelReasons = {},
+		hoveredModel = $bindable(null),
+	}: Props = $props();
 
 	const rows = $derived(
 		GOD_ORDER.map((slug) => {
@@ -36,6 +48,12 @@
 		}).filter((r) => r.weight > 0)
 	);
 	const maxWeight = $derived(Math.max(...rows.map((r) => r.weight), 0.001));
+
+	const missingRows = $derived(
+		GOD_ORDER.map((slug) => GODS.find((x) => x.slug === slug)!)
+			.filter((g) => g.architecture in missingModelReasons)
+			.map((g) => ({ god: g, reason: missingModelReasons[g.architecture] }))
+	);
 </script>
 
 <Card>
@@ -76,6 +94,25 @@
 				{/if}
 			</div>
 		{/each}
+
+		{#if missingRows.length > 0}
+			<div class="mt-3 space-y-1 border-t border-border pt-3">
+				<p class="font-display text-[11px] font-semibold tracking-wide text-text-faint uppercase">
+					Not weighing in
+				</p>
+				{#each missingRows as row (row.god.slug)}
+					<div class="flex items-baseline justify-between gap-2 py-0.5 opacity-60">
+						<span class="flex items-center gap-1.5">
+							<span class="h-2 w-2 shrink-0 rounded-full border border-border-strong"></span>
+							<span class="text-xs font-medium text-text-muted">{row.god.name}</span>
+							<span class="font-data text-[10px] text-text-faint">{row.god.direction}</span>
+						</span>
+						<span class="text-[11px] text-text-faint">{row.reason}</span>
+					</div>
+				{/each}
+			</div>
+		{/if}
+
 		<p class="pt-1 text-[11px] text-text-faint">
 			Fusion weights are inversely proportional to recent validation error (§6.1). Hover a
 			row to isolate its track on the map.

@@ -117,7 +117,11 @@
 					<IntensityPDFChart pdf={cycle.products.intensity_pdf} />
 				</div>
 				<div class="space-y-6">
-					<ModelStatusPanel contributors={cycle.products.contributors} bind:hoveredModel />
+					<ModelStatusPanel
+						contributors={cycle.products.contributors}
+						missingModelReasons={cycle.products.missing_model_reasons}
+						bind:hoveredModel
+					/>
 					<Card>
 						<CardHeader><CardTitle>Cycle status</CardTitle></CardHeader>
 						<CardContent class="space-y-2 text-xs">
