@@ -20,7 +20,14 @@ export default defineConfig({
 				fallback: 'index.html',
 				precompress: false,
 				strict: true
-			})
+			}),
+			// /docs/[slug] pages prerender from wiki content edited in a
+			// separate repo, with no chance for this build to catch a mistake
+			// before it happens -- a malformed link in some future wiki edit
+			// (already happened once: a data-source link missing its URL
+			// scheme) would otherwise fail the *entire* console build, not
+			// just that one link.
+			prerender: { handleHttpError: 'warn' }
 		})
 	],
 	server: {

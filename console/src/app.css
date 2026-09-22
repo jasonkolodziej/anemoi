@@ -3,6 +3,7 @@
 @import 'shadcn-svelte/tailwind.css';
 @import '@fontsource-variable/geist';
 @import '@fontsource-variable/inter';
+@plugin '@tailwindcss/typography';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -274,5 +275,65 @@
 	}
 	.pressable:active {
 		transform: scale(0.97);
+	}
+
+	/* Wiki content (console/src/routes/docs) -- @tailwindcss/typography's
+	   `prose` gives well-typeset long-form markdown for free (headings,
+	   lists, tables, blockquotes, code) without hand-styling every element
+	   mdsvex might emit. Themed onto Anemoi's own tokens via prose's
+	   documented --tw-prose-* override mechanism rather than the stock
+	   gray palette -- same "alias the third-party tokens onto our brand"
+	   approach as the shadcn-svelte compatibility layer above. */
+	.wiki-prose {
+		@apply prose prose-sm sm:prose-base max-w-none;
+		--tw-prose-body: var(--color-text-muted);
+		--tw-prose-headings: var(--color-text);
+		--tw-prose-lead: var(--color-text-muted);
+		--tw-prose-links: var(--color-action);
+		--tw-prose-bold: var(--color-text);
+		--tw-prose-counters: var(--color-text-faint);
+		--tw-prose-bullets: var(--color-border-strong);
+		--tw-prose-hr: var(--color-border);
+		--tw-prose-quotes: var(--color-text);
+		--tw-prose-quote-borders: var(--color-border-strong);
+		--tw-prose-captions: var(--color-text-faint);
+		--tw-prose-code: var(--color-text);
+		--tw-prose-pre-code: var(--color-text-muted);
+		--tw-prose-pre-bg: var(--color-bg);
+		--tw-prose-th-borders: var(--color-border-strong);
+		--tw-prose-td-borders: var(--color-border);
+	}
+	.wiki-prose :where(h1, h2, h3, h4) {
+		font-family: var(--font-display);
+	}
+	.wiki-prose :where(code):not(:where(pre code)) {
+		font-family: var(--font-mono);
+		background: var(--color-surface-raised);
+		border-radius: var(--radius-sm);
+		padding: 0.15em 0.4em;
+	}
+	.wiki-prose pre {
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+	}
+	.wiki-prose a {
+		text-decoration: none;
+	}
+	.wiki-prose a:hover {
+		text-decoration: underline;
+	}
+	/* Rendered by $lib/wiki/mermaid.ts (client-side, on mount) -- the raw
+	   diagram source sits here as plain text until then, then Mermaid
+	   replaces it with an SVG in place. overflow-x-auto so a wide diagram
+	   scrolls its own box on mobile instead of blowing out the page. */
+	.wiki-prose .mermaid {
+		display: block;
+		overflow-x: auto;
+		margin: 1.5em 0;
+		padding: 1rem;
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
+		background: var(--color-bg);
+		text-align: center;
 	}
 }

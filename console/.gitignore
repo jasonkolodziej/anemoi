@@ -16,3 +16,10 @@ pnpm-debug.log*
 .yarn/
 
 .wrangler/
+
+# Generated at build/dev time by scripts/sync-wiki.mjs -- not source, see
+# console/README.md. src/lib/wiki-content/manifest.json is the small
+# routing manifest (needed as a build-time import); static/wiki/*.html is
+# the actual rendered content, genuinely static so it lives under static/.
+src/lib/wiki-content/
+static/wiki/
