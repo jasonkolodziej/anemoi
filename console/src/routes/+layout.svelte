@@ -13,7 +13,8 @@
 		{ href: '/sources', label: 'Sources' },
 		{ href: '/registry', label: 'Registry' },
 		{ href: '/monitoring', label: 'Monitoring' },
-		{ href: '/retraining', label: 'Retraining' }
+		{ href: '/retraining', label: 'Retraining' },
+		{ href: '/docs', label: 'Docs' }
 	];
 
 	function isActive(href: string): boolean {

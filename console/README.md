@@ -8,7 +8,7 @@ Client-rendered SPA end to end (`routes/+layout.ts` sets `ssr = false`) — ther
 
 Every saturated colour in this app identifies one Anemoi model — the six wind-god colours plus Fusion's neutral — copied from `anemoi.branding` into `src/lib/branding.ts`. Everything else (chrome, interactive states) draws from a single neutral scale plus one dedicated action-blue that appears nowhere in the god palette. Tokens live in `src/app.css`'s `@theme` block (Tailwind v4, CSS-first config).
 
-Type: Space Grotesk (display) / Inter (UI) / IBM Plex Mono (data — coordinates, cycle labels, durations only, never UI labels).
+Type: Inter Variable (display/headings) / Geist Variable (UI, self-hosted via `@fontsource-variable`) / Geist Mono (data — coordinates, cycle labels, durations only, never UI labels; still a Google Fonts `<link>`, no `@fontsource-variable/geist-mono` package exists). Glass ("bubble") is the default surface for `Card` and app chrome — see `src/app.css`'s own comments for where each token comes from and why.
 
 ## Getting started
 
@@ -62,12 +62,22 @@ console's origins -- main.py's own default only covers local dev
 API from either deployed console origin doesn't match; found the hard
 way via a real `Disallowed CORS origin` response, not assumed.
 
+## Docs (`/docs`)
+
+The [Anemoi wiki](https://github.com/jasonkolodziej/anemoi.wiki) rendered inside the console, in its own theme rather than GitHub's. `scripts/sync-wiki.mjs` runs before every `dev`/`build`/`check` (idempotent -- skips if content already exists, `--force` refetches): shallow-clones the wiki repo, renders each page to real HTML via `unified`/`remark`/`rehype` (GFM tables, wiki-style `[Text](Page-Name)` links rewritten to `/docs/<slug>`, heading ids via `rehype-slug`), and writes `static/wiki/*.html` (genuinely static content, fetched/read as files, not Svelte-component source) plus a small `src/lib/wiki-content/manifest.json` (slug -> title, the one piece `docs/[slug]/+page.server.ts`'s `entries()` needs as a build-time import for prerendering). No mdsvex, no Velite -- these are plain wiki pages with no frontmatter, so a Svelte-aware markdown compiler or a schema-validated content-collection tool buys nothing a plain `unified` pipeline doesn't already give directly.
+
+`/docs/[slug]` opts back into SSR (`export const ssr = true`) to override the app-wide `ssr = false` in the root layout -- without it, prerendering only captures the empty client shell for each slug, not the actual content (found the hard way, first build).
+
+Search (`$lib/wiki/search.ts`, `WikiSearch.svelte`) is client-side full-text via `minisearch`, indexing `static/wiki/search-index.json` (also written by the sync script -- plain title + stripped-markdown body per page). Fetched once, lazily, the first time someone actually searches -- no search service, no runtime dependency beyond this same deploy.
+
+`` ```mermaid `` fences render as real diagrams: `rehype-mermaid.mjs` (build time) unwraps the code fence into `<div class="mermaid">raw source</div>`; `$lib/wiki/mermaid.ts` (browser only, dynamically imported from `docs/[slug]/+page.svelte`'s `$effect` -- not `onMount` alone, since navigating between two `/docs/[slug]` pages reuses the component instance rather than remounting it) finds those divs and renders them via Mermaid's own client-side runtime, themed onto Anemoi's palette rather than Mermaid's stock dark theme. No build-time diagram rendering -- Mermaid needs a real DOM, and pulling in a headless browser at build time just for this isn't worth it for a handful of diagrams.
+
 ## Adding more shadcn-svelte components
 
-`components.json` is configured (`new-york` style, `$lib/components/ui` alias). The hand-written primitives here (Button, Badge, Card, Separator, Table, Tabs) cover what the current routes need; add more with the usual CLI once you have network access to the shadcn-svelte registry:
+`components.json` is configured (`nova` style, `$lib/components/ui` alias, adopted via `pnpm dlx shadcn-svelte@latest apply --preset bJysdLKoE` -- see `src/app.css`'s "shadcn-svelte compatibility layer" comment for how pulled components inherit Anemoi's actual theme instead of shadcn's generic one). Add more with:
 
 ```sh
-npx shadcn-svelte@latest add dialog popover tooltip sonner
+pnpm run shad:add dialog popover tooltip sonner
 ```
 
 ## Structure
