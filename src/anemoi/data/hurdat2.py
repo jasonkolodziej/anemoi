@@ -65,18 +65,21 @@ def _parse_latlon(lat_field: str, lon_field: str) -> tuple[float, float]:
     return lat, float(wrap_longitude(lon))
 
 
-def _parse_header(line: str) -> tuple[str, int]:
+def _parse_header(line: str) -> tuple[str, str | None, int]:
     parts = [p.strip() for p in line.strip().rstrip(",").split(",")]
     if len(parts) < _HEADER_FIELDS:
         raise Hurdat2Error(f"malformed header line: {line!r}")
     storm_id = parts[0]
     if not storm_id:
         raise Hurdat2Error(f"empty storm id in header line: {line!r}")
+    # HURDAT2's own sentinel for a storm that never got a name (common
+    # before naming conventions existed) -- None, not the literal string.
+    name = parts[1] if parts[1] and parts[1] != "UNNAMED" else None
     try:
         n_entries = int(parts[2])
     except ValueError as exc:
         raise Hurdat2Error(f"malformed entry count in header line: {line!r}") from exc
-    return storm_id, n_entries
+    return storm_id, name, n_entries
 
 
 def _parse_data_line(storm_id: str, line: str) -> Fix | None:
@@ -122,7 +125,7 @@ def parse_hurdat2(text: str) -> list[Track]:
     tracks: list[Track] = []
     i = 0
     while i < len(lines):
-        storm_id, n_entries = _parse_header(lines[i])
+        storm_id, name, n_entries = _parse_header(lines[i])
         i += 1
         raw_rows, i = lines[i : i + n_entries], i + n_entries
         if len(raw_rows) < n_entries:
@@ -133,7 +136,7 @@ def parse_hurdat2(text: str) -> list[Track]:
 
         fixes = [f for row in raw_rows if (f := _parse_data_line(storm_id, row)) is not None]
         if fixes:
-            tracks.append(Track(storm_id=storm_id, fixes=tuple(fixes)))
+            tracks.append(Track(storm_id=storm_id, fixes=tuple(fixes), name=name))
     return tracks
 
 

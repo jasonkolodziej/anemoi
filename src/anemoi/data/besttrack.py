@@ -71,6 +71,10 @@ class Track:
 
     storm_id: str
     fixes: tuple[Fix, ...]
+    #: The storm's public name (e.g. "Fay"), when the source carries one --
+    #: HURDAT2's own "UNNAMED" sentinel and any storm not yet named both
+    #: become None rather than a fabricated placeholder.
+    name: str | None = None
 
     def __post_init__(self) -> None:
         if not self.fixes:

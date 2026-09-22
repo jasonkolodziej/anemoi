@@ -164,6 +164,10 @@ class FixOut(BaseModel):
 
 class StormSummary(BaseModel):
     storm_id: str
+    #: The storm's public name (e.g. "Fay"), when the source carries one --
+    #: None for an unnamed archive storm or a fully synthetic demo storm,
+    #: never a fabricated placeholder.
+    name: str | None = None
     season: int
     active: bool
     latest_fix: FixOut

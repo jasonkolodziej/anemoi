@@ -17,6 +17,7 @@ from anemoi.data import live_atcf
 from anemoi.data.live_atcf import (
     LiveAtcfError,
     fetch_current_storm_ids,
+    fetch_current_storms,
     fetch_live_track,
     fetch_live_tracks,
 )
@@ -39,6 +40,11 @@ def test_fetch_current_storm_ids_parses_and_uppercases(monkeypatch):
     assert fetch_current_storm_ids() == ["AL992026", "AL982026"]
 
 
+def test_fetch_current_storms_pairs_ids_with_real_names(monkeypatch):
+    monkeypatch.setattr(live_atcf, "_get", lambda url: CURRENT_STORMS_FIXTURE)
+    assert fetch_current_storms() == [("AL992026", "TEST"), ("AL982026", "OTHER")]
+
+
 def test_fetch_current_storm_ids_raises_on_malformed_json(monkeypatch):
     monkeypatch.setattr(live_atcf, "_get", lambda url: "not json")
     with pytest.raises(LiveAtcfError, match="not valid JSON"):
@@ -52,6 +58,15 @@ def test_fetch_live_track_sorts_dedupes_and_drops_off_synoptic(monkeypatch):
     assert len(track.fixes) == 2  # the off-synoptic 1500Z row is dropped
     assert [f.valid_time.hour for f in track.fixes] == [12, 6]  # in ascending order
     assert track.quality.value == "working"
+    assert track.name is None  # TC-Vitals itself carries no name
+
+
+def test_fetch_live_track_carries_the_name_passed_in(monkeypatch):
+    # TC-Vitals bulletins have no name field -- fetch_live_tracks passes one
+    # through from CurrentStorms.json instead (see the test below).
+    monkeypatch.setattr(live_atcf, "_get", lambda url: TCVITALS_ARCH_ONE)
+    track = fetch_live_track("AL992026", name="Fay")
+    assert track.name == "Fay"
 
 
 def test_fetch_live_track_raises_when_nothing_parses(monkeypatch):
@@ -70,7 +85,7 @@ def test_fetch_live_tracks_skips_a_storm_whose_own_fetch_fails(monkeypatch):
     every other currently-active storm from the result."""
     monkeypatch.setattr(live_atcf, "_get", lambda url: CURRENT_STORMS_FIXTURE)
 
-    def fake_fetch_live_track(storm_id):
+    def fake_fetch_live_track(storm_id, name=None):
         if storm_id == "AL982026":
             raise LiveAtcfError("simulated 404")
         return live_atcf.Track(
@@ -80,11 +95,13 @@ def test_fetch_live_tracks_skips_a_storm_whose_own_fetch_fails(monkeypatch):
                     "NHC 99L TEST      20260921 0600 210N 0700W 270 046 0995 1012 0300 26 050\n"
                 )[0],
             ),
+            name=name,
         )
 
     monkeypatch.setattr(live_atcf, "fetch_live_track", fake_fetch_live_track)
     tracks = fetch_live_tracks()
     assert [t.storm_id for t in tracks] == ["AL992026"]
+    assert tracks[0].name == "TEST"  # threaded through from CurrentStorms.json
 
 
 def test_fetch_live_tracks_returns_empty_when_index_unreachable(monkeypatch):
