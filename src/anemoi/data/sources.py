@@ -152,13 +152,20 @@ REGISTRY: dict[str, DataSource] = {
         ),
         DataSource(
             key="microwave",
-            provider="RSS / CIMSS",
+            provider="RSS (SSMIS, F16/F17/F18)",
             role=Role.OPERATIONAL,
             typical_latency=1 * _H,
             max_latency=4 * _H,
-            fmt="HDF5",
+            fmt="gzip'd raw uint8 bytemap (not HDF5 -- corrected 2026-09-22 "
+            "against the real, fetched format; see data.real_microwave)",
             retention="rolling 2yr + permanent storm crops",
-            notes="Orbit-dependent; opportunistic.",
+            notes=(
+                "Orbit-dependent; opportunistic. typical_latency/max_latency "
+                "above are unverified against the real daily-file upload "
+                "cadence (confirmed same-day but not yet precisely timed) -- "
+                "left as-is rather than guessed at; a real latency "
+                "verification pass is separate future work."
+            ),
         ),
         DataSource(
             key="sst_ohc",
