@@ -1,11 +1,29 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import '../app.css';
 	import { page } from '$app/state';
 	import HurricaneIcon from '$lib/components/anemoi/HurricaneIcon.svelte';
 	import MobileNav from '$lib/components/anemoi/MobileNav.svelte';
+	import { health } from '$lib/api/endpoints';
 	import { cn } from '$lib/utils';
 
 	let { children } = $props();
+
+	// The footer used to hardcode "Reference implementation" with no real
+	// version at all -- found for real: a package version bump (2.1.0 ->
+	// 2.2.0) had nothing in the UI to reflect it, so nobody could tell
+	// which build was actually deployed just by looking. "Scope v2.1" is a
+	// separate, real fact from the package version -- it names the
+	// external spec this implementation targets, which this session's own
+	// amendment didn't change (recorded as Decision-Log deviations *within*
+	// v2.1, not a new scope version) -- so it stays hardcoded on purpose,
+	// not stale. The version number is the part that must come from
+	// /v1/health, not a string literal, or this goes stale again the next
+	// time pyproject.toml's version changes.
+	let anemoiVersion = $state<string | null>(null);
+	onMount(() => {
+		health().then((h) => (anemoiVersion = h.anemoi_version)).catch(() => {});
+	});
 
 	const nav = [
 		{ href: '/', label: 'Storms' },
@@ -61,7 +79,7 @@
 			{/each}
 		</nav>
 		<div class="border-t border-border p-3 text-[10px] text-text-faint">
-			Scope v2.1 · Reference implementation
+			Scope v2.1 · Reference implementation{anemoiVersion ? ` · v${anemoiVersion}` : ''}
 		</div>
 	</aside>
 
@@ -73,7 +91,7 @@
 			<HurricaneIcon size={22} />
 			<p class="font-display text-sm font-semibold leading-none text-text">Anemoi</p>
 		</a>
-		<MobileNav {nav} />
+		<MobileNav {nav} {anemoiVersion} />
 	</header>
 
 	<main class="min-w-0 flex-1 md:overflow-y-auto">

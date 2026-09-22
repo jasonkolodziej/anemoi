@@ -19,8 +19,12 @@
 	}
 	interface Props {
 		nav: NavItem[];
+		/** Real /v1/health.anemoi_version, fetched once by +layout.svelte --
+		 * null until that resolves. Not fetched here too; one shared value
+		 * for both the desktop rail and this drawer. */
+		anemoiVersion?: string | null;
 	}
-	let { nav }: Props = $props();
+	let { nav, anemoiVersion = null }: Props = $props();
 	let open = $state(false);
 
 	function isActive(href: string): boolean {
@@ -81,7 +85,7 @@
 				{/each}
 			</nav>
 			<div class="border-t border-border p-3 text-[10px] text-text-faint">
-				Scope v2.1 · Reference implementation
+				Scope v2.1 · Reference implementation{anemoiVersion ? ` · v${anemoiVersion}` : ''}
 			</div>
 		</Dialog.Content>
 	</Dialog.Portal>
