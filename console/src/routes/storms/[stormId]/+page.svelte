@@ -70,6 +70,14 @@
 			<div>
 				<div class="flex items-center gap-2">
 					<h1 class="font-display text-2xl font-semibold text-text">{storm.storm_id}</h1>
+					{#if !storm.trained_basin}
+						<span
+							class="font-data rounded-full border border-status-degraded/40 px-2 py-0.5 text-[10px] tracking-wide text-status-degraded uppercase"
+							title="No trained model has seen a {storm.basin}-basin storm -- every model here was trained on Atlantic storms only, so this forecast is a genuine out-of-distribution extrapolation"
+						>
+							{storm.basin} basin -- untrained
+						</span>
+					{/if}
 					{#if cycle}
 						{@const nContributing = Object.keys(cycle.products.contributors).length}
 						{@const nTotal = nContributing + Object.keys(cycle.products.missing_model_reasons).length}

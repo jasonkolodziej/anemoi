@@ -16,11 +16,13 @@ from datetime import UTC, datetime
 import pytest
 
 from anemoi.data.atcf import (
+    TRAINED_BASINS,
     AtcfError,
     TcVitalsError,
     pair_by_valid_time,
     parse_bdeck,
     parse_tcvitals,
+    storm_basin,
 )
 from anemoi.data.besttrack import Fix, Track, TrackQuality, recalibrate_from_pairs
 from anemoi.data.hurdat2 import parse_hurdat2
@@ -142,3 +144,18 @@ def test_recalibration_from_real_parsed_pairs_measures_nonzero_error():
     assert 0.0 < noise.position_rms_nm < 30.0
     assert 0.0 < noise.intensity_rms_kt < 20.0
     assert 0.0 < noise.pressure_rms_mb < 20.0
+
+
+def test_storm_basin_is_a_direct_slice_of_the_storm_id():
+    assert storm_basin("AL172023") == "AL"
+    assert storm_basin("EP172026") == "EP"
+    assert storm_basin("CP012025") == "CP"
+
+
+def test_only_atlantic_is_a_trained_basin():
+    """Every trained model is Atlantic-only (docs/train_infrastructure.md
+    curls only hurdat2-atl-...). EP/CP/WP/SH storms are real but out of
+    distribution for every currently trained model."""
+    assert TRAINED_BASINS == frozenset({"AL"})
+    assert storm_basin("AL172023") in TRAINED_BASINS
+    assert storm_basin("EP172026") not in TRAINED_BASINS

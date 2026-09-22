@@ -164,6 +164,13 @@ class StormSummary(BaseModel):
     latest_fix: FixOut
     peak_wind_kt: float
     last_cycle: str | None = None
+    #: Two-letter ATCF basin code, e.g. "AL"/"EP" -- a direct slice of
+    #: storm_id (see `data.atcf.storm_basin`), not a new data source.
+    basin: str
+    #: False for any basin outside `data.atcf.TRAINED_BASINS` -- real storm
+    #: data (the live feed and HURDAT2 both cover more than the Atlantic),
+    #: but genuinely out-of-distribution for every currently trained model.
+    trained_basin: bool
 
 
 class StormDetail(StormSummary):

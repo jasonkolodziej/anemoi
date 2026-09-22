@@ -142,6 +142,11 @@ export interface StormSummary {
 	latest_fix: FixOut;
 	peak_wind_kt: number;
 	last_cycle: string | null;
+	/** Two-letter ATCF basin code, e.g. "AL"/"EP" -- a direct slice of storm_id. */
+	basin: string;
+	/** False for any basin outside the Atlantic -- real storm data, but
+	 * out-of-distribution for every currently trained model (see wiki). */
+	trained_basin: boolean;
 }
 
 export interface StormDetail extends StormSummary {

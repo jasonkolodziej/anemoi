@@ -83,6 +83,10 @@ def test_storms_list_and_detail(client):
     storms = r.json()
     assert len(storms) > 0
     storm_id = storms[0]["storm_id"]
+    # Every demo storm is synthesized as "AL{index}{season}" -- basin is a
+    # direct slice of storm_id, so this should always be Atlantic/trained.
+    assert storms[0]["basin"] == "AL"
+    assert storms[0]["trained_basin"] is True
 
     r = client.get(f"/v1/storms/{storm_id}")
     assert r.status_code == 200
