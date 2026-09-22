@@ -1,0 +1,25 @@
+{
+	// Cloudflare deployment for the console SPA (issue #96). Pure static
+	// assets, no Worker script needed at all -- `main` is deliberately
+	// omitted. `console/vite.config.ts` already builds via
+	// `@sveltejs/adapter-static` with `fallback: 'index.html'` (the dynamic
+	// `/storms/[stormId]` route can't be prerendered per storm, so it needs
+	// a client-side-routed fallback) -- `not_found_handling:
+	// "single-page-application"` below is that same fallback's Cloudflare-
+	// side counterpart: without it, navigating directly to
+	// `/storms/AL172023` (not via client-side nav) would 404 at the edge
+	// before SvelteKit's own router ever got a chance to run.
+	//
+	// New projects get Workers-with-static-assets over the older, separate
+	// Cloudflare Pages product per Cloudflare's own current guidance --
+	// full feature parity as of 2026, and this keeps the same wrangler-based
+	// tooling already used for docker/api's deployment (#91).
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "anemoi-console",
+	"compatibility_date": "2026-09-21",
+
+	"assets": {
+		"directory": "./build",
+		"not_found_handling": "single-page-application",
+	},
+}
