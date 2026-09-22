@@ -2,11 +2,12 @@
 
 Real storms from a real HURDAT2 archive (`data.hurdat2.parse_hurdat2_file`)
 -- the most recent ``n_recent`` storms by season, since HURDAT2 is a
-historical archive, not a live feed. A genuinely live "current storm
-right now" source (real-time ATCF/TC-Vitals ingestion) is #85's own
-still-open remainder, not solved here -- this closes "can the API run a
-real cycle against real trained models for a real storm," using the
-most recent real storms this system's real data source actually has.
+historical archive, not a live feed -- merged with real, currently-active
+storms from `data.live_atcf.fetch_live_tracks` (NHC's real `CurrentStorms
+.json` + TC-Vitals bulletins). The live merge closes the gap this
+module's docstring used to describe as still-open: "can the API run a
+real cycle against real trained models for a real storm," now including a
+storm actually happening right now, not just the archive.
 
 Real cycles run `training.real_inference_cycle.build_real_deterministic_fn`
 /`training.real_inference_ensemble.build_real_ensemble_fn` (#78/#85)
@@ -43,9 +44,17 @@ from ..monitoring.skew import SkewReport
 from ..tracking.registry import ModelRegistry
 
 #: How recently a storm's latest real fix must be to count as "active" --
-#: a real, if arbitrary, threshold; a genuinely live feed would make this
-#: exact rather than a heuristic over historical archive data.
+#: still used for archive storms (HURDAT2 has no live signal to be exact
+#: about); a live storm's own `active` is exact by construction (it's on
+#: NHC's real CurrentStorms.json right now).
 _ACTIVE_WINDOW = timedelta(days=14)
+
+#: How long a fetched live-storm snapshot stays valid before the next
+#: `list_storms`/`get_storm` call re-fetches -- real TC-Vitals bulletins
+#: land roughly every synoptic cycle (see `data.sources.REGISTRY`'s
+#: `besttrack_working` 45/90min typical/max latency), so re-fetching more
+#: often than that just re-requests the same bulletin.
+_LIVE_STORMS_TTL = timedelta(minutes=30)
 
 #: Real forecast lead times every real deterministic_fn/ensemble_fn this
 #: module builds shares -- matches models.base.DEFAULT_LEADS.
@@ -55,7 +64,12 @@ _LEAD_HOURS = (12, 24, 36, 48, 72, 96, 120)
 @dataclass
 class RealStormState:
     storm_id: str
-    track: Track  # real FINAL-quality archive history; display + model input base
+    #: FINAL-quality archive history for an archive storm, or a single
+    #: WORKING-quality live track for a currently-active one (never mixed
+    #: -- Track.__post_init__ forbids it; a storm gets one or the other,
+    #: never both, since HURDAT2's archive and live storm-ids don't
+    #: overlap in practice today).
+    track: Track
     cycles: dict[str, CycleOutput] = field(default_factory=dict)
 
     @property
@@ -114,6 +128,16 @@ class RealState:
         self.storms: dict[str, RealStormState] = {
             t.storm_id: RealStormState(t.storm_id, t) for t in recent
         }
+        #: Live storms, fetched lazily/re-fetched on TTL expiry rather than
+        #: once here at construction -- this process/container instance
+        #: can stay warm for hours (Cloudflare Containers run this as a
+        #: long-lived singleton; a redeploy doesn't restart it), so a
+        #: fetch-once-at-init snapshot would go stale for the rest of that
+        #: lifetime. Kept separate from `self.storms` (not merged into it)
+        #: so a live fetch failure can never evict an already-known live
+        #: storm or disturb the archive storms.
+        self._live_storms: dict[str, RealStormState] = {}
+        self._live_storms_fetched_at: datetime | None = None
 
         registry_root = registry_root or os.environ.get(
             "REGISTRY_ROOT", str(Path.home() / ".anemoi" / "registry"),
@@ -151,10 +175,38 @@ class RealState:
 
     # ---- storms ------------------------------------------------------
 
+    def _refresh_live_storms(self) -> None:
+        """Re-fetch NHC's real current-storm feed if the last fetch is
+        stale (or there hasn't been one yet). Best-effort: a failed fetch
+        just keeps whatever live storms were already known, exactly the
+        "no real X available must degrade, never crash" contract every
+        other real-data fetch in this codebase follows -- see
+        `data.live_atcf.fetch_live_tracks`, which itself never raises."""
+        now = datetime.now(UTC)
+        if (
+            self._live_storms_fetched_at is not None
+            and now - self._live_storms_fetched_at < _LIVE_STORMS_TTL
+        ):
+            return
+        from ..data.live_atcf import fetch_live_tracks
+
+        tracks = fetch_live_tracks()
+        if tracks:
+            self._live_storms = {t.storm_id: RealStormState(t.storm_id, t) for t in tracks}
+        self._live_storms_fetched_at = now
+
     def list_storms(self) -> list[RealStormState]:
-        return list(self.storms.values())
+        self._refresh_live_storms()
+        # Live storms first -- they're what "active storms" genuinely
+        # means; archive storms fall outside `_ACTIVE_WINDOW` in every
+        # real case today anyway (HURDAT2 tops out at the 2023 season).
+        merged = {**self.storms, **self._live_storms}
+        return list(merged.values())
 
     def get_storm(self, storm_id: str) -> RealStormState:
+        self._refresh_live_storms()
+        if storm_id in self._live_storms:
+            return self._live_storms[storm_id]
         try:
             return self.storms[storm_id]
         except KeyError as exc:

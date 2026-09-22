@@ -32,7 +32,7 @@
 	<header class="mb-8">
 		<h1 class="font-display text-2xl font-semibold text-text">Active storms</h1>
 		{#if stateMode === 'real'}
-			<p class="mt-1 text-sm text-text-muted">Real HURDAT2 storms — anemoi.api.real_state.</p>
+			<p class="mt-1 text-sm text-text-muted">Real HURDAT2 archive + live NHC feed — anemoi.api.real_state.</p>
 		{:else}
 			<p class="mt-1 text-sm text-text-muted">Synthetic demo season — anemoi.data.synthetic.</p>
 		{/if}

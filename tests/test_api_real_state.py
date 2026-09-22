@@ -11,6 +11,7 @@ test_real_inference_ensemble.py already cover in depth.
 from __future__ import annotations
 
 import warnings
+from datetime import UTC, datetime
 
 import pytest
 
@@ -52,6 +53,15 @@ def client(tmp_path, hurdat2_file, monkeypatch):
     monkeypatch.setenv("HURDAT2_PATH", str(hurdat2_file))
     monkeypatch.setenv("REGISTRY_ROOT", str(tmp_path / "registry"))
     monkeypatch.setenv("GDAS_CACHE_DIR", str(tmp_path / "gdas_cache"))
+    # No real network call from these tests by default -- RealState.
+    # list_storms/get_storm re-fetch NHC's real live-storm feed on every
+    # call past its TTL (see real_state._LIVE_STORMS_TTL), which would
+    # otherwise make every test in this file flaky/network-dependent on
+    # however many storms NHC happens to be tracking right now. Real
+    # coverage of the live fetch itself lives in test_live_atcf.py
+    # (network-marked) and test_real_state_merges_a_live_storm below
+    # (a fake, not the real network).
+    monkeypatch.setattr("anemoi.data.live_atcf.fetch_live_tracks", lambda: [])
 
     from anemoi.api import real_state
 
@@ -168,6 +178,48 @@ def test_debug_last_deterministic_error_route_reports_the_real_reason(
     r = debug_client.get("/debug/last-deterministic-error")
     assert r.status_code == 200
     assert "CheckpointStoreError" in r.json()["error"]
+
+
+def test_real_state_merges_a_live_storm(client, monkeypatch):
+    """A currently-active storm from data.live_atcf.fetch_live_tracks
+    (faked here, not the real network -- see test_live_atcf.py for that)
+    must show up in /v1/storms and /v1/storms/{id} alongside the archive
+    storm, with a `working` quality latest_fix (not `final`), and be
+    reachable by run_cycle the same way an archive storm is."""
+    from anemoi.data.besttrack import Fix, Track, TrackQuality
+
+    live_track = Track(
+        storm_id="AL992026",
+        fixes=(
+            Fix(
+                storm_id="AL992026",
+                valid_time=datetime(2026, 9, 22, 0, 0, tzinfo=UTC),
+                lat=25.0,
+                lon=-70.0,
+                max_wind_kt=50.0,
+                min_pressure_mb=995.0,
+                quality=TrackQuality.WORKING,
+            ),
+        ),
+    )
+    monkeypatch.setattr("anemoi.data.live_atcf.fetch_live_tracks", lambda: [live_track])
+
+    r = client.get("/v1/storms")
+    assert r.status_code == 200
+    storm_ids = {s["storm_id"] for s in r.json()}
+    assert storm_ids == {"AL012026", "AL992026"}  # archive storm + live storm
+    live = next(s for s in r.json() if s["storm_id"] == "AL992026")
+    assert live["latest_fix"]["quality"] == "working"
+    assert live["active"] is True
+
+    r = client.get("/v1/storms/AL992026")
+    assert r.status_code == 200
+    assert r.json()["storm_id"] == "AL992026"
+
+    r = client.post(
+        "/v1/storms/AL992026/cycles", json={"cycle": "20260922_00Z", "members": 4},
+    )
+    assert r.status_code == 201
 
 
 def test_demo_state_is_unaffected_by_default(tmp_path, monkeypatch):
