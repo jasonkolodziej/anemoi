@@ -52,6 +52,60 @@ const processor = unified()
 	.use(rehypeMermaid)
 	.use(rehypeStringify);
 
+function parseSections(homeRaw, manifest) {
+	// Home.md's own "## Page index" is the wiki's authoritative category
+	// grouping -- **Category**\n[Title](Page-Name) · [Title](Page-Name) ...
+	// -- parsed rather than duplicated by hand, so it can't drift out of
+	// sync with a page the wiki author adds or renames later. Titles come
+	// from the manifest (each page's own H1), not the link text here --
+	// keeps one canonical title per page instead of two that could diverge.
+	const titleBySlug = new Map(manifest.map((p) => [p.slug, p.title]));
+	// Plain indexOf/slice rather than one regex spanning both a `^`-anchored
+	// start and an end terminator -- mixing those with the /m flag makes `$`
+	// match before *every* line ending, not just true end of string, which
+	// silently truncated the capture to nothing on the first try here.
+	const sections = [];
+	const seen = new Set();
+	const startMarker = '## Page index';
+	const startIdx = homeRaw.indexOf(startMarker);
+	if (startIdx !== -1) {
+		const bodyStart = startIdx + startMarker.length;
+		const nextHeading = homeRaw.indexOf('\n## ', bodyStart);
+		const nextRule = homeRaw.indexOf('\n---', bodyStart);
+		const candidates = [nextHeading, nextRule].filter((i) => i !== -1);
+		const bodyEnd = candidates.length > 0 ? Math.min(...candidates) : homeRaw.length;
+		const body = homeRaw.slice(bodyStart, bodyEnd);
+
+		const lines = body.split('\n').filter((l) => l.trim());
+		let current = null;
+		for (const line of lines) {
+			const heading = line.match(/^\*\*(.+)\*\*$/);
+			if (heading) {
+				current = { name: heading[1].trim(), slugs: [] };
+				sections.push(current);
+				continue;
+			}
+			if (!current) continue;
+			for (const [, , page] of line.matchAll(/\[([^\]]+)\]\(([^)]+)\)/g)) {
+				const slug = page.toLowerCase();
+				if (!titleBySlug.has(slug)) continue; // dead link in the index itself
+				current.slugs.push(slug);
+				seen.add(slug);
+			}
+		}
+	}
+	const uncategorized = manifest
+		.map((p) => p.slug)
+		.filter((slug) => !seen.has(slug) && slug !== 'home')
+		.sort();
+	if (uncategorized.length > 0) sections.push({ name: 'More', slugs: uncategorized });
+
+	return sections.map((s) => ({
+		name: s.name,
+		pages: s.slugs.map((slug) => ({ slug, title: titleBySlug.get(slug) }))
+	}));
+}
+
 function stripToText(markdown) {
 	// Search-index body text -- crude but sufficient for substring/fuzzy
 	// matching, and avoids a second full HTML round-trip just to strip tags.
@@ -84,11 +138,13 @@ try {
 
 	const manifest = [];
 	const searchIndex = [];
+	let homeRaw = '';
 	for (const file of pages) {
 		const raw = readFileSync(join(tmp, file), 'utf8');
 		const slug = file.replace(/\.md$/, '').toLowerCase();
 		const h1 = raw.match(/^#\s+(.+)$/m);
 		const title = h1 ? h1[1].trim() : file.replace(/\.md$/, '').replace(/-/g, ' ');
+		if (file === 'Home.md') homeRaw = raw;
 
 		const html = String(processor.processSync(raw));
 		writeFileSync(join(STATIC_DIR, `${slug}.html`), html);
@@ -99,6 +155,9 @@ try {
 	manifest.sort((a, b) => a.title.localeCompare(b.title));
 	writeFileSync(join(MANIFEST_DIR, 'manifest.json'), JSON.stringify(manifest, null, '\t') + '\n');
 	writeFileSync(join(STATIC_DIR, 'search-index.json'), JSON.stringify(searchIndex));
+
+	const sections = parseSections(homeRaw, manifest);
+	writeFileSync(join(MANIFEST_DIR, 'sections.json'), JSON.stringify(sections, null, '\t') + '\n');
 
 	console.log(`[sync-wiki] wrote ${pages.length} pages to ${STATIC_DIR}`);
 } finally {

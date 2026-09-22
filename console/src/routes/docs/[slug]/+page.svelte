@@ -2,6 +2,7 @@
 	import type { PageData } from './$types';
 	import { Card, CardContent } from '$lib/components/ui/card';
 	import { renderMermaidDiagrams } from '$lib/wiki/mermaid';
+	import OnThisPage from '$lib/components/anemoi/OnThisPage.svelte';
 
 	let { data }: { data: PageData } = $props();
 	let contentEl = $state<HTMLDivElement>();
@@ -21,9 +22,8 @@
 	<title>{data.title} · Anemoi Docs</title>
 </svelte:head>
 
-<div class="mx-auto max-w-3xl px-6 py-8">
-	<a href="/docs" class="text-xs text-text-muted hover:text-text">&larr; Docs</a>
-	<Card class="mt-4">
+<div class="flex gap-8">
+	<Card class="min-w-0 flex-1">
 		<CardContent class="pt-6">
 			<div bind:this={contentEl} class="wiki-prose">
 				<!-- eslint-disable-next-line svelte/no-at-html-tags -->
@@ -31,4 +31,5 @@
 			</div>
 		</CardContent>
 	</Card>
+	<OnThisPage container={contentEl} currentSlug={data.slug} currentTitle={data.title} />
 </div>

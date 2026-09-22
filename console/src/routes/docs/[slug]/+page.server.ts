@@ -10,15 +10,8 @@ import type { EntryGenerator, PageServerLoad } from './$types';
 // the way storms/[stormId] has to (that one genuinely can't know its params
 // ahead of time; this one can). A server load is fine under adapter-static
 // here specifically because the route is prerendered -- it runs once at
-// build time, not as a live server.
-//
-// The root layout sets ssr=false app-wide (the rest of this console is a
-// pure client-rendered SPA against a runtime API, with nothing to
-// server-render) -- opt back in here, or prerendering only captures the
-// empty client shell for each slug instead of the actual wiki content.
-export const ssr = true;
-export const prerender = true;
-
+// build time, not as a live server. ssr/prerender themselves are set at
+// docs/+layout.ts, covering this whole subtree.
 export const entries: EntryGenerator = () => manifest.map((page) => ({ slug: page.slug }));
 
 export const load: PageServerLoad = ({ params }) => {

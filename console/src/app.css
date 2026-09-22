@@ -114,26 +114,6 @@
 	--radius-3xl: calc(var(--radius) * 2.2);
 	--radius-4xl: calc(var(--radius) * 2.6);
 
-	/* Glass ("bubble") surface tokens -- ported from getarcaneapp/arcane's
-	   frontend/src/routes/layout.css at the user's request. No
-	   backdrop-filter in the source class either: the glass read comes
-	   entirely from a tinted radial gradient over a translucent
-	   background-color plus a soft layered shadow, not an actual blur --
-	   apt here too, since there's nothing behind these panels but a flat
-	   page background for a blur to act on. glass-tint reuses --color-action
-	   (this app's one interactive hue outside the god palette), the same
-	   role --primary plays in the source. */
-	--glass-base: var(--color-surface);
-	--glass-tint: var(--color-action);
-	--glass-shadow-color: oklch(0% 0 0 / 0.32);
-	--shadow-glass-sm: 0 1px 2px color-mix(in oklab, var(--glass-shadow-color) 40%, transparent);
-	--shadow-glass-md:
-		0 2px 8px -4px color-mix(in oklab, var(--glass-shadow-color) 55%, transparent),
-		0 4px 16px -8px color-mix(in oklab, var(--glass-shadow-color) 35%, transparent);
-	--shadow-glass-lg:
-		0 10px 24px -14px color-mix(in oklab, var(--glass-shadow-color) 65%, transparent),
-		0 24px 48px -24px color-mix(in oklab, var(--glass-shadow-color) 45%, transparent);
-
 	/* shadcn-svelte compatibility layer -- see the file-header comment.
 	   --color-border/--color-ring already exist above (border, action);
 	   the CLI's own merge already recognised that and didn't re-add them. */
@@ -225,36 +205,7 @@
 	}
 }
 
-/* Glass utilities -- ported alongside the tokens above. `.bubble` doesn't
-   bake in a border-radius the way the source's does: this app applies
-   `rounded-lg` separately (Card) or omits it (the full-bleed sidebar/mobile
-   header/drawer, where a rounded rail would look broken against a flush
-   viewport edge) -- one class, both shapes, no specificity fights with
-   Tailwind's own radius utilities. */
 @layer utilities {
-	.bubble {
-		background:
-			radial-gradient(120% 100% at 10% 0%, color-mix(in oklab, var(--glass-tint) 9%, transparent) 0%, transparent 60%),
-			radial-gradient(120% 100% at 100% 0%, color-mix(in oklab, var(--glass-base) 14%, transparent) 0%, transparent 60%);
-		background-color: color-mix(in oklab, var(--glass-base) 92%, transparent);
-		box-shadow: var(--shadow-glass-md);
-	}
-
-	.bubble-shadow {
-		box-shadow: var(--shadow-glass-sm);
-	}
-
-	.bubble-shadow-lg {
-		box-shadow: var(--shadow-glass-lg);
-	}
-
-	.bubble-outline {
-		background:
-			linear-gradient(var(--glass-base), var(--glass-base)) padding-box,
-			linear-gradient(135deg, color-mix(in oklab, var(--glass-tint) 34%, transparent), transparent 60%) border-box;
-		border: 1px solid transparent;
-	}
-
 	/* Reduced-motion is already handled globally (@layer base above) --
 	   transition-duration: 0.001ms !important covers these too. */
 	.hover-lift {
@@ -264,7 +215,7 @@
 	}
 	.hover-lift:hover {
 		transform: translateY(-1px);
-		box-shadow: 0 8px 20px -12px color-mix(in oklab, var(--glass-shadow-color) 72%, transparent);
+		box-shadow: 0 8px 20px -12px color-mix(in oklab, oklch(0% 0 0) 72%, transparent);
 	}
 	.hover-lift:active {
 		transform: translateY(0) scale(0.98);

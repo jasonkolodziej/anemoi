@@ -45,7 +45,7 @@
 		class="font-data w-full rounded-md border border-border-strong bg-bg px-3 py-2 text-sm text-text placeholder:text-text-faint focus-visible:outline-none"
 	/>
 	{#if open && query.trim()}
-		<div class="bubble absolute z-20 mt-1.5 w-full rounded-lg border border-border/60 py-1.5 shadow-glass-lg">
+		<div class="absolute z-20 mt-1.5 w-full rounded-lg border border-border bg-surface py-1.5 shadow-lg">
 			{#if loading}
 				<p class="px-3 py-2 text-xs text-text-faint">Searching…</p>
 			{:else if results.length === 0}
