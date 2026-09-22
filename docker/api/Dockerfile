@@ -60,6 +60,13 @@ RUN pip install --no-cache-dir ".[api,tracking,storage,gridded]"
 
 ENV ANEMOI_API_REAL_STATE=1
 ENV HURDAT2_PATH=/app/data/hurdat2.txt
+# The deployed console (#96, console/wrangler.jsonc) needs to be allow-
+# listed explicitly -- main.py's own default only covers local dev
+# (localhost:5173/127.0.0.1:5173), which a browser hitting the real
+# deployed API from the real deployed console's origin doesn't match.
+# Keeping the local-dev defaults too: still useful for testing a local
+# `pnpm dev` console against this real deployed API directly.
+ENV ANEMOI_API_CORS_ORIGINS="https://anemoi-console.jasonkolodziej.workers.dev,http://localhost:5173,http://127.0.0.1:5173"
 EXPOSE 8080
 
 # `anemoi registry-pull` hydrates a local registry.json from R2 (see

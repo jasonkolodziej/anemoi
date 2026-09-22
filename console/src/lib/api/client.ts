@@ -16,11 +16,17 @@ export class ApiError extends Error {
 	}
 }
 
-// $env/dynamic/public (not /static) deliberately: this console is a static
-// SPA (see routes/+layout.ts), so there is no server render to bake a static
-// env value into -- the value is read from the browser's runtime env/config
-// at request time. Falls back to the reference server's default so `npm run
-// dev` works with zero setup.
+// $env/dynamic/public still means "set at build time" for this SPA, not
+// truly per-request runtime config -- checked directly against a real
+// build: adapter-static emits `build/_app/env.js` (a real `export const
+// env = {...}` literal, fetched via a lazy `import()` at page load, but
+// with whatever `PUBLIC_ANEMOI_API_URL` was in the *build's* environment
+// already baked into it). There is no server here to inject a fresh value
+// per request the way a real SvelteKit server adapter would -- deploying
+// to a different API target means rebuilding with a different
+// PUBLIC_ANEMOI_API_URL set (see console/wrangler.jsonc's cf:deploy note),
+// not changing anything after the fact. Falls back to the reference
+// server's default so `pnpm dev`/`pnpm build` work with zero setup.
 const BASE_URL = (env.PUBLIC_ANEMOI_API_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
 
 let apiKey: string | null = null;

@@ -13,18 +13,46 @@ Type: Space Grotesk (display) / Inter (UI) / IBM Plex Mono (data — coordinates
 ## Getting started
 
 ```sh
-npm install
+pnpm install
 cp .env.example .env   # PUBLIC_ANEMOI_API_URL, defaults to http://127.0.0.1:8000
-npm run dev            # http://localhost:5173
+pnpm dev                # http://localhost:5173
 ```
 
-Needs `anemoi.api` running (`uv run python -m anemoi.api --reload` from the anemoi repo) — the dashboard shows a connection error with instructions if it can't reach it.
+Needs `anemoi.api` running (`uv run python -m anemoi.api --reload` from the anemoi repo, demo mode by default) — the dashboard shows a connection error with instructions if it can't reach it.
 
 ```sh
-npm run build     # static output in build/
-npm run preview   # serve the production build locally
-npm run check     # svelte-check, 0 errors as of this scaffold
+pnpm build     # static output in build/
+pnpm preview   # serve the production build locally
+pnpm check     # svelte-check, 0 errors as of this scaffold
 ```
+
+## Deploying
+
+Issue #96. Pure static assets on Cloudflare Workers (no separate Worker
+script -- `wrangler.jsonc`'s `assets` block is the whole config), same
+tooling as `docker/api`'s deployment (#91).
+
+`PUBLIC_ANEMOI_API_URL` is read via `$env/dynamic/public`, but for this
+static-assets-only deployment that's effectively **build-time**
+configuration, not true per-request runtime config -- confirmed directly
+against a real build: `adapter-static` emits `build/_app/env.js` as a real
+`export const env = {...}` literal with whatever was in the environment
+when `vite build` ran already baked in, fetched via a lazy `import()` at
+page load but fixed at build time regardless. Deploying against a
+different API target means rebuilding with a different
+`PUBLIC_ANEMOI_API_URL`, not just redeploying:
+
+```sh
+PUBLIC_ANEMOI_API_URL=https://anemoi-api-real.jasonkolodziej.workers.dev pnpm run cf:deploy
+```
+
+Live at `https://anemoi-console.jasonkolodziej.workers.dev`, pointed at
+the real-mode API. The real API's `ANEMOI_API_CORS_ORIGINS`
+(`docker/api/Dockerfile`) has to explicitly allow-list this console's
+origin -- main.py's own default only covers local dev
+(`localhost:5173`/`127.0.0.1:5173`), which a browser hitting the deployed
+API from the deployed console's real origin doesn't match; found the hard
+way via a real `Disallowed CORS origin` response, not assumed.
 
 ## Adding more shadcn-svelte components
 
