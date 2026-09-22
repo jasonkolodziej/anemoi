@@ -139,6 +139,76 @@ def test_real_state_run_cycle_degrades_to_the_synthetic_fallback(client):
     assert "CheckpointStoreError" in get_real_state().last_deterministic_error
 
 
+def test_run_cycle_rejects_a_cycle_that_has_not_started_yet(client):
+    """LatencyOracle.published_at has no wall-clock concept of 'now' by
+    design (a replay harness needs to plan a cycle before it happens) --
+    but RealState.run_cycle is the one real call site running against real
+    wall-clock time, and without a guard a far-future cycle label came back
+    `vitals: observed` using a stale position simply relabeled with the
+    future timestamp (found live against EP172026). A synoptic time that
+    has not begun yet must be rejected outright, not silently estimated."""
+    far_future = "20990101_00Z"
+    r = client.post(
+        "/v1/storms/AL012026/cycles", json={"cycle": far_future, "members": 4},
+    )
+    assert r.status_code == 400
+    assert "has not started yet" in r.json()["detail"]
+
+
+def test_run_cycle_allows_the_in_progress_cycle(client):
+    """A cycle whose synoptic time has already begun -- even if real vitals
+    haven't landed yet -- is the existing, honest `vitals_estimated`
+    degraded mode, not something this guard should touch."""
+    from anemoi.time_utils import cycle_label, floor_synoptic
+
+    now_cycle = cycle_label(floor_synoptic(datetime.now(UTC)))
+    r = client.post(
+        "/v1/storms/AL012026/cycles", json={"cycle": now_cycle, "members": 4},
+    )
+    assert r.status_code == 201
+
+
+def test_storm_responses_carry_basin_and_trained_basin(client):
+    r = client.get("/v1/storms/AL012026")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["basin"] == "AL"
+    assert body["trained_basin"] is True
+
+    r = client.get("/v1/storms")
+    assert r.status_code == 200
+    assert all("basin" in s and "trained_basin" in s for s in r.json())
+
+
+def test_pacific_storm_is_flagged_as_not_a_trained_basin(client, monkeypatch):
+    """EP172026 (Hurricane Polo) is real data, not fabricated -- but no
+    trained model has ever seen an Eastern Pacific storm (docs/
+    train_infrastructure.md curls only the Atlantic HURDAT2 archive)."""
+    from anemoi.data.besttrack import Fix, Track, TrackQuality
+
+    ep_track = Track(
+        storm_id="EP172026",
+        fixes=(
+            Fix(
+                storm_id="EP172026",
+                valid_time=datetime(2026, 9, 22, 0, 0, tzinfo=UTC),
+                lat=15.0,
+                lon=-100.0,
+                max_wind_kt=60.0,
+                min_pressure_mb=990.0,
+                quality=TrackQuality.WORKING,
+            ),
+        ),
+    )
+    monkeypatch.setattr("anemoi.data.live_atcf.fetch_live_tracks", lambda: [ep_track])
+
+    r = client.get("/v1/storms/EP172026")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["basin"] == "EP"
+    assert body["trained_basin"] is False
+
+
 def test_debug_last_deterministic_error_route_needs_opt_in(tmp_path, hurdat2_file, monkeypatch):
     """The route must not exist at all (404, not a real endpoint returning
     empty data) unless ANEMOI_API_DEBUG is set -- real failure detail is

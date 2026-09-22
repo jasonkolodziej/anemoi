@@ -22,6 +22,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from .real_inference_live import gdas_likely_unpublished as _gdas_likely_unpublished
+
 if TYPE_CHECKING:
     from ..data.besttrack import Fix, Track
     from ..inference.cycle import DeterministicForecast
@@ -290,9 +292,10 @@ def build_real_deterministic_fn(
                 if version is None:
                     reasons[name] = "no registered staging/production version"
                 elif abs_pred is None:
-                    reasons[name] = (
-                        "no real live feature, checkpoint, or env standardisation stats"
-                    )
+                    reason = "no real live feature, checkpoint, or env standardisation stats"
+                    if _gdas_likely_unpublished(current.valid_time):
+                        reason += " (real GDAS analysis for this valid time may not have published yet)"
+                    reasons[name] = reason
             else:
                 version = registry.production(name) or registry.in_stage(name, Stage.STAGING)
                 abs_pred = None
@@ -301,7 +304,14 @@ def build_real_deterministic_fn(
                 else:
                     raw = _build_live_x(name, track, current, cache_dir)
                     if raw is None:
-                        reasons[name] = "no real live feature (no cache, on-demand fetch failed)"
+                        if _gdas_likely_unpublished(current.valid_time):
+                            reasons[name] = (
+                                "no real live feature -- real GDAS analysis for this "
+                                "cycle's valid time likely hasn't published yet "
+                                "(typical latency ~3.5h); should resolve on a later cycle"
+                            )
+                        else:
+                            reasons[name] = "no real live feature (no cache, on-demand fetch failed)"
                     else:
                         try:
                             model, _spec = load_trained_model(name, version, checkpoint_store)

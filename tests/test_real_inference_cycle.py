@@ -346,3 +346,49 @@ def test_deterministic_fn_reports_missing_standardisation_stats_by_name(tmp_path
     message = str(excinfo.value)
     assert "cnn: missing x/y standardisation stats (predates #82)" in message
     assert "lstm: no registered staging/production version" in message
+
+
+@pytest.mark.torch
+def test_missing_reason_flags_likely_unpublished_gdas_for_a_live_valid_time(tmp_path, monkeypatch):
+    """When the valid_time is within GDAS's own typical real publish
+    latency of wall-clock now (`gdas_likely_unpublished`, tested on its
+    own merits in test_real_inference_live.py), a cache-miss/fetch-failure
+    must get a more specific, honest reason than the generic 'on-demand
+    fetch failed' -- found live against AL062026 at 20260922_06Z,
+    requested only ~3h after its own synoptic time. `gdas_likely_
+    unpublished` itself is stubbed here (deterministic, no real-time
+    timing dependency) -- this test is only about the message wiring."""
+    from anemoi.inference.scheduler import CyclePlan
+
+    track = make_track("AL062026", n=SEQUENCE_LENGTH + 5)
+    current = track.fixes[-1]
+
+    registry = ModelRegistry(tmp_path / "registry")
+    store = _store()
+    _register_real_version(
+        "cnn", {
+            "in_channels": len(CNN_FIELD_NAMES), "latent_dim": 8,
+            "lead_hours": [12, 24, 36, 48, 72, 96, 120],
+        },
+        x_shape=(len(CNN_FIELD_NAMES), 41, 41),
+        registry=registry, store=store, tmp_path=tmp_path, stage=Stage.STAGING,
+    )
+    # No cache_current_fix -- and _build_live_x is stubbed so this never
+    # attempts a real network fetch either way.
+    monkeypatch.setattr(
+        "anemoi.training.real_inference_cycle._build_live_x", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        "anemoi.training.real_inference_cycle._gdas_likely_unpublished", lambda *a, **k: True
+    )
+
+    deterministic_fn = build_real_deterministic_fn(track, registry, store, tmp_path)
+    plan = CyclePlan(
+        target_time=current.valid_time, cycle_start=current.valid_time,
+        stages=(), inputs=None, vitals_estimated=False,
+    )
+    with pytest.raises(InferenceCycleError) as excinfo:
+        deterministic_fn(plan, current)
+
+    assert "cnn: no real live feature -- real GDAS analysis" in str(excinfo.value)
+    assert "likely hasn't published yet" in str(excinfo.value)

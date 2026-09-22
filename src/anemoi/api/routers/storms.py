@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from ...data.atcf import TRAINED_BASINS, storm_basin
 from ...inference.cycle import CycleError
 from .. import convert, schemas
 from ..deps import require_api_key, state_dependency
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/storms", tags=["storms"], dependencies=[Depends(requ
 
 def _storm_summary(storm, cycle: str | None = None) -> schemas.StormSummary:
     last = max(storm.cycles) if storm.cycles else None
+    basin = storm_basin(storm.storm_id)
     return schemas.StormSummary(
         storm_id=storm.storm_id,
         season=storm.season,
@@ -34,6 +36,8 @@ def _storm_summary(storm, cycle: str | None = None) -> schemas.StormSummary:
         ),
         peak_wind_kt=storm.track.peak_wind_kt,
         last_cycle=last,
+        basin=basin,
+        trained_basin=basin in TRAINED_BASINS,
     )
 
 

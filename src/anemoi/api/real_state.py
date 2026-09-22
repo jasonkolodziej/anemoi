@@ -37,7 +37,7 @@ import numpy as np
 
 from ..data.availability import LatencyOracle
 from ..data.besttrack import Fix, Track, TrackQuality
-from ..inference.cycle import CycleOutput, DeterministicForecast, run_cycle
+from ..inference.cycle import CycleError, CycleOutput, DeterministicForecast, run_cycle
 from ..inference.scheduler import plan_cycle
 from ..monitoring.drift import DriftReport
 from ..monitoring.skew import SkewReport
@@ -272,6 +272,29 @@ class RealState:
         self._refresh_registry()
         storm = self.get_storm(storm_id)
         target = parse_cycle_label(cycle)
+        # `LatencyOracle`/`plan_cycle` have no wall-clock concept of "now" --
+        # by design, since a replay harness needs to plan a cycle before it
+        # happens using only a hypothetical `as_of`. But this is the one real
+        # call site running against real wall-clock time, and without a
+        # guard here `plan_cycle` cheerfully "plans" a cycle whose synoptic
+        # time hasn't started yet: `LatencyOracle.published_at` always
+        # returns `valid_time + latency` regardless of whether that time has
+        # actually elapsed, so a future `target` comes back `vitals_estimated
+        # =False` -- the real bug this guard closes, found live against
+        # EP172026 with a cycle label one full day ahead of real UTC time,
+        # which returned `vitals: observed` using a stale position simply
+        # relabeled with the future timestamp. A cycle whose target time has
+        # already begun (including the one currently in progress, before its
+        # real vitals have landed) is unaffected -- that in-progress case is
+        # exactly what `vitals_estimated`'s own degraded mode already models
+        # honestly.
+        now = datetime.now(UTC)
+        if target > now:
+            raise CycleError(
+                f"cycle {cycle} has not started yet (real UTC time is "
+                f"{now:%Y-%m-%d %H:%M}Z); a forecast cycle can only be issued "
+                "for a synoptic time that has already begun"
+            )
         oracle = LatencyOracle(use_max_latency=worst_case)
         plan = plan_cycle(target, oracle)
 

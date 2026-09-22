@@ -19,6 +19,7 @@ from anemoi.training.real_inference_live import (
     build_live_lstm_x,
     build_live_pinn_x,
     build_live_transformer_x,
+    gdas_likely_unpublished,
 )
 
 torch_installed = pytest.importorskip("torch", reason="needs the torch extra")
@@ -277,3 +278,24 @@ def test_current_fields_never_fetches_before_the_real_gdas_archive_starts(tmp_pa
     )
 
     assert _current_fields(track, old_fix, tmp_path) is None
+
+
+def test_gdas_likely_unpublished_true_within_real_typical_latency():
+    """Real GDAS typical latency is ~3.5h (data.sources) -- a valid_time
+    only 1h before `now` is still inside that window."""
+    valid_time = datetime(2026, 9, 22, 6, 0, tzinfo=UTC)
+    now = valid_time + timedelta(hours=1)
+    assert gdas_likely_unpublished(valid_time, now=now) is True
+
+
+def test_gdas_likely_unpublished_false_once_real_typical_latency_has_passed():
+    valid_time = datetime(2026, 9, 22, 6, 0, tzinfo=UTC)
+    now = valid_time + timedelta(hours=6)
+    assert gdas_likely_unpublished(valid_time, now=now) is False
+
+
+def test_gdas_likely_unpublished_false_for_an_archived_storm():
+    """A 2023 storm's valid_time is years before any plausible real `now`
+    -- must never be flagged as 'still within publish latency'."""
+    valid_time = datetime(2023, 9, 1, tzinfo=UTC)
+    assert gdas_likely_unpublished(valid_time) is False

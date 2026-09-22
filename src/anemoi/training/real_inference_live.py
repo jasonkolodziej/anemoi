@@ -23,6 +23,7 @@ treat ``None`` as "this model can't contribute to this cycle," the same
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -32,6 +33,28 @@ if TYPE_CHECKING:
     from ..data.besttrack import Fix, Track
     from ..data.features import GriddedFields
     from .real_run_gnn import MeshTopology
+
+
+def gdas_likely_unpublished(valid_time: datetime, now: datetime | None = None) -> bool:
+    """True if ``valid_time``'s real GDAS analysis is still inside its own
+    typical real publish latency (``data.sources.get("gdas_gfs")``, ~3.5h)
+    as of wall-clock ``now`` (defaults to the real current time).
+
+    Purely diagnostic -- used only to give a `missing_model_reasons` entry
+    a more specific, honest explanation when `_current_fields`'s on-demand
+    fetch comes back empty for a genuinely live/recent cycle. Deliberately
+    NOT used to skip the fetch attempt itself: real GDAS publication timing
+    has genuine variance around its typical latency, and giving up a real
+    chance to contribute for a marginal hygiene win (avoiding one fetch
+    that fails fast) would be a real capability regression, not a hygiene
+    improvement.
+    """
+    from ..data import sources
+
+    if now is None:
+        now = datetime.now(UTC)
+    latency = sources.get("gdas_gfs").typical_latency
+    return valid_time + latency > now
 
 
 def _current_window(track: Track, current: Fix, length: int) -> tuple[Fix, ...] | None:

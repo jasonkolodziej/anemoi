@@ -35,6 +35,15 @@
 				<Badge variant="outline">{qualityLabel[storm.latest_fix.quality] ?? storm.latest_fix.quality}</Badge>
 				<span class="font-data text-[11px] text-text-faint">{formatUtc(storm.latest_fix.valid_time)}</span>
 			</div>
+			{#if !storm.trained_basin}
+				<Badge
+					variant="outline"
+					class="border-status-degraded/40 text-status-degraded"
+					title="No trained model has seen a {storm.basin}-basin storm -- Atlantic-only training data"
+				>
+					{storm.basin} basin -- untrained
+				</Badge>
+			{/if}
 			{#if storm.last_cycle}
 				<div class="text-xs text-text-faint">last cycle <span class="font-data text-text-muted">{storm.last_cycle}</span></div>
 			{/if}
