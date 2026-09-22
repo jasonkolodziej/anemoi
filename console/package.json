@@ -9,6 +9,7 @@
     "dev": "pnpm run sync-wiki && vite dev",
     "build": "pnpm run sync-wiki && vite build",
     "preview": "vite preview",
+    "test:e2e": "playwright test",
     "prepare": "svelte-kit sync || echo ''",
     "check": "pnpm run sync-wiki && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
@@ -19,6 +20,7 @@
   "devDependencies": {
     "@fontsource-variable/geist": "^5.3.0",
     "@fontsource-variable/inter": "^5.3.0",
+    "@playwright/test": "^1.63.0",
     "@sveltejs/adapter-static": "^3.0.10",
     "@sveltejs/kit": "^2.70.3",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",

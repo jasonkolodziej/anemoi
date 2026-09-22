@@ -125,6 +125,25 @@ def test_registry_has_all_seven_models(client):
     }
 
 
+def test_registry_version_round_trips_provenance_fields(client):
+    r = client.get("/v1/registry")
+    assert r.status_code == 200
+    lstm = next(e for e in r.json() if e["model"] == "lstm")
+    latest = lstm["latest"]
+    assert latest is not None
+    # #92 gap 1: tags/input_flavor/latent_signature/checkpoint_uri were
+    # silently dropped by ModelVersionOut/model_version_out before this --
+    # assert they now round-trip through the API rather than through
+    # ModelRegistry directly, which would miss a schema/convert regression.
+    assert latest["tags"] == {"input_flavor": "gdas_finetune", "nwp_cycle_lag": "6"}
+    assert latest["input_flavor"] == "gdas_finetune"
+    assert latest["latent_signature"] is None
+    assert latest["checkpoint_uri"] is None
+
+    fusion = next(e for e in r.json() if e["model"] == "fusion")
+    assert fusion["latest"]["latent_signature"] is not None
+
+
 def test_active_pin_is_internally_consistent(client):
     r = client.get("/v1/registry/pins/active")
     assert r.status_code == 200

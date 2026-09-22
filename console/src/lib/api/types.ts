@@ -158,6 +158,10 @@ export interface ModelVersionOut {
 	run_id: string;
 	metrics: Record<string, number>;
 	created_at: string;
+	tags: Record<string, string>;
+	input_flavor: string;
+	latent_signature: string | null;
+	checkpoint_uri: string | null;
 }
 
 export interface RegistryEntry {
