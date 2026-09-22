@@ -1,13 +1,15 @@
 """Synthetic GOES-18/19 storm-relative crops -> CNN channel stack.
 
 Scope v2.1 PLAN.md §4 "productionise" table -- Satellite row, listed as "Not
-implemented" until this module. Real ingestion (real GOES ABI imagery, real
-storm-relative cropping, real-time fetch against the ``goes`` source already
-registered in ``data.sources``) is future work, tracked alongside the other
-gridded-field productionisation items (#18) -- this is the synthetic
-stand-in, matching ``data.synthetic``'s role for ``GriddedFields``, so
-``models.cnn.build_cnn``'s channel stack has something real-shaped to run
-against offline rather than nothing at all.
+implemented" until this module. Real ingestion now exists --
+``data.real_goes.fetch_real_satellite_crop`` (#146) returns a real
+``SatelliteCrop`` in this exact shape/channel order, fetched from real GOES
+ABI imagery and derived products. This module remains the synthetic
+stand-in for offline/test use (matching ``data.synthetic``'s role for
+``GriddedFields``), not because real ingestion doesn't exist -- nothing in
+this codebase wires the real fetch into a live training/inference path yet,
+same "fetch exists, not yet a consumed input" state every #147 source
+shipped in.
 
 No torch dependency here -- crops are plain numpy arrays. A caller with the
 torch extra installed converts with ``torch.from_numpy(crop_to_cnn_input(...))``.
