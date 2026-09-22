@@ -71,6 +71,34 @@ def test_real_state_lists_the_real_hurdat2_storm(client):
     assert storms[0]["peak_wind_kt"] == 65.0
 
 
+def test_real_state_monitoring_and_retraining_routes_do_not_500(client):
+    """A real, previously-undiscovered bug: RealState had no
+    drift_report/skew_report/pending_retrain_jobs at all, despite its own
+    docstring claiming full DemoState surface parity -- these routers call
+    them unconditionally, so visiting them against a real deployment 500'd
+    (found by actually visiting the deployed console's /monitoring page,
+    not assumed). Must return real, honest "nothing tracked yet" data, not
+    fabricated synthetic numbers under a real deployment."""
+    r = client.get("/v1/monitoring/drift")
+    assert r.status_code == 200
+    reports = r.json()
+    assert len(reports) == 7  # ALL_MODELS
+    for report in reports:
+        assert report["n_live"] == 0
+        assert report["alert"] is False
+
+    r = client.get("/v1/monitoring/skew")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["n"] == 0
+    assert body["alert"] is False
+    assert "not yet available" in body["reasons"][0]
+
+    r = client.get("/v1/retraining/triggers")
+    assert r.status_code == 200
+    assert r.json() == []
+
+
 def test_real_state_run_cycle_degrades_to_the_synthetic_fallback(client):
     """No real trained model is registered in this test's fresh, empty
     registry -- run_cycle must still succeed (never a 500), using the
