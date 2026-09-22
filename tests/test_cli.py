@@ -679,3 +679,113 @@ def test_cmd_registry_pull_hydrates_from_durable_storage(tmp_path, monkeypatch, 
     out = capsys.readouterr().out
     assert "1 registered version(s) across 7 models" in out
     assert (tmp_path / "registry" / "registry.json").exists()
+
+
+# --- cmd_drift_reference_fit -------------------------------------------------
+
+
+def _save_real_shaped_gdas_sample(cache_dir, storm_id, valid_time, seed) -> None:
+    import numpy as np
+
+    from anemoi.data.features import GriddedFields
+    from anemoi.data.gridded_cache import FetchTask, cache_path, save_cached_fields
+
+    rng = np.random.default_rng(seed)
+    shape = (9, 9)
+    grid = lambda base: np.full(shape, base) + rng.normal(0.0, 0.5, shape)  # noqa: E731
+    fields = GriddedFields(
+        valid_time=valid_time, flavor=Flavor.GDAS_FINETUNE,
+        u200=grid(15.0), v200=grid(5.0), u850=grid(10.0), v850=grid(3.0),
+        z500=grid(5750.0), rh700=grid(62.0), t700=grid(281.0), mslp=grid(1012.0),
+        sst=grid(28.0), ohc=grid(60.0),
+    )
+    task = FetchTask(storm_id=storm_id, valid_time=valid_time, lat=20.0, lon=-60.0)
+    save_cached_fields(cache_path(cache_dir, task), fields, task)
+
+
+def test_drift_reference_fit_fits_and_persists_from_real_cached_fields(tmp_path, capsys):
+    cache_dir = tmp_path / "gdas_cache"
+    for i in range(35):
+        _save_real_shaped_gdas_sample(
+            cache_dir, f"AL{i:02d}1999",
+            datetime(1999, 8, 1, tzinfo=UTC) + timedelta(hours=6 * i),
+            seed=i,
+        )
+
+    args = argparse.Namespace(
+        gdas_cache_dir=str(cache_dir), registry_root=str(tmp_path / "registry"),
+    )
+    assert cli.cmd_drift_reference_fit(args) == 0
+
+    out = capsys.readouterr().out
+    assert "fit reference from 35 real Stage B sample(s)" in out
+    assert "not pushed to durable storage" in out  # no real S3 creds in this test env
+
+    from anemoi.monitoring.reference_store import load_reference
+
+    reference = load_reference(tmp_path / "registry" / "drift_reference.json")
+    assert reference is not None
+    assert reference.n == 35
+
+
+def test_drift_reference_fit_skips_a_wrong_flavor_sample(tmp_path, capsys):
+    import numpy as np
+
+    from anemoi.data.features import GriddedFields
+    from anemoi.data.gridded_cache import FetchTask, cache_path, save_cached_fields
+
+    cache_dir = tmp_path / "gdas_cache"
+    for i in range(35):
+        _save_real_shaped_gdas_sample(
+            cache_dir, f"AL{i:02d}1999",
+            datetime(1999, 8, 1, tzinfo=UTC) + timedelta(hours=6 * i),
+            seed=i,
+        )
+    # One real ERA5-flavor sample mixed in -- must be excluded, not counted
+    # toward the Stage B reference.
+    grid = lambda base: np.full((9, 9), base)  # noqa: E731
+    era5_fields = GriddedFields(
+        valid_time=datetime(1999, 9, 1, tzinfo=UTC), flavor=Flavor.ERA5_PRETRAIN,
+        u200=grid(15.0), v200=grid(5.0), u850=grid(10.0), v850=grid(3.0),
+        z500=grid(5750.0), rh700=grid(62.0), t700=grid(281.0), mslp=grid(1012.0),
+        sst=grid(28.0), ohc=grid(60.0),
+    )
+    task = FetchTask(
+        storm_id="AL991999", valid_time=era5_fields.valid_time, lat=20.0, lon=-60.0,
+    )
+    save_cached_fields(cache_path(cache_dir, task), era5_fields, task)
+
+    args = argparse.Namespace(
+        gdas_cache_dir=str(cache_dir), registry_root=str(tmp_path / "registry"),
+    )
+    assert cli.cmd_drift_reference_fit(args) == 0
+
+    out = capsys.readouterr().out
+    assert "fit reference from 35 real Stage B sample(s) (1 wrong flavor" in out
+
+
+def test_drift_reference_fit_reports_too_few_samples(tmp_path, capsys):
+    cache_dir = tmp_path / "gdas_cache"
+    for i in range(5):
+        _save_real_shaped_gdas_sample(
+            cache_dir, f"AL{i:02d}1999",
+            datetime(1999, 8, 1, tzinfo=UTC) + timedelta(hours=6 * i),
+            seed=i,
+        )
+
+    args = argparse.Namespace(
+        gdas_cache_dir=str(cache_dir), registry_root=str(tmp_path / "registry"),
+    )
+    assert cli.cmd_drift_reference_fit(args) == 1
+
+    out = capsys.readouterr().out
+    assert "only 5 real usable sample(s)" in out
+    assert not (tmp_path / "registry" / "drift_reference.json").exists()
+
+
+def test_drift_reference_fit_reports_no_cache_found(tmp_path, capsys):
+    args = argparse.Namespace(
+        gdas_cache_dir=str(tmp_path / "empty"), registry_root=str(tmp_path / "registry"),
+    )
+    assert cli.cmd_drift_reference_fit(args) == 1
+    assert "no cached GDAS fields found" in capsys.readouterr().out

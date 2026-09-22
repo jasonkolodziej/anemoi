@@ -750,6 +750,86 @@ def cmd_registry_reconcile(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_drift_reference_fit(args: argparse.Namespace) -> int:
+    """Fit and persist the real Stage B (GDAS_FINETUNE) drift reference
+    distribution (#148) from real cached GDAS fields.
+
+    Real, offline, no GPU -- iterates ``{gdas_cache_dir}/*/*.npz`` (the
+    same layout ``data.gdas_cache``/``anemoi gdas-cache`` already write),
+    computes ``data.features.compute_environment_features`` for each real
+    cached field (the same function a real live cycle now uses for its
+    own drift-detection sample -- #148's env_features), and fits
+    :class:`monitoring.drift.ReferenceDistribution`. A version registered
+    before #78 has no equivalent gap here: this reads raw cached fields
+    directly, no model checkpoint involved at all.
+
+    Durable storage is optional, unlike every other command that
+    constructs a ``CheckpointStore`` here -- a locally-fit reference is
+    still real and usable without R2 credentials configured; only a
+    *live API process* pulling this reference across a cold start needs
+    the durable mirror, and that's `RealState`'s concern, not this
+    command's.
+    """
+    import numpy as np
+
+    from .data.features import FEATURE_NAMES, compute_environment_features
+    from .data.gridded_cache import load_cached_fields
+    from .data.sources import Flavor
+    from .monitoring.drift import ReferenceDistribution
+    from .monitoring.reference_store import save_reference
+    from .tracking.checkpoint_store import CheckpointStore, CheckpointStoreError, S3Config
+
+    cache_dir = Path(args.gdas_cache_dir)
+    npz_files = sorted(cache_dir.glob("*/*.npz"))
+    if not npz_files:
+        print(f"no cached GDAS fields found under {cache_dir}")
+        return 1
+
+    samples: list = []
+    skipped_flavor = 0
+    skipped_non_finite = 0
+    for path in npz_files:
+        fields = load_cached_fields(path)
+        if fields.flavor is not Flavor.GDAS_FINETUNE:
+            skipped_flavor += 1
+            continue
+        try:
+            samples.append(compute_environment_features(fields).values)
+        except ValueError:
+            skipped_non_finite += 1
+            continue
+
+    if len(samples) < 30:
+        print(
+            f"only {len(samples)} real usable sample(s) found under {cache_dir} "
+            f"({skipped_flavor} wrong flavor, {skipped_non_finite} non-finite) -- "
+            "detect_feature_drift itself needs >= 30 live samples, and a reference "
+            "fit from fewer than that isn't trustworthy either; not fitting"
+        )
+        return 1
+
+    reference = ReferenceDistribution.fit(
+        np.array(samples), Flavor.GDAS_FINETUNE, names=FEATURE_NAMES
+    )
+
+    store = None
+    try:
+        store = CheckpointStore(S3Config.from_env())
+    except CheckpointStoreError:
+        print("note: no real S3_ARTIFACT_* credentials in env -- fitting locally only, "
+              "not pushed to durable storage (a live API process won't see this yet)")
+
+    out_path = Path(args.registry_root) / "drift_reference.json"
+    save_reference(reference, out_path, checkpoint_store=store)
+    print(
+        f"fit reference from {len(samples)} real Stage B sample(s) "
+        f"({skipped_flavor} wrong flavor, {skipped_non_finite} non-finite skipped) -> {out_path}"
+    )
+    if store is not None:
+        print("pushed to durable storage")
+    return 0
+
+
 def cmd_splits(args: argparse.Namespace) -> int:
     tracks = generate_archive(args.start, args.end, seed=args.seed)
     assignment = assign_splits(tracks)
@@ -812,6 +892,17 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run", action="store_true", help="report what would change, without transitioning",
     )
     p.set_defaults(func=cmd_registry_reconcile)
+
+    p = sub.add_parser(
+        "drift-reference-fit",
+        help="fit the real Stage B drift reference distribution from cached GDAS fields (#148)",
+    )
+    p.add_argument("--gdas-cache-dir", dest="gdas_cache_dir", required=True)
+    p.add_argument(
+        "--registry-root", dest="registry_root",
+        default=str(Path.home() / ".anemoi" / "registry"),
+    )
+    p.set_defaults(func=cmd_drift_reference_fit)
 
     p = sub.add_parser("ablation", help="run the #9 capacity-vs-sample-size ablation")
     p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")

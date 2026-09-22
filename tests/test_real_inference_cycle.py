@@ -49,10 +49,11 @@ def _store() -> CheckpointStore:
     return CheckpointStore(config, client=_FakeS3Client())
 
 
-def make_track(storm_id: str, n: int, *, seed: int = 0) -> Track:
+def make_track(storm_id: str, n: int, *, seed: int = 0, start: datetime | None = None) -> Track:
     rng = np.random.default_rng(seed)
     lat, lon = 15.0, -50.0
-    start = datetime(2026, 8, 1, tzinfo=UTC)
+    if start is None:
+        start = datetime(2026, 8, 1, tzinfo=UTC)
     fixes = []
     for i in range(n):
         lat += float(rng.uniform(0.1, 0.3))
@@ -190,6 +191,48 @@ def test_build_real_deterministic_fn_combines_all_four_real_models(tmp_path):
     assert forecast.missing_model_reasons == {
         "pinn": "no registered staging/production version",
     }
+
+    # #148: the real drift-detection live sample -- computed once per
+    # cycle from the same cached fields the Group 1 models used above,
+    # independent of which models actually contributed.
+    from anemoi.data.features import FEATURE_NAMES
+
+    assert forecast.env_features is not None
+    assert forecast.env_features.shape == (len(FEATURE_NAMES),)
+    assert np.all(np.isfinite(forecast.env_features))
+
+
+@pytest.mark.torch
+def test_env_features_is_none_without_a_real_cached_field(tmp_path):
+    """lstm's own live feature (`build_live_lstm_x`) needs only real track
+    history, no gridded field at all -- so a cycle can genuinely succeed
+    (lstm contributes) while `env_features` stays `None`. Uses a pre-2021
+    (pre `GDAS_ARCHIVE_START`) valid time deliberately -- `_current_fields`
+    itself guards on that before ever attempting a real on-demand GDAS
+    fetch, so this stays a real offline unit test rather than accidentally
+    depending on live network access the way an in-archive date would."""
+    from anemoi.inference.scheduler import CyclePlan
+
+    track = make_track("AL021985", n=SEQUENCE_LENGTH + 5, start=datetime(1985, 8, 1, tzinfo=UTC))
+    current = track.fixes[-1]
+    # Deliberately no cache_current_fix call -- no real gridded field available.
+
+    registry = ModelRegistry(tmp_path / "registry")
+    store = _store()
+    _register_real_version(
+        "lstm", {"input_dim": 5, "hidden_dim": 8, "lead_hours": [12, 24, 36, 48, 72, 96, 120]},
+        x_shape=(5,), registry=registry, store=store, tmp_path=tmp_path,
+    )
+
+    deterministic_fn = build_real_deterministic_fn(track, registry, store, tmp_path)
+    plan = CyclePlan(
+        target_time=current.valid_time, cycle_start=current.valid_time,
+        stages=(), inputs=None, vitals_estimated=False,
+    )
+
+    forecast = deterministic_fn(plan, current)
+    assert set(forecast.contributors) == {"lstm"}
+    assert forecast.env_features is None
 
 
 @pytest.mark.torch
