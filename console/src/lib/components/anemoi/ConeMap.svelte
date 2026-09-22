@@ -87,6 +87,10 @@
 		 * whenever the cycle didn't request one. */
 		coastlineLat?: number | null;
 		coastlineLon?: number | null;
+		/** `CyclePayload.cycle` -- the real identity of the cycle currently
+		 * loaded, used only to decide *when* to auto-fit the map (see the
+		 * fitBounds effect below), not rendered. */
+		cycleLabel?: string | null;
 	}
 	let {
 		history,
@@ -96,6 +100,7 @@
 		hoveredModel = $bindable(null),
 		coastlineLat = null,
 		coastlineLon = null,
+		cycleLabel = null,
 	}: Props = $props();
 
 	const DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
@@ -299,23 +304,34 @@
 	// (`effect_update_depth_exceeded`).
 	const mapReady = $derived(!!map);
 
-	// A plain (non-reactive) last-fitted-bounds guard, not just the
-	// mapReady/untrack decoupling above -- found for real that wasn't
-	// sufficient on its own: fitBounds's own move/moveend events feed
+	// A plain (non-reactive) last-fitted-*cycle* guard -- deliberately NOT
+	// keyed on the bounds *value* anymore. It was originally (comparing
+	// JSON.stringify(bounds) against the last-fitted string), which closed
+	// a real infinite-loop bug (fitBounds's own move/moveend events fed
 	// back into MapLibre.svelte's internal center/zoom<->camera sync
 	// effect closely enough that this effect kept re-scheduling several
-	// times for the *same* bounds value before settling, tripping
-	// Svelte's effect_update_depth_exceeded guard. Comparing against the
-	// last value actually fitted -- not just "did a dependency change" --
-	// makes every re-schedule after the first a no-op regardless of why
-	// Svelte re-ran this effect, which is what actually stopped it.
-	let lastFittedBounds: string | undefined;
+	// times for the *same* bounds before settling, tripping Svelte's
+	// effect_update_depth_exceeded guard) -- but it had a second, real bug
+	// that only surfaced once the storm detail page started polling for
+	// fresh data every 60s (console_production_hardening's periodic-
+	// refresh fix): a *live* storm's real history/latest_fix genuinely
+	// shifts a little on some polls, which changes `bounds`'s real value
+	// even though the user is still looking at the exact same cycle --
+	// found live against EP172026, an active storm, reported as "the map
+	// resets on its own, especially noticeable mid-scroll/touch" (the
+	// background poll firing is not actually caused by the touch, it just
+	// lands then, so it reads as the touch triggering it). Re-fitting on
+	// every real data refresh fights the user's own pan/zoom. Keying on
+	// `cycleLabel` instead fits exactly once per cycle the user actually
+	// loaded (first view, running a new one, clicking a past-cycle button)
+	// and never again while a background poll quietly refreshes the same
+	// cycle's storm history underneath them.
+	let lastFittedCycle: string | null | undefined;
 
 	$effect(() => {
 		if (!mapReady || !bounds) return;
-		const key = JSON.stringify(bounds);
-		if (key === lastFittedBounds) return;
-		lastFittedBounds = key;
+		if (cycleLabel === lastFittedCycle) return;
+		lastFittedCycle = cycleLabel;
 		const m = untrack(() => map);
 		m?.fitBounds(bounds, { padding: 48, duration: 0 });
 	});

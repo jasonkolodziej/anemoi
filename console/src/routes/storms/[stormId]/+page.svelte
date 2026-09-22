@@ -201,6 +201,7 @@
 								perModelTracks={cycle.products.per_model_tracks}
 								coastlineLat={cycle.payload.coastline_lat}
 								coastlineLon={cycle.payload.coastline_lon}
+								cycleLabel={cycle.payload.cycle}
 								bind:hoveredModel
 							/>
 						</CardContent>
