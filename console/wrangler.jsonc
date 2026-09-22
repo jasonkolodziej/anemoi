@@ -18,6 +18,12 @@
 	"name": "anemoi-console",
 	"compatibility_date": "2026-09-21",
 
+	// anemoi.systems is the console's real domain. `workers_dev` defaults to
+	// *disabled* the moment `routes` is present at all -- set explicitly so
+	// the workers.dev URL stays live too, additive rather than a cutover.
+	"routes": [{ "pattern": "anemoi.systems", "custom_domain": true }],
+	"workers_dev": true,
+
 	"assets": {
 		"directory": "./build",
 		"not_found_handling": "single-page-application",
