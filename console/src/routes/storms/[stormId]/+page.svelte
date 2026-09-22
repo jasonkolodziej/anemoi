@@ -39,6 +39,12 @@
 	let hoveredModel = $state<string | null>(null);
 
 	async function load() {
+		// A periodic poll must not clobber a cycle the user just ran, or a
+		// fetch mid-flight from the *previous* poll landing after a newer
+		// one started -- real staleness (this page never refreshed after
+		// its initial mount before this fix) is a bigger risk than skipping
+		// one tick while a run is genuinely in progress.
+		if (running) return;
 		error = null;
 		try {
 			storm = await getStorm(stormId);
@@ -46,6 +52,7 @@
 				const last = [...storm.cycles].sort().at(-1)!;
 				cycle = await getCycle(stormId, last);
 			}
+			getSkew().then((r) => (skew = r)).catch(() => {});
 		} catch (e) {
 			error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
 		}
@@ -53,7 +60,15 @@
 
 	onMount(() => {
 		load();
-		getSkew().then((r) => (skew = r)).catch(() => {});
+		// A live storm's own position/intensity, and whether some other
+		// operator has already run the next cycle, can both change while
+		// this page just sits open -- watching an active storm is exactly
+		// the case this page is for, so it must not require a manual
+		// reload to show that. Deliberately does not touch cycleInput/
+		// members/coastlineLat/coastlineLon -- a poll must never overwrite
+		// an in-progress form edit.
+		const interval = setInterval(load, 60_000);
+		return () => clearInterval(interval);
 	});
 
 	async function handleRunCycle() {
