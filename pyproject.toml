@@ -41,6 +41,10 @@ gridded = [
     # h5py (no compiled system library needed, unlike eccodes), confirmed
     # 2026-09-22.
     "h5netcdf>=1.3", "h5py>=3.10",
+    # Real geostationary-projection math for data.real_goes -- battle-tested
+    # over hand-rolled trig, since a projection bug would silently misplace
+    # every crop rather than raise. Prebuilt wheel, no system library needed.
+    "pyproj>=3.6",
 ]
 # Durable checkpoint storage against an S3-compatible endpoint (Cloudflare R2
 # or AWS S3). See anemoi.tracking.checkpoint_store and example.env.

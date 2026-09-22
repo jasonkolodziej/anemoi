@@ -124,12 +124,21 @@ REGISTRY: dict[str, DataSource] = {
         ),
         DataSource(
             key="goes",
-            provider="NOAA AWS / GCS (GOES-18/19)",
+            provider="NOAA AWS (GOES-18/19) -- implemented, data.real_goes",
             role=Role.OPERATIONAL,
             typical_latency=5 * _M,
             max_latency=20 * _M,
-            fmt="NetCDF / Zarr",
+            fmt="NetCDF (real per-product fetch: ABI-L2-CMIPF for IR/WV/VIS, "
+            "ABI-L2-SSTF for SST, ABI-L2-RRQPEF for rain rate)",
             retention="rolling 1yr raw; permanent storm-relative crops",
+            notes=(
+                "Real storm-relative crop via lazy fsspec+h5netcdf partial "
+                "reads (confirmed live: ~8 MB transferred per crop from a "
+                "real ~430 MB full-disk file, not a full download) and real "
+                "pyproj geostationary-projection geolocation (verified "
+                "against a real active storm's real position). "
+                "DQF-flagged pixels masked to NaN, not presented as good."
+            ),
         ),
         DataSource(
             key="ndbc",
