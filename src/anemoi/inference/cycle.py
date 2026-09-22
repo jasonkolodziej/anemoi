@@ -54,6 +54,16 @@ class DeterministicForecast:
     #: Empty for the synthetic fallback and `DemoState` (neither runs a
     #: real per-model forward pass to have one).
     per_model_tracks: dict[str, np.ndarray] = field(default_factory=dict)
+    #: Why each Group 1 model that *didn't* end up in `contributors` was
+    #: skipped, keyed by architecture slug (e.g. "no registered staging/
+    #: production version", "no real live feature (no cache, on-demand
+    #: fetch failed)"). Real, not derived: `build_real_deterministic_fn`
+    #: already computes this per model to build its own error message
+    #: when *every* model fails -- this is that same dict, kept even when
+    #: some models succeed, instead of being discarded the moment at
+    #: least one contributes. Empty for the synthetic fallback and
+    #: `DemoState`.
+    missing_model_reasons: dict[str, str] = field(default_factory=dict)
 
     def at(self, lead: int) -> tuple[float, float, float]:
         i = self.lead_hours.index(lead)
