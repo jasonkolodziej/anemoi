@@ -173,13 +173,23 @@ REGISTRY: dict[str, DataSource] = {
         ),
         DataSource(
             key="sst_ohc",
-            provider="NOAA / Copernicus",
+            provider="NOAA NCEI OISST v2.1 (SST, implemented) + "
+            "NOAA OSPO ERDDAP (OHC, not implemented)",
             role=Role.OPERATIONAL,
             typical_latency=1 * _D,
             max_latency=2 * _D,
             fmt="NetCDF",
             retention="rolling 5yr",
-            notes="Persisted from the previous day.",
+            notes=(
+                "SST half is real (data.real_sst, OISST v2.1). OHC half "
+                "deliberately isn't: NOAA OSPO's ERDDAP OHC/TCHP products "
+                "looked live (real 200, real schema) but their real data "
+                "stops at 2026-01-26, confirmed ~8 months stale as of "
+                "this writing -- serving that as current would be worse "
+                "than the existing placeholder. GODAS/ORAS5 remains the "
+                "documented path; its exact real access point wasn't "
+                "found in the time spent."
+            ),
         ),
         DataSource(
             key="ensemble_perturbations",
