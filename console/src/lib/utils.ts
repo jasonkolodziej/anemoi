@@ -8,8 +8,9 @@ export function cn(...inputs: ClassValue[]): string {
 }
 
 //: Mirrors anemoi.time_utils.SYNOPTIC_HOURS -- every real cycle label must
-//: land on one of these, or the API rejects it (require_synoptic).
-const SYNOPTIC_HOURS = [0, 6, 12, 18] as const;
+//: land on one of these, or the API rejects it (require_synoptic). Exported
+//: for the cycle date/time picker's hour selector (CycleDateTimePicker.svelte).
+export const SYNOPTIC_HOURS = [0, 6, 12, 18] as const;
 
 /** Most recent synoptic time at or before `d`. Mirrors
  * anemoi.time_utils.floor_synoptic -- a raw `new Date()` is essentially
@@ -30,6 +31,24 @@ export function floorSynoptic(d: Date): Date {
 export function cycleLabel(d: Date): string {
 	const pad = (n: number) => String(n).padStart(2, '0');
 	return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}_${pad(d.getUTCHours())}Z`;
+}
+
+/** Cycle label -> Date, the inverse of `cycleLabel`. Mirrors
+ * anemoi.time_utils.parse_cycle_label. Returns `null` (not a throw) on a
+ * malformed label -- callers (the date/time picker syncing with a
+ * free-typed text field) need to keep working while the user is
+ * mid-edit, not crash on every keystroke that isn't yet a full label. */
+export function parseCycleLabel(label: string): Date | null {
+	const m = /^(\d{4})(\d{2})(\d{2})_(\d{2})Z$/.exec(label.trim());
+	if (!m) return null;
+	const [, year, month, day, hour] = m.map(Number);
+	const d = new Date(Date.UTC(year, month - 1, day, hour));
+	// Reject e.g. "20260231" (Feb 31) rather than silently rolling over to
+	// March -- Date.UTC() itself doesn't validate.
+	if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) {
+		return null;
+	}
+	return d;
 }
 
 export function formatUtc(iso: string): string {

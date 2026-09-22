@@ -12,6 +12,7 @@
 	import IntensityPDFChart from '$lib/components/anemoi/IntensityPDFChart.svelte';
 	import RIFlagBanner from '$lib/components/anemoi/RIFlagBanner.svelte';
 	import FlagsList from '$lib/components/anemoi/FlagsList.svelte';
+	import CycleDateTimePicker from '$lib/components/anemoi/CycleDateTimePicker.svelte';
 	import { cycleLabel, floorSynoptic, formatLatLon, formatUtc } from '$lib/utils';
 
 	const stormId = $derived(page.params.stormId!);
@@ -77,6 +78,7 @@
 						class="font-data w-40 rounded-md border border-border-strong bg-bg px-2.5 py-1.5 text-xs text-text"
 					/>
 				</div>
+				<CycleDateTimePicker bind:value={cycleInput} />
 				<div>
 					<label for="members-input" class="mb-1 block text-[11px] text-text-faint">members</label>
 					<input
