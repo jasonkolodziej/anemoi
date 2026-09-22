@@ -287,6 +287,47 @@ def test_build_real_deterministic_fn_uses_the_real_learned_fusion_with_all_five(
     assert pytest.approx(sum(forecast.contributors.values()), abs=1e-4) == 1.0
 
 
+@pytest.mark.torch
+def test_real_fusion_forecast_refuses_a_stale_latent_signature(tmp_path):
+    """A real, previously-unenforced gap: `production`/`in_stage` were
+    looked up independently per model with no cross-model consistency
+    check, so a Group 1 model's staging pick could change (e.g. via
+    `anemoi registry-reconcile` correcting a stale one) while fusion kept
+    silently combining its output with a learned model trained against a
+    *different* set of Group 1 checkpoints. `_real_fusion_forecast` must
+    now refuse itself (return None, the same signal a missing checkpoint
+    already uses) whenever the versions actually in use don't match
+    fusion's own recorded `latent_signature`."""
+    from anemoi.tracking.registry import GROUP1_MODELS, latent_signature
+    from anemoi.training.real_inference_cycle import _real_fusion_forecast
+
+    track = make_track("AL011985", n=SEQUENCE_LENGTH + 5)
+    current = track.fixes[-1]
+    registry = ModelRegistry(tmp_path / "registry")
+    store = _store()
+
+    trained_against = {name: 1 for name in GROUP1_MODELS}
+    _register_real_version(
+        "fusion", {"n_models": 5, "context_dim": 10, "hidden_dim": 8, "weight_floor": 0.02,
+                    "lead_hours": [12, 24, 36, 48, 72, 96, 120]},
+        x_shape=None, registry=registry, store=store, tmp_path=tmp_path,
+        latent_signature=latent_signature(trained_against),
+    )
+
+    per_model_abs = {
+        name: np.zeros((7, 3)) for name in ("lstm", "cnn", "transformer", "gnn", "pinn")
+    }
+
+    matching = dict(trained_against)
+    result = _real_fusion_forecast(registry, store, track, current, per_model_abs, matching)
+    assert result is not None
+
+    mismatched = dict(trained_against)
+    mismatched["lstm"] = 2  # lstm's real staging pick changed; fusion did not retrain
+    result = _real_fusion_forecast(registry, store, track, current, per_model_abs, mismatched)
+    assert result is None
+
+
 def test_build_real_deterministic_fn_raises_with_no_registered_models(tmp_path):
     from anemoi.inference.scheduler import CyclePlan
 

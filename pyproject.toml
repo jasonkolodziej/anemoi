@@ -1,6 +1,6 @@
 [project]
 name = "anemoi"
-version = "2.1.0"
+version = "2.2.0"
 description = "Anemoi hurricane forecast platform: Anemoi-Core deterministic engine + Anemoi-Spread diffusion ensemble (Scope v2.1)"
 readme = "README.md"
 license-files = ["LICEN[CS]E*"]

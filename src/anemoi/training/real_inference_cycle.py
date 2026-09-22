@@ -205,13 +205,34 @@ def _build_live_context(track: Track, current: Fix) -> np.ndarray | None:
 def _real_fusion_forecast(
     registry: ModelRegistry, checkpoint_store: CheckpointStore,
     track: Track, current: Fix, per_model_abs: dict[str, np.ndarray],
+    used_versions: dict[str, int],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, float]] | None:
     """The real, learned `ConsensusFusion` combination -- only possible
     when all five real Group 1 predictions are present, `fusion` itself
-    has a registered version, and there's enough real history for its
-    context vector. Returns ``None`` (not an exception) for the caller
-    to fall back to the non-learned consensus on any of those."""
-    from ..tracking.registry import Stage
+    has a registered version, there's enough real history for its context
+    vector, and (see below) the Group 1 checkpoints actually being served
+    right now are the ones fusion was trained against. Returns ``None``
+    (not an exception) for the caller to fall back to the non-learned
+    consensus on any of those.
+
+    **A real, previously-unenforced gap this closes:** `tracking.registry`
+    computes and records a real `latent_signature` for every derived
+    model, and the whole point (§5.7, Decision Log #4 -- "fragile latent
+    coupling") is that a Group 1 checkpoint change invalidates a derived
+    model trained on its old latents. But nothing in this real inference
+    path ever *checked* that signature before this -- `production`/
+    `in_stage` were looked up independently per model, with no
+    cross-model consistency check at all. Confirmed live: the deployed
+    registry's fusion v4 recorded `latent_signature="lstmv7-cnnv6-
+    transformerv5-gnnv5-pinnv5"`, but nothing would have stopped, say,
+    `lstm`'s staging pick changing to v1 (a real, better version -- see
+    `anemoi registry-reconcile`) while fusion kept silently combining its
+    output with a learned model that had never seen v1's outputs. This
+    check makes that combination refuse itself instead: a signature
+    mismatch degrades to the non-learned consensus, the same honest
+    fallback every other real fusion gap already uses.
+    """
+    from ..tracking.registry import Stage, latent_signature
     from .real_inference import InferenceLoadError, load_trained_model
 
     if set(per_model_abs) != set(_GROUP1_LIVE_MODELS):
@@ -219,6 +240,10 @@ def _real_fusion_forecast(
     version = registry.production("fusion") or registry.in_stage("fusion", Stage.STAGING)
     if version is None:
         return None
+    if version.latent_signature is not None:
+        actual_signature = latent_signature(used_versions)
+        if version.latent_signature != actual_signature:
+            return None
     context = _build_live_context(track, current)
     if context is None:
         return None
@@ -275,6 +300,12 @@ def build_real_deterministic_fn(
 
         per_model_abs: dict[str, np.ndarray] = {}
         recent_errors: dict[str, float] = {}
+        # Which Group 1 *version* actually produced each per_model_abs
+        # entry -- not just which model. `_real_fusion_forecast` needs this
+        # to refuse a fusion checkpoint whose own recorded latent_signature
+        # no longer matches what's really being served (see its own
+        # docstring for the real gap this closes).
+        used_versions: dict[str, int] = {}
         # Why each model didn't contribute, built unconditionally (a few
         # short strings, no real cost) -- folded into InferenceCycleError's
         # own message below rather than just "no real model contributed."
@@ -325,6 +356,7 @@ def build_real_deterministic_fn(
                 continue
 
             per_model_abs[name] = abs_pred
+            used_versions[name] = version.version
             error = version.metrics.get("track_error_48h_nm")
             recent_errors[name] = error if error and error > 0 else _UNKNOWN_ERROR_SENTINEL
 
@@ -336,7 +368,7 @@ def build_real_deterministic_fn(
 
         n_leads = len(DEFAULT_LEADS)
         real_fusion = _real_fusion_forecast(
-            registry, checkpoint_store, track, current, per_model_abs,
+            registry, checkpoint_store, track, current, per_model_abs, used_versions,
         )
         if real_fusion is not None:
             lats, lons, winds, contributors = real_fusion

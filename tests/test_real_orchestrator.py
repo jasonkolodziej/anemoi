@@ -205,6 +205,44 @@ def test_second_run_compares_against_the_first_as_incumbent(runner):
     assert "no incumbent" not in " ".join(runner.promotions["lstm"].reasons)
 
 
+def test_incumbent_is_the_champion_not_the_most_recently_registered_version(runner, monkeypatch):
+    """The real bug this fixes, found live in the deployed registry: v1
+    stages (no incumbent), v2 is worse than v1 and correctly stays NONE --
+    but a v3 that's worse than the real champion (v1) yet *better than v2*
+    must still be blocked. Comparing against `versions(...)[-1]` (v2, not
+    itself a champion) would wrongly let v3 through."""
+    task = Task(
+        name="lstm", kind="train", depends_on=(), execution_mode=ExecutionMode.SEQUENTIAL,
+        gpu_memory_gb=8, hours_low=1.0, hours_high=2.0,
+    )
+    runner(task)  # v1: no incumbent, stages
+    assert runner.registry.latest("lstm").stage is Stage.STAGING
+
+    def _metrics_run(value):
+        def _run(*args, **kwargs):
+            run, _metrics, artifacts = _fake_curriculum_run("lstm")
+            m = dict(FAKE_METRICS_VALUES)
+            m["track_error_48h_nm"] = value
+            metrics = MetricSet(split="val", flavor=Flavor.GDAS_FINETUNE, values=m)
+            return run, metrics, artifacts
+        return _run
+
+    base = FAKE_METRICS_VALUES["track_error_48h_nm"]
+    monkeypatch.setattr(
+        "anemoi.training.real_run.run_lstm_curriculum", _metrics_run(base * 10)
+    )
+    runner(task)  # v2: much worse than champion v1 -> blocked, stays NONE
+    assert runner.registry.get("lstm", 2).stage is Stage.NONE
+
+    monkeypatch.setattr(
+        "anemoi.training.real_run.run_lstm_curriculum", _metrics_run(base * 5)
+    )
+    runner(task)  # v3: better than v2, but still worse than the real champion v1
+    assert not runner.promotions["lstm"].promote_to_staging
+    assert runner.registry.get("lstm", 3).stage is Stage.NONE
+    assert runner.registry.champion("lstm").version == 1
+
+
 def test_latents_task_fails_cleanly_if_group1_is_incomplete(runner):
     """`_run_latents` checks all five Group 1 models have actually run in
     THIS runner before extracting -- calling it standalone (no Group 1

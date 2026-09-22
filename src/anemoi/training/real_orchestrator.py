@@ -260,10 +260,17 @@ class RealOrchestratorRunner:
             group1_versions = {m: self.registry.latest(m).version for m in GROUP1_MODELS}
             sig = latent_signature(group1_versions)
 
-        existing = self.registry.versions(task.name)
+        # The incumbent a candidate must beat is the version real inference
+        # is actually using (production, else staging) -- not `versions(...)
+        # [-1]`, the most recently *registered* version regardless of stage.
+        # That was a real, found bug: it only required beating the immediate
+        # predecessor, so a candidate worse than an older, still-champion
+        # version could still reach staging if that predecessor wasn't
+        # itself the champion. See `ModelRegistry.champion`'s own docstring.
+        champion = self.registry.champion(task.name)
         incumbent = (
-            MetricSet(split="val", flavor=existing[-1].input_flavor, values=existing[-1].metrics)
-            if existing
+            MetricSet(split="val", flavor=champion.input_flavor, values=champion.metrics)
+            if champion
             else None
         )
 
