@@ -5,11 +5,28 @@
 	 * scale (a few hundred nm) the distortion is negligible, and it keeps
 	 * this console self-contained with no external tile dependency.
 	 *
+	 * Real coastlines, not just a synthetic graticule: `atlantic-coastline-
+	 * 110m.json` is Natural Earth's 110m land dataset (public domain, no
+	 * attribution required), clipped to the HURDAT2 Atlantic basin's actual
+	 * range (lon -100..15, lat -5..65) and simplified to ~0.02 degree
+	 * tolerance -- 25 features, ~40KB, bundled at build time. Still zero
+	 * runtime network calls/tile server -- it's drawn through the exact same
+	 * `project()` function as the track/cone, just real polygons instead of
+	 * a grid line pattern.
+	 *
 	 * The forecast track is drawn in the Fusion neutral colour: it *is* the
 	 * consensus of all six models, so it takes the "no single god" colour by
 	 * the same logic the brief gives Anemoi-Fusion itself.
 	 */
 	import type { ConeSegmentOut, FixOut, TrackPointOut } from '$lib/api/types';
+	import coastlineData from '$lib/data/atlantic-coastline-110m.json';
+
+	type GeoRing = [number, number][];
+	type GeoPolygon = GeoRing[];
+	type CoastlineFeature = {
+		geometry: { type: 'Polygon'; coordinates: GeoPolygon } | { type: 'MultiPolygon'; coordinates: GeoPolygon[] };
+	};
+	const COASTLINE = coastlineData as unknown as { features: CoastlineFeature[] };
 
 	interface Props {
 		history: FixOut[];
@@ -72,6 +89,24 @@
 		}).join(' ')
 	);
 	const forecastLength = $derived(forecastTrack.length * 40); // rough stroke length for the reveal animation
+
+	function ringPath(ring: GeoRing): string {
+		return ring.map(([lon, lat], i) => {
+			const p = project(lat, lon);
+			return `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`;
+		}).join(' ') + ' Z';
+	}
+	function polygonPath(rings: GeoPolygon): string {
+		return rings.map(ringPath).join(' ');
+	}
+	// The SVG viewBox clips anything outside 0..W/0..H by default (root
+	// <svg> is UA-styled overflow:hidden) -- no need to pre-filter features
+	// by bounds, the 25-feature dataset is cheap to project in full every time.
+	const coastlinePaths = $derived(
+		COASTLINE.features.map((f) =>
+			f.geometry.type === 'Polygon' ? polygonPath(f.geometry.coordinates) : f.geometry.coordinates.map(polygonPath).join(' ')
+		)
+	);
 </script>
 
 <svg viewBox={`0 0 ${W} ${H}`} class="w-full rounded-md border border-border bg-surface" role="img" aria-label="Storm track and cone of uncertainty">
@@ -81,6 +116,13 @@
 		</pattern>
 	</defs>
 	<rect width={W} height={H} fill="url(#graticule)" />
+
+	<!-- Real coastlines (Natural Earth 110m, see the header comment) --
+	     drawn under the track/cone, in the neutral surface tone so land
+	     reads as geographic context, not as a competing data colour. -->
+	{#each coastlinePaths as d, i (i)}
+		<path {d} fill="var(--color-surface-raised)" stroke="var(--color-border-strong)" stroke-width="1" fill-rule="evenodd" />
+	{/each}
 
 	<!-- Cone of uncertainty: overlapping circles per lead time, dashed ring
 	     when the segment fell back to climatology (build_cone's honesty guard). -->
@@ -129,6 +171,7 @@
 	{/if}
 </svg>
 <div class="mt-2 flex flex-wrap items-center gap-4 text-[11px] text-text-faint">
+	<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-sm border border-border-strong bg-surface-raised"></span>land</span>
 	<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-action"></span>current fix</span>
 	<span class="flex items-center gap-1.5"><span class="inline-block h-px w-4 border-t border-dashed border-text-faint"></span>archive track</span>
 	<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-fusion"></span>forecast (fusion)</span>
