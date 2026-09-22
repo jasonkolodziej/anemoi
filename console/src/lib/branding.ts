@@ -94,10 +94,22 @@ export const GODS: WindGod[] = [
 ];
 
 export const FUSION_COLOR = '#F8FAFC';
+export const FUNCTIONAL_COLORS = {
+	Eye: '#F8FAFC',
+	Cirrus: '#94A3B8',
+	Cumulus: '#64748B',
+	Landfall: '#F43F5E',
+	Clear: '#22D3EE'
+} as const;
 export const STRUCTURAL_COLORS: Record<'SE' | 'SW', string> = {
-	SE: '#FB923C', // Euronotus -- logo glyph only
-	SW: '#A3E635' // Lips -- logo glyph only
+	SE: '#FB923C', // Euronotus -- structural-only; repurposed as Training status in v3
+	SW: '#A3E635' // Lips -- structural-only; repurposed as Degraded status in v3
 };
+export const STATUS_COLORS = {
+	online: FUNCTIONAL_COLORS.Clear,
+	training: STRUCTURAL_COLORS.SE,
+	degraded: STRUCTURAL_COLORS.SW
+} as const;
 
 const BY_SLUG = new Map(GODS.map((g) => [g.slug, g]));
 const BY_ARCHITECTURE = new Map(GODS.map((g) => [g.architecture, g]));

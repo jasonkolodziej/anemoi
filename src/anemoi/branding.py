@@ -77,13 +77,31 @@ _BY_ARCHITECTURE = {g.architecture: g for g in GODS}
 #: so the eight-point wind rose closes. Never assign these to data -- if a
 #: colour appears on a track line it must map to exactly one model.
 STRUCTURAL_COLORS: dict[str, str] = {
-    "SE": "#FB923C",  # Euronotus
-    "SW": "#A3E635",  # Lips
+    "SE": "#FB923C",  # Euronotus -- structural only; repurposed as Training in v3
+    "SW": "#A3E635",  # Lips -- structural only; repurposed as Degraded in v3
+}
+
+#: Functional colors (§5.4) used for neutral text and state semantics, not for
+#: model identity. These are deliberately separate from the six-god palette.
+FUNCTIONAL_COLORS: dict[str, str] = {
+    "Eye": "#F8FAFC",
+    "Cirrus": "#94A3B8",
+    "Cumulus": "#64748B",
+    "Landfall": "#F43F5E",
+    "Clear": "#22D3EE",
 }
 
 #: The fusion layer is a model but not a god: it is the consensus of all six,
 #: so it takes the neutral Eye colour rather than a direction.
-FUSION_COLOR = "#F8FAFC"
+FUSION_COLOR = FUNCTIONAL_COLORS["Eye"]
+
+#: Status semantics (§8.2). These are not model identity colors.
+STATUS_COLORS: dict[str, str] = {
+    "online": FUNCTIONAL_COLORS["Clear"],
+    "training": STRUCTURAL_COLORS["SE"],
+    "degraded": STRUCTURAL_COLORS["SW"],
+    "offline": FUNCTIONAL_COLORS["Cumulus"],
+}
 
 
 def god(slug_or_architecture: str) -> WindGod:
@@ -138,7 +156,9 @@ __all__ = [
     "WindGod",
     "GODS",
     "STRUCTURAL_COLORS",
+    "FUNCTIONAL_COLORS",
     "FUSION_COLOR",
+    "STATUS_COLORS",
     "god",
     "experiment_name",
     "color_for",
