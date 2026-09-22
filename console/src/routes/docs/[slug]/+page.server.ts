@@ -19,5 +19,5 @@ export const load: PageServerLoad = ({ params }) => {
 	if (!page) error(404, 'Wiki page not found');
 
 	const html = readFileSync(join(process.cwd(), 'static', 'wiki', `${page.slug}.html`), 'utf8');
-	return { title: page.title, slug: page.slug, html };
+	return { title: page.title, slug: page.slug, html, related: page.related ?? [] };
 };

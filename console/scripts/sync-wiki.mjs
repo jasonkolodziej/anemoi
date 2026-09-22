@@ -106,6 +106,22 @@ function parseSections(homeRaw, manifest) {
 	}));
 }
 
+function extractRelated(raw) {
+	// Most wiki pages end with a trailing `---\n\nRelated: [Text](Page) ·
+	// [Text](Page) ...` line -- pulled out here so it can render as its own
+	// "Related" section in the On This Page rail instead of (or in addition
+	// to) plain inline text at the bottom of the content. Returns the raw
+	// slugs; resolved against the manifest (for canonical titles, and to
+	// drop any dead link) once the full page list is known, after the loop.
+	const match = raw.match(/\n---\n+Related:\s*(.+?)\s*$/s);
+	if (!match) return { body: raw, relatedSlugs: [] };
+	const relatedSlugs = [...match[1].matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map(([, page]) =>
+		page.toLowerCase()
+	);
+	const body = raw.slice(0, match.index).trimEnd() + '\n';
+	return { body, relatedSlugs };
+}
+
 function stripToText(markdown) {
 	// Search-index body text -- crude but sufficient for substring/fuzzy
 	// matching, and avoids a second full HTML round-trip just to strip tags.
@@ -138,6 +154,7 @@ try {
 
 	const manifest = [];
 	const searchIndex = [];
+	const relatedSlugsBySlug = new Map();
 	let homeRaw = '';
 	for (const file of pages) {
 		const raw = readFileSync(join(tmp, file), 'utf8');
@@ -146,13 +163,27 @@ try {
 		const title = h1 ? h1[1].trim() : file.replace(/\.md$/, '').replace(/-/g, ' ');
 		if (file === 'Home.md') homeRaw = raw;
 
-		const html = String(processor.processSync(raw));
+		const { body, relatedSlugs } = extractRelated(raw);
+		relatedSlugsBySlug.set(slug, relatedSlugs);
+
+		const html = String(processor.processSync(body));
 		writeFileSync(join(STATIC_DIR, `${slug}.html`), html);
 
 		manifest.push({ slug, title });
-		searchIndex.push({ id: slug, title, body: stripToText(raw) });
+		searchIndex.push({ id: slug, title, body: stripToText(body) });
 	}
 	manifest.sort((a, b) => a.title.localeCompare(b.title));
+
+	// Resolve related-page slugs to canonical titles now that every page's
+	// title is known, dropping anything that isn't a real page.
+	const titleBySlug = new Map(manifest.map((p) => [p.slug, p.title]));
+	for (const page of manifest) {
+		const related = (relatedSlugsBySlug.get(page.slug) ?? [])
+			.filter((slug) => titleBySlug.has(slug))
+			.map((slug) => ({ slug, title: titleBySlug.get(slug) }));
+		if (related.length > 0) page.related = related;
+	}
+
 	writeFileSync(join(MANIFEST_DIR, 'manifest.json'), JSON.stringify(manifest, null, '\t') + '\n');
 	writeFileSync(join(STATIC_DIR, 'search-index.json'), JSON.stringify(searchIndex));
 
