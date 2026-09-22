@@ -674,6 +674,17 @@ def cmd_registry_reconcile(args: argparse.Namespace) -> int:
     regaining the learned combination's real benefit needs a real
     diffusion/fusion retrain (§5.7's cascade), which is genuinely out of
     this command's scope (no training, no GPU, by design).
+
+    A second real gap this closes, found live: candidacy used to be
+    metrics-only, so a version registered before #78 (no ``arch_params``
+    tag -- `training.real_inference.load_trained_model` can't reconstruct
+    its architecture at all) could out-score every real, loadable version
+    on the metric alone and get staged anyway. Confirmed live: this
+    command had staged lstm v1, cnn v5 and gnn v4 -- all pre-#78, all
+    `InferenceLoadError` on every real cycle -- over newer versions that
+    actually serve. Candidacy now requires a real ``arch_params`` tag and
+    a real ``checkpoint_uri``, i.e. actually loadable, not just well-scored
+    on paper.
     """
     import math
 
@@ -690,14 +701,20 @@ def cmd_registry_reconcile(args: argparse.Namespace) -> int:
         value = v.metrics.get(args.primary_metric)
         return value if isinstance(value, int | float) and math.isfinite(value) else None
 
+    def _loadable(v) -> bool:
+        return "arch_params" in v.tags and bool(v.checkpoint_uri)
+
     changed: list[str] = []
     for model in ALL_MODELS:
         if registry.production(model) is not None:
             print(f"{model}: has a production version -- skipped (§5.3 manual gate)")
             continue
-        candidates = [v for v in registry.versions(model) if _finite(v) is not None]
+        candidates = [v for v in registry.versions(model) if _finite(v) is not None and _loadable(v)]
         if not candidates:
-            print(f"{model}: no version has a real, finite {args.primary_metric!r} -- skipped")
+            print(
+                f"{model}: no version has a real, finite {args.primary_metric!r} "
+                "and is actually loadable (arch_params + checkpoint_uri) -- skipped"
+            )
             continue
         best = min(candidates, key=_finite)
         current = registry.in_stage(model, Stage.STAGING)
