@@ -38,6 +38,8 @@ from ..data.availability import LatencyOracle
 from ..data.besttrack import Fix, Track, TrackQuality
 from ..inference.cycle import CycleOutput, DeterministicForecast, run_cycle
 from ..inference.scheduler import plan_cycle
+from ..monitoring.drift import DriftReport
+from ..monitoring.skew import SkewReport
 from ..tracking.registry import ModelRegistry
 
 #: How recently a storm's latest real fix must be to count as "active" --
@@ -234,6 +236,57 @@ class RealState:
             return storm.cycles[cycle]
         except KeyError as exc:
             raise LookupError(f"cycle {cycle!r} has not been run for {storm_id!r}") from exc
+
+    # ---- monitoring: drift & skew ---------------------------------------
+    #
+    # A real bug, not a design choice: `api.routers.monitoring`/`retraining`
+    # call `state.drift_report`/`skew_report`/`pending_retrain_jobs`
+    # unconditionally, on whatever `state_dependency()` returns -- but this
+    # class's own docstring's claim of "the exact same public surface
+    # DemoState does" was never actually true for these three. Calling them
+    # against a real deployment 500s (an AttributeError with no CORS
+    # headers on the error response, which a browser reports as an opaque
+    # "TypeError: Load failed" -- found by actually visiting the deployed
+    # console's /monitoring page, not assumed).
+    #
+    # `DemoState`'s versions generate synthetic reference/live distributions
+    # from `np.random.default_rng` -- fabricating numbers like that under a
+    # *real* deployment would be actively misleading, not just incomplete.
+    # Real drift detection needs a real reference distribution (the
+    # standardisation stats each model's training run fit) compared against
+    # real live samples collected over time -- neither exists yet. Real skew
+    # needs a real paired ERA5T-vs-operational dataset, which requires a
+    # real ERA5T ingestion path this deployment doesn't have either. Both
+    # are real, separate pieces of future work, not something to fake here.
+    #
+    # So: honest zero/empty reports, not synthetic ones and not a crash --
+    # `n_live=0`/`n=0` reads unambiguously as "nothing has been compared
+    # yet," and skew's `reasons` says so explicitly (drift's `DriftReport`
+    # has no free-text field to add the same explicit note to, but its
+    # `summary()` -- "no feature drift over 0 live samples" -- is
+    # self-explanatory given zero samples).
+
+    def drift_report(self, model: str) -> DriftReport:
+        return DriftReport(features=(), n_live=0)
+
+    def skew_report(self, *, lead_hours: int = 48) -> SkewReport:
+        now = datetime.now(UTC)
+        return SkewReport(
+            lead_hours=lead_hours, n=0, window_start=now, window_end=now,
+            mean_track_delta_nm=0.0, mean_abs_intensity_delta_kt=0.0, intensity_bias_kt=0.0,
+            alert=False,
+            reasons=(
+                "real ERA5T-vs-operational skew audit not yet available for "
+                "real-ingested storms (needs a real paired ERA5T dataset, not "
+                "yet built)",
+            ),
+        )
+
+    def pending_retrain_jobs(self) -> list:
+        # Empty, not fabricated: real drift/skew detection (above) has
+        # nothing to trigger on yet, so "no pending triggers" is the
+        # honest answer, not a stand-in for "not implemented."
+        return []
 
 
 _REAL_STATE: RealState | None = None
