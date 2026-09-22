@@ -345,6 +345,7 @@ def build_real_deterministic_fn(
         return DeterministicForecast(
             target_time=plan.target_time, lead_hours=DEFAULT_LEADS,
             lats=lats, lons=lons, winds_kt=winds, contributors=contributors,
+            per_model_tracks=dict(per_model_abs),
         )
 
     return deterministic_fn

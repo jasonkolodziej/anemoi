@@ -140,10 +140,9 @@ class DemoState:
             plan,
             fix,
             deterministic,
-            lambda det, n: climatological_ensemble(
-                det, n_members=min(members, n), seed=hash(cycle) & 0xFFFF
-            ),
+            lambda det, n: climatological_ensemble(det, n_members=n, seed=hash(cycle) & 0xFFFF),
             coastline=coastline,
+            requested_members=members,
         )
         with self._lock:
             storm.cycles[output.label] = output

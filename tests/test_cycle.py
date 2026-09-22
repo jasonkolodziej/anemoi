@@ -138,6 +138,52 @@ def test_nominal_plan_does_not_flag_load_shed():
     assert not any(f.startswith("load_shed") for f in out.flags)
 
 
+def test_caller_requested_members_is_honored_on_the_happy_path():
+    plan = plan_cycle(T, LatencyOracle())
+    assert plan.requested_ensemble_members == 20
+    out = run_cycle(plan, make_fix(), deterministic_fn, good_ensemble, requested_members=10)
+    assert out.products.ensemble_size == 10
+
+
+def test_caller_requested_members_is_honored_by_the_climatological_fallback():
+    """A real bug, found via the deployed console: a caller-requested member
+    count (e.g. the API's own `members` field) only ever reached the happy
+    path before this -- the moment Anemoi-Spread failed (the common case
+    today, PINN's live-ensemble gap), `run_cycle`'s own internal
+    climatological_ensemble fallback silently reverted to the scheduler's
+    raw `plan.requested_ensemble_members` (20), discarding whatever the
+    caller actually asked for. `ensemble_size` in the response payload is
+    the only place a caller could see this -- there is no flag for it,
+    since nothing about it looked like a failure from run_cycle's own
+    point of view."""
+
+    def crashing(_det, _n):
+        raise RuntimeError("CUDA out of memory")
+
+    plan = plan_cycle(T, LatencyOracle())
+    assert plan.requested_ensemble_members == 20
+    out = run_cycle(plan, make_fix(), deterministic_fn, crashing, requested_members=10)
+    assert out.products.ensemble_size == 10
+    assert any(f.startswith("spread_fallback") for f in out.flags)
+
+
+def test_caller_requested_members_never_exceeds_the_scheduler_cap():
+    """The caller's request is a ceiling, not an override -- load shedding
+    (a real operational time-budget decision) must still win if the caller
+    asks for more than the scheduler currently allows."""
+    oracle = LatencyOracle()
+    oracle.set_arrival("besttrack_working", T, T + timedelta(hours=3))
+    plan = plan_cycle(T, oracle)
+    assert plan.load_shed
+    assert plan.requested_ensemble_members == 10
+
+    out = run_cycle(
+        plan, make_fix(TrackQuality.ESTIMATED), deterministic_fn, good_ensemble,
+        requested_members=50,
+    )
+    assert out.products.ensemble_size == 10
+
+
 def test_stale_nwp_is_flagged_on_the_payload():
     oracle = LatencyOracle()
     oracle.set_missing("gdas_gfs", T - timedelta(hours=6))

@@ -45,6 +45,15 @@ class DeterministicForecast:
     winds_kt: np.ndarray
     #: Which models contributed, and their fusion weights.
     contributors: dict[str, float] = field(default_factory=dict)
+    #: Each contributing Group 1 model's own absolute (lat, lon, wind_kt)
+    #: track, shape ``(n_leads, 3)`` per entry, keyed the same as
+    #: ``contributors`` -- real, not derived: `training.real_inference_cycle
+    #: .build_real_deterministic_fn` already computes each model's own
+    #: prediction before fusing them into the single track above; this is
+    #: that same array, just no longer discarded once fusion has it.
+    #: Empty for the synthetic fallback and `DemoState` (neither runs a
+    #: real per-model forward pass to have one).
+    per_model_tracks: dict[str, np.ndarray] = field(default_factory=dict)
 
     def at(self, lead: int) -> tuple[float, float, float]:
         i = self.lead_hours.index(lead)
@@ -153,6 +162,7 @@ def run_cycle(
     now: datetime | None = None,
     coastline: tuple[float, float] | None = None,
     ensemble_seed: int = 0,
+    requested_members: int | None = None,
 ) -> CycleOutput:
     """Run one forecast cycle end to end.
 
@@ -161,6 +171,21 @@ def run_cycle(
     * the initial fix must not be FINAL-quality (§4.6.2 -- final best-track is a
       label, and in real time it does not exist yet anyway);
     * every source the plan resolved must be operational-role (§4.6).
+
+    ``requested_members``, when given, is a caller-side cap (e.g. a real API
+    request's own ``members`` field) -- real, distinct from ``plan.
+    requested_ensemble_members``, which is the *scheduler's* own number
+    (``DEFAULT_ENSEMBLE_MEMBERS``, reduced to ``REDUCED_ENSEMBLE_MEMBERS``
+    under load shedding). The effective count is always the smaller of the
+    two, applied identically whether ``ensemble_fn`` succeeds or the
+    climatological fallback below takes over. Found for real: previously
+    only ``ensemble_fn`` itself (via whatever ad hoc clamping a caller
+    wrapped it in, e.g. real_state.py's own ``min(members, n)``) ever saw
+    the caller's request -- the fallback path always used the scheduler's
+    raw number, so a caller-requested member count was silently discarded
+    the moment Anemoi-Spread failed and climatology substituted (the
+    common case today, see #100/PINN's live-ensemble gap), even though
+    the cycle's own ``flags``/``payload`` never signalled anything wrong.
     """
     flags: list[str] = []
 
@@ -187,17 +212,21 @@ def run_cycle(
             flags.append(f"missing:{status.source_key}")
 
     deterministic = deterministic_fn(plan, initial_fix)
-    requested_members = plan.requested_ensemble_members
+    effective_members = plan.requested_ensemble_members
+    if requested_members is not None:
+        effective_members = min(effective_members, requested_members)
     if plan.load_shed:
-        flags.append(f"load_shed:members={requested_members}")
+        flags.append(f"load_shed:members={effective_members}")
 
     try:
-        members = ensemble_fn(deterministic, requested_members)
+        members = ensemble_fn(deterministic, effective_members)
         if not members:
             raise CycleError("ensemble generator returned no members")
     except Exception as exc:  # noqa: BLE001 - any Anemoi-Spread failure degrades, never blocks
         flags.append(f"spread_fallback:{type(exc).__name__}")
-        members = climatological_ensemble(deterministic, n_members=requested_members, seed=ensemble_seed)
+        members = climatological_ensemble(
+            deterministic, n_members=effective_members, seed=ensemble_seed,
+        )
 
     products = build_products(
         members, coastline=coastline, degraded=bool(flags)

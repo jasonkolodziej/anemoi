@@ -124,6 +124,11 @@ def test_real_state_run_cycle_degrades_to_the_synthetic_fallback(client):
     # in (the deterministic fallback itself has no flag of its own;
     # RealState.run_cycle's try/except degrades that one silently).
     assert any(f.startswith("spread_fallback:") for f in body["payload"]["flags"])
+    # The synthetic fallback runs no real per-model forward pass, so
+    # per_model_tracks must be genuinely empty here, not padded with
+    # copies of the fused track -- the console's map only draws real
+    # per-model lines when this is non-empty.
+    assert body["products"]["per_model_tracks"] == {}
 
     # #100: the real reason must be captured (always, cheap), even though
     # this test doesn't expose it over HTTP (ANEMOI_API_DEBUG unset).

@@ -124,6 +124,12 @@ class CycleProducts(BaseModel):
 
     deterministic_track: list[TrackPointOut]
     contributors: dict[str, float]
+    #: Each contributing Group 1 model's own track, keyed by architecture
+    #: slug (lstm/cnn/transformer/gnn/pinn) -- same real per-model
+    #: prediction `deterministic_track`/`contributors` are fused from, not
+    #: derived after the fact. Empty for the synthetic fallback and demo
+    #: cycles (neither runs a real per-model forward pass).
+    per_model_tracks: dict[str, list[TrackPointOut]]
     intensity_pdf: list[IntensityPercentiles]
     landfall_probability: float | None
     notes: list[str]
