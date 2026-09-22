@@ -295,6 +295,9 @@
 						<div><p class="text-text-faint">intensity bias</p><p class="font-data mt-1 text-sm text-text">{skew.intensity_bias_kt >= 0 ? '+' : ''}{skew.intensity_bias_kt.toFixed(1)} kt</p></div>
 						<div><p class="text-text-faint">samples</p><p class="font-data mt-1 text-sm text-text">{skew.n}</p></div>
 					</div>
+					{#each skew.reasons as reason (reason)}
+						<p class="mt-3 text-[11px] text-text-muted">{reason}</p>
+					{/each}
 				</CardContent>
 			</Card>
 		{/if}

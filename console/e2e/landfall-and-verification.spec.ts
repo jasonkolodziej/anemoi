@@ -57,3 +57,40 @@ test('verification panel shows real system-wide skew data, not storm-scoped', as
 	await expect(page.getByText('mean |intensity delta|')).toBeVisible();
 	await expect(page.getByText('full monitoring →')).toBeVisible();
 });
+
+// Real regression: RealState.skew_report() returns n=0/all-zero stats with a
+// real explanation in `reasons` ("not yet built for real-ingested storms")
+// rather than an error -- getSkew() resolves fine, so the old markup just
+// showed four meaningless zeros with a "nominal" badge and no indication
+// why, which reads as "the card is broken" (reported live). /monitoring
+// already rendered `reasons`; the storm-detail card's own copy of this
+// panel didn't. Faked here via page.route since the demo backend's skew
+// stub never has a non-empty reasons array to rely on.
+test('verification panel surfaces skew.reasons instead of silently showing zeros', async ({
+	page,
+}) => {
+	await page.route('**/v1/monitoring/skew*', async (route) => {
+		await route.fulfill({
+			json: {
+				lead_hours: 48,
+				n: 0,
+				window_start: new Date().toISOString(),
+				window_end: new Date().toISOString(),
+				mean_track_delta_nm: 0,
+				mean_abs_intensity_delta_kt: 0,
+				intensity_bias_kt: 0,
+				alert: false,
+				reasons: [
+					'real ERA5T-vs-operational skew audit not yet available for real-ingested storms (needs a real paired ERA5T dataset, not yet built)',
+				],
+			},
+		});
+	});
+
+	await page.goto('/');
+	await page.locator('a[href^="/storms/"]').first().click();
+	await page.waitForSelector('#cycle-input');
+
+	await expect(page.getByText('Verification')).toBeVisible({ timeout: 10_000 });
+	await expect(page.getByText(/not yet available for real-ingested storms/)).toBeVisible();
+});
