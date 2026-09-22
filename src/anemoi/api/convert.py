@@ -82,6 +82,16 @@ def cycle_products_out(output: CycleOutput) -> s.CycleProducts:
         s.TrackPointOut(lead_hours=lh, lat=round(float(lat), 3), lon=round(float(lon), 3), wind_kt=round(float(w), 1))
         for lh, lat, lon, w in zip(det.lead_hours, det.lats, det.lons, det.winds_kt, strict=True)
     ]
+    per_model_tracks = {
+        name: [
+            s.TrackPointOut(
+                lead_hours=lh, lat=round(float(row[0]), 3), lon=round(float(row[1]), 3),
+                wind_kt=round(float(row[2]), 1),
+            )
+            for lh, row in zip(det.lead_hours, abs_pred, strict=True)
+        ]
+        for name, abs_pred in det.per_model_tracks.items()
+    }
     pdf = [
         s.IntensityPercentiles(
             lead_hours=lead,
@@ -96,6 +106,7 @@ def cycle_products_out(output: CycleOutput) -> s.CycleProducts:
     return s.CycleProducts(
         deterministic_track=track,
         contributors=dict(det.contributors),
+        per_model_tracks=per_model_tracks,
         intensity_pdf=pdf,
         landfall_probability=output.products.landfall_probability,
         notes=list(output.products.notes),

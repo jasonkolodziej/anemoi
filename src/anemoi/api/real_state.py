@@ -315,8 +315,8 @@ class RealState:
             return real_ensemble(det, n)
 
         output = run_cycle(
-            plan, fix, deterministic, lambda det, n: ensemble(det, min(members, n)),
-            coastline=coastline,
+            plan, fix, deterministic, ensemble,
+            coastline=coastline, requested_members=members,
         )
         with self._lock:
             storm.cycles[output.label] = output

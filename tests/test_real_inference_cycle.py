@@ -169,6 +169,18 @@ def test_build_real_deterministic_fn_combines_all_four_real_models(tmp_path):
     assert set(forecast.contributors) == {"lstm", "cnn", "transformer", "gnn"}
     assert pytest.approx(sum(forecast.contributors.values()), abs=1e-6) == 1.0
 
+    # #92-adjacent real console request: each model's own track, not just
+    # the fused one, must be real and available -- not derived after the
+    # fact (real_inference_cycle.py already computes this before fusing,
+    # it just used to be thrown away).
+    assert set(forecast.per_model_tracks) == set(forecast.contributors)
+    for track_arr in forecast.per_model_tracks.values():
+        assert track_arr.shape == (7, 3)  # 7 leads x (lat, lon, wind_kt)
+        assert np.all(np.isfinite(track_arr))
+        # Real per-model divergence, not the fused track duplicated five
+        # times -- at least one model's own lat differs from the fused one.
+        assert not np.allclose(track_arr[:, 0], forecast.lats)
+
 
 @pytest.mark.torch
 def test_build_real_deterministic_fn_uses_the_real_learned_fusion_with_all_five(tmp_path):
