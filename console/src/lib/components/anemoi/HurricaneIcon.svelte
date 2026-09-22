@@ -1,21 +1,32 @@
 <script lang="ts">
   import { cn, type PrimitiveSvgAttributes } from "$lib/utils.js";
 
-  let {
-    width = "364.78",
-    height = "334.07999",
-    ...restProps
-  }: PrimitiveSvgAttributes = $props();
+  // Native artwork bounds (Branding Brief v1.2 "Storm Dark" mark, the Even
+  // Six spiral -- console/tmp/ANEMOI_Identity_Decided.svg's glyph, paths
+  // unchanged). Deliberately non-square: the six ribbon arms are hand-tuned,
+  // not a perfect circle, so squashing to a square viewBox would distort
+  // the shape -- unlike WindRose's own mark, which is a circle by construction.
+  const NATIVE_WIDTH = 364.78;
+  const NATIVE_HEIGHT = 334.07999;
+
+  interface Props extends Omit<PrimitiveSvgAttributes, "width" | "height"> {
+    size?: number;
+    spinning?: boolean;
+  }
+
+  let { size = 28, spinning = false, class: className, ...restProps }: Props = $props();
+
+  const height = $derived((size * NATIVE_HEIGHT) / NATIVE_WIDTH);
 </script>
 
-<!-- viewBox="0 0 100 100" -->
-
 <svg
-  {width}
+  width={size}
   {height}
-  viewBox={`0 0 ${width} ${height}`}
+  viewBox={`0 0 ${NATIVE_WIDTH} ${NATIVE_HEIGHT}`}
   role="img"
+  aria-label="Anemoi"
   fill="currentColor"
+  class={cn(spinning ? 'motion-safe:animate-[spin_40s_linear_infinite]' : '', className)}
   {...restProps}
   id="hurricane-icon"
 >

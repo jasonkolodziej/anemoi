@@ -1,7 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/state';
-	import WindRose from '$lib/components/anemoi/WindRose.svelte';
+	import HurricaneIcon from '$lib/components/anemoi/HurricaneIcon.svelte';
 	import { cn } from '$lib/utils';
 
 	let { children } = $props();
@@ -24,7 +24,7 @@
 <div class="flex min-h-screen">
 	<aside class="flex w-56 shrink-0 flex-col border-r border-border bg-surface">
 		<a href="/" class="flex items-center gap-2.5 border-b border-border px-4 py-4">
-			<WindRose size={26} />
+			<HurricaneIcon size={26} />
 			<div>
 				<p class="font-display text-sm font-semibold leading-none text-text">Anemoi</p>
 				<p class="text-[10px] leading-none text-text-faint mt-1">Many winds. One forecast.</p>
