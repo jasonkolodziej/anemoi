@@ -9,7 +9,7 @@ real network or HURDAT2 file is needed.
 from __future__ import annotations
 
 import argparse
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -280,6 +280,304 @@ def test_cmd_train_schedule_passes_streaming_batch_size_and_num_workers_to_runne
     assert captured["streaming"] is True
     assert captured["batch_size"] == 16
     assert captured["num_workers"] == 3
+
+
+# --- cmd_retrain_check dispatch ----------------------------------------------
+#
+# `evaluate_all` (training.triggers) has been real and well-tested since #22,
+# but nothing outside tests ever called it -- confirmed by grep. These cover
+# the missing wiring: real signal-gathering (HURDAT2 data volume, a best-
+# effort API query) feeding evaluate_all, and dispatch restricted to the
+# three trigger shapes that actually match train-schedule's own schedule.
+
+
+def _retrain_check_args(tmp_path, **overrides) -> argparse.Namespace:
+    defaults = dict(
+        hurdat2="unused.txt", api_url=None, api_key=None, dry_run=True, now=None,
+        seed=1, n_augment=1, era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
+        registry_root=str(tmp_path / "registry"), streaming=False, batch_size=None,
+        num_workers=0,
+    )
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+def test_retrain_check_reports_no_dispatchable_trigger_on_an_ordinary_day(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [])
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+    args = _retrain_check_args(tmp_path, now="2026-09-15T00:00:00+00:00")
+
+    assert cli.cmd_retrain_check(args) == 0
+    out = capsys.readouterr().out
+    assert "0 real job(s)" in out
+    assert "no dispatchable trigger fired" in out
+
+
+def test_retrain_check_computes_real_data_volume_from_hurdat2(tmp_path, monkeypatch, capsys):
+    """§5.5's data-volume trigger (>500 new synoptic times since last
+    training) must be evaluated against a real count, not a stub -- register
+    an old lstm version, then give it a HURDAT2 track with 501 fixes after
+    that version's created_at."""
+    registry = ModelRegistry(tmp_path / "registry")
+    registry.register(
+        "lstm", run_id="old", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 100.0},
+    )
+    old_version = registry.latest("lstm")
+    old_version.created_at = "2020-01-01T00:00:00+00:00"
+    registry._save()  # noqa: SLF001 - test-only, to backdate created_at realistically
+
+    # 501 distinct, real, strictly-increasing synoptic times (6h apart).
+    base = datetime(2020, 1, 2, tzinfo=UTC)
+    fixes = tuple(
+        Fix(
+            storm_id="AL99", valid_time=base + timedelta(hours=6 * (i + 1)),
+            lat=20.0, lon=-60.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+            quality=TrackQuality.FINAL,
+        )
+        for i in range(501)
+    )
+    track = Track(storm_id="AL99", fixes=fixes)
+    monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [track])
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+
+    args = _retrain_check_args(tmp_path, now="2026-09-15T00:00:00+00:00")
+    assert cli.cmd_retrain_check(args) == 0
+    out = capsys.readouterr().out
+    assert "data_volume" in out
+    assert "no dispatchable trigger fired" not in out
+    assert "--dry-run" in out  # dry_run=True by default here -- must not dispatch
+
+
+def test_retrain_check_dispatches_the_real_schedule_when_a_trigger_fires(
+    tmp_path, monkeypatch, capsys
+):
+    """A dispatchable trigger (here: data volume) must invoke the exact same
+    real machinery `train-schedule` uses -- RealOrchestratorRunner +
+    orchestrator.run_schedule -- not a parallel, untested dispatch path."""
+    registry = ModelRegistry(tmp_path / "registry")
+    registry.register(
+        "lstm", run_id="old", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 100.0},
+    )
+    old_version = registry.latest("lstm")
+    old_version.created_at = "2020-01-01T00:00:00+00:00"
+    registry._save()  # noqa: SLF001
+
+    base = datetime(2020, 1, 2, tzinfo=UTC)
+    fixes = tuple(
+        Fix(
+            storm_id="AL99", valid_time=base + timedelta(hours=6 * (i + 1)),
+            lat=20.0, lon=-60.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+            quality=TrackQuality.FINAL,
+        )
+        for i in range(501)
+    )
+    track = Track(storm_id="AL99", fixes=fixes)
+    monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [track])
+
+    captured: dict = {}
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            captured["runner_kwargs"] = kwargs
+
+    class FakeResult:
+        outcomes: list = []
+        skipped: list = []
+        succeeded: list = ["lstm", "cnn", "transformer", "gnn", "pinn", "diffusion", "fusion"]
+        failed: list = []
+
+    def fake_run_schedule(schedule, runner):
+        captured["schedule_models"] = sorted(
+            t.name for wave in schedule.waves for t in wave.tasks if t.kind == "train"
+            and t.name in {"lstm", "cnn", "transformer", "gnn", "pinn"}
+        )
+        return FakeResult()
+
+    monkeypatch.setattr("anemoi.training.real_orchestrator.RealOrchestratorRunner", FakeRunner)
+    monkeypatch.setattr("anemoi.training.orchestrator.run_schedule", fake_run_schedule)
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+
+    args = _retrain_check_args(tmp_path, now="2026-09-15T00:00:00+00:00", dry_run=False)
+    assert cli.cmd_retrain_check(args) == 0
+    assert captured["schedule_models"] == ["cnn", "gnn", "lstm", "pinn", "transformer"]
+    out = capsys.readouterr().out
+    assert "succeeded:" in out
+
+
+def test_retrain_check_degrades_to_an_empty_season_when_the_api_is_unreachable(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [])
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+    args = _retrain_check_args(
+        tmp_path, now="2026-09-15T00:00:00+00:00", api_url="http://127.0.0.1:1",
+    )
+    assert cli.cmd_retrain_check(args) == 0
+    out = capsys.readouterr().out
+    assert "warning:" in out
+    assert "no dispatchable trigger fired" in out
+
+
+# --- cmd_registry_reconcile --------------------------------------------------
+
+
+def _reconcile_args(tmp_path, **overrides) -> argparse.Namespace:
+    defaults = dict(
+        registry_root=str(tmp_path / "registry"), primary_metric="track_error_48h_nm",
+        dry_run=False,
+    )
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+def test_registry_reconcile_re_stages_the_real_best_existing_version(tmp_path, monkeypatch, capsys):
+    """The exact live bug this closes: a worse v3 reached staging (comparing
+    against v2, not the true champion v1) while a better v1 sat unstaged.
+    Reconcile must find v1 and re-stage it, without retraining anything."""
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+
+    registry = ModelRegistry(tmp_path / "registry")
+    v1 = registry.register(
+        "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 274.3},
+    )
+    registry.register(
+        "lstm", run_id="b", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 274.6},
+    )
+    v3 = registry.register(
+        "lstm", run_id="c", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 300.0},
+    )
+    registry.transition("lstm", v3.version, Stage.STAGING)
+
+    args = _reconcile_args(tmp_path)
+    assert cli.cmd_registry_reconcile(args) == 0
+    out = capsys.readouterr().out
+    assert "lstm: re-staged v1" in out
+
+    fresh = ModelRegistry(tmp_path / "registry")  # a fresh read, not the same in-memory object
+    assert fresh.in_stage("lstm", Stage.STAGING).version == v1.version
+    assert fresh.get("lstm", v3.version).stage is Stage.ARCHIVED
+
+
+def test_registry_reconcile_dry_run_reports_without_transitioning(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+
+    registry = ModelRegistry(tmp_path / "registry")
+    registry.register(
+        "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 274.3},
+    )
+    v2 = registry.register(
+        "lstm", run_id="b", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 300.0},
+    )
+    registry.transition("lstm", v2.version, Stage.STAGING)
+
+    args = _reconcile_args(tmp_path, dry_run=True)
+    assert cli.cmd_registry_reconcile(args) == 0
+    out = capsys.readouterr().out
+    assert "would re-stage v1" in out
+
+    fresh = ModelRegistry(tmp_path / "registry")
+    assert fresh.in_stage("lstm", Stage.STAGING).version == v2.version  # unchanged
+
+
+def test_registry_reconcile_ignores_nan_metrics(tmp_path, monkeypatch, capsys):
+    """A real found bug in the reconcile logic itself: `min()` over values
+    including NaN is unreliable (NaN never compares less than anything),
+    so a real early/degenerate run with a NaN metric could get picked as
+    'best' purely by iteration order. Confirmed live: several deployed
+    models' v1 had a NaN track_error_48h_nm. NaN candidates must be
+    excluded outright, not merely deprioritised."""
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+
+    registry = ModelRegistry(tmp_path / "registry")
+    registry.register(
+        "cnn", run_id="a", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": float("nan")},
+    )
+    v2 = registry.register(
+        "cnn", run_id="b", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 250.0},
+    )
+    registry.transition("cnn", v2.version, Stage.STAGING)
+
+    args = _reconcile_args(tmp_path)
+    assert cli.cmd_registry_reconcile(args) == 0
+    out = capsys.readouterr().out
+    assert "cnn: v2 already staging" in out
+
+    fresh = ModelRegistry(tmp_path / "registry")
+    assert fresh.in_stage("cnn", Stage.STAGING).version == v2.version
+
+
+def test_registry_reconcile_warns_when_it_desyncs_a_derived_models_signature(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+
+    registry = ModelRegistry(tmp_path / "registry")
+    v1 = registry.register(
+        "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 274.3},
+    )
+    v2 = registry.register(
+        "lstm", run_id="b", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 300.0},
+    )
+    registry.transition("lstm", v2.version, Stage.STAGING)
+    fusion = registry.register(
+        "fusion", run_id="c", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 250.0},
+        latent_signature=f"lstmv{v2.version}-cnnv1-transformerv1-gnnv1-pinnv1",
+    )
+    registry.transition("fusion", fusion.version, Stage.STAGING)
+
+    args = _reconcile_args(tmp_path)
+    assert cli.cmd_registry_reconcile(args) == 0
+    out = capsys.readouterr().out
+    assert f"lstm: re-staged v{v1.version}" in out
+    assert "fusion v" in out and "latent_signature" in out and "no longer includes lstm" in out
+
+
+def test_registry_reconcile_never_touches_a_model_with_a_production_version(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+
+    registry = ModelRegistry(tmp_path / "registry")
+    v1 = registry.register(
+        "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 300.0},
+    )
+    registry.register(
+        "lstm", run_id="b", input_flavor=Flavor.GDAS_FINETUNE,
+        metrics={"track_error_48h_nm": 274.3},
+    )
+    registry.transition("lstm", v1.version, Stage.PRODUCTION)  # the worse one, deliberately
+
+    args = _reconcile_args(tmp_path)
+    assert cli.cmd_registry_reconcile(args) == 0
+    out = capsys.readouterr().out
+    assert "skipped (§5.3 manual gate)" in out
+
+    fresh = ModelRegistry(tmp_path / "registry")
+    assert fresh.production("lstm").version == v1.version  # untouched
 
 
 def test_cmd_registry_pull_hydrates_from_durable_storage(tmp_path, monkeypatch, capsys):

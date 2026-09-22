@@ -137,6 +137,20 @@ def test_invalidation_map_covers_group1_only():
     assert invalidated_by("diffusion") == ()
 
 
+def test_promoting_a_new_staging_version_archives_the_incumbent(tmp_path):
+    """Real bug: `transition`'s own docstring always promised this for any
+    stage, but only Stage.PRODUCTION ever did it -- two versions could
+    both end up marked `staging` simultaneously for the same model."""
+    reg = ModelRegistry(tmp_path)
+    v1 = reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+    v2 = reg.register("lstm", run_id="b", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+    reg.transition("lstm", v1.version, Stage.STAGING)
+    reg.transition("lstm", v2.version, Stage.STAGING)
+    assert reg.get("lstm", v1.version).stage is Stage.ARCHIVED
+    assert reg.in_stage("lstm", Stage.STAGING).version == v2.version
+    assert sum(1 for v in reg.versions("lstm") if v.stage is Stage.STAGING) == 1
+
+
 def test_promoting_a_new_production_archives_the_incumbent(tmp_path):
     reg = ModelRegistry(tmp_path)
     v1 = reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
@@ -145,6 +159,41 @@ def test_promoting_a_new_production_archives_the_incumbent(tmp_path):
     reg.transition("lstm", v2.version, Stage.PRODUCTION)
     assert reg.get("lstm", v1.version).stage is Stage.ARCHIVED
     assert reg.production("lstm").version == v2.version
+
+
+def test_champion_is_none_with_no_versions_registered(tmp_path):
+    reg = ModelRegistry(tmp_path)
+    assert reg.champion("lstm") is None
+
+
+def test_champion_prefers_production_over_staging(tmp_path):
+    reg = ModelRegistry(tmp_path)
+    v1 = reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+    v2 = reg.register("lstm", run_id="b", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+    reg.transition("lstm", v2.version, Stage.STAGING)
+    reg.transition("lstm", v1.version, Stage.PRODUCTION)
+    assert reg.champion("lstm").version == v1.version
+
+
+def test_champion_falls_back_to_staging_without_a_production_version(tmp_path):
+    reg = ModelRegistry(tmp_path)
+    reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+    v2 = reg.register("lstm", run_id="b", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+    reg.transition("lstm", v2.version, Stage.STAGING)
+    assert reg.champion("lstm").version == v2.version
+
+
+def test_champion_is_not_simply_the_most_recently_registered_version(tmp_path):
+    """The real bug `champion()` exists to close: a version can be
+    registered after the champion without ever becoming one (stage=none,
+    e.g. it lost its own promotion evaluation) -- `champion()` must not be
+    confused with `latest()`/`versions(...)[-1]` in that case."""
+    reg = ModelRegistry(tmp_path)
+    v1 = reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+    reg.transition("lstm", v1.version, Stage.STAGING)
+    reg.register("lstm", run_id="b", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
+    assert reg.latest("lstm").version != v1.version
+    assert reg.champion("lstm").version == v1.version
 
 
 def test_rollback_restores_the_previous_production_version(tmp_path):

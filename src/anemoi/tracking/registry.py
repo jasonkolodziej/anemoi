@@ -294,13 +294,43 @@ class ModelRegistry:
     def production(self, name: str) -> ModelVersion | None:
         return self.in_stage(name, Stage.PRODUCTION)
 
+    def champion(self, name: str) -> ModelVersion | None:
+        """The version actually serving real inference right now -- the
+        correct incumbent for a promotion decision (§5.3). Production if
+        one exists, else staging, else `None` (no champion yet).
+
+        Deliberately not `latest(name)` (the most recently *registered*
+        version, regardless of stage) -- a promotion candidate must beat
+        what real cycles are actually using, not whatever the version list
+        happens to end with. Using `latest` here was a real, found bug
+        (`training.real_orchestrator`/`cli.cmd_train` both did this): it let
+        a worse candidate reach staging whenever the immediately-prior
+        *registered* version wasn't itself the best one on record, since
+        each new candidate only ever had to beat its immediate predecessor,
+        not the version real inference was actually falling back to
+        (`inference.real_inference_cycle`'s own lookup is this exact
+        production-else-staging pattern, mirrored here).
+        """
+        return self.production(name) or self.in_stage(name, Stage.STAGING)
+
     # ---- transitions -----------------------------------------------------
 
     def transition(self, name: str, version: int, stage: Stage) -> ModelVersion:
-        """Move a version to a stage, archiving any incumbent in that stage."""
+        """Move a version to a stage, archiving any incumbent in that stage.
+
+        Real bug closed here: the docstring always promised this for *any*
+        stage, but the code only ever did it for `Stage.PRODUCTION` --
+        `Stage.STAGING` had no incumbent-archiving at all. Two versions
+        promoted to staging in sequence (a real, found scenario: `champion`
+        correctly beating each successive candidate) left both marked
+        `staging` simultaneously, which `in_stage`'s own `reversed()` search
+        papered over by always returning the newest match, but the
+        registry's on-disk state was genuinely inconsistent -- more than
+        one version claiming to be *the* staging candidate.
+        """
         target = self.get(name, version)
-        if stage is Stage.PRODUCTION:
-            incumbent = self.production(name)
+        if stage in (Stage.PRODUCTION, Stage.STAGING):
+            incumbent = self.in_stage(name, stage)
             if incumbent is not None and incumbent.version != version:
                 incumbent.stage = Stage.ARCHIVED
         target.stage = stage

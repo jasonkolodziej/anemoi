@@ -337,10 +337,13 @@ def cmd_train(args: argparse.Namespace) -> int:
     registry = ModelRegistry(
         args.registry_root, mlflow_client=mlflow_client_from_env(), checkpoint_store=store,
     )
-    existing = registry.versions(args.model)
+    # The incumbent is whichever version real inference is actually using
+    # (production, else staging), not `versions(...)[-1]` -- see
+    # `ModelRegistry.champion`'s own docstring for the real bug this closes.
+    champion = registry.champion(args.model)
     incumbent_metrics = (
-        MetricSet(split="val", flavor=existing[-1].input_flavor, values=existing[-1].metrics)
-        if existing
+        MetricSet(split="val", flavor=champion.input_flavor, values=champion.metrics)
+        if champion
         else None
     )
 
@@ -451,6 +454,164 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
     return 0 if not result.failed else 1
 
 
+def cmd_retrain_check(args: argparse.Namespace) -> int:
+    """Evaluate real retraining triggers (Retraining-Triggers wiki, §5.5)
+    against real signals and, if any calendar/data-volume trigger fires,
+    run the real training wave `train-schedule` runs.
+
+    The one entry point this system has for autonomous retraining -- meant
+    to run on an unattended schedule (a cron/systemd timer, a GCP
+    instance-schedule startup script), not to be watched by a human.
+    `evaluate_all` itself has been real and well-tested since #22; what was
+    missing was anything that actually called it with real signals and
+    acted on the result -- confirmed by grep: nothing in `src/` outside
+    tests ever called it before this command existed.
+
+    Real signals gathered here:
+
+    * ``now`` -- real wall-clock time (calendar/nightly triggers).
+    * ``new_synoptic_times`` -- real count of HURDAT2 fixes newer than the
+      most recently *registered* Group 1 version (any stage), i.e. "how
+      much real data has accumulated since we last tried training at all."
+    * Active storms and per-model drift -- a real query against a running
+      API's `/v1/storms` and `/v1/monitoring/drift/{model}` (best-effort:
+      a network failure degrades to an empty/no-drift signal with a
+      printed warning, never a crash -- this check must be safe to run
+      unattended every day).
+
+    **Drift/skew will not fire against a real deployment today.**
+    `api.real_state.RealState.drift_report`/`skew_report` are honestly
+    stubbed (no real reference distribution or ERA5T pipeline exists yet
+    -- see the Roadmap), so a real query always comes back non-alerting.
+    Wired anyway so the day real drift/skew detection lands, this command
+    needs no further changes to act on it.
+
+    **Only `scheduled_monthly`/`preseason`/`data_volume` are dispatched.**
+    All three produce the identical job shape -- every Group 1 model plus
+    the derived cascade -- which is exactly `train-schedule`'s own default
+    schedule, so dispatch is just invoking that same real machinery.
+    `nightly_latent` (diffusion-only, keeping existing Group 1 checkpoints)
+    and isolated drift/skew retrains don't fit that "Group 1 + full
+    derived chain" shape -- a real dispatcher for those is separate, scoped
+    future work (see the Roadmap), so they are reported, not silently
+    dropped, but not dispatched here.
+    """
+    import urllib.error
+    import urllib.request
+
+    from .data.hurdat2 import parse_hurdat2_file
+    from .tracking.checkpoint_store import CheckpointStore, S3Config
+    from .tracking.mlflow_client import mlflow_client_from_env
+    from .tracking.registry import ALL_MODELS, GROUP1_MODELS, ModelRegistry, RegistryError
+    from .training.orchestrator import Mode, build_schedule, run_schedule
+    from .training.real_orchestrator import RealOrchestratorRunner
+    from .training.triggers import Reason, SeasonState, evaluate_all
+
+    now = datetime.fromisoformat(args.now) if args.now else datetime.now(UTC)
+    store = CheckpointStore(S3Config.from_env())
+    registry = ModelRegistry(
+        args.registry_root, mlflow_client=mlflow_client_from_env(), checkpoint_store=store,
+    )
+
+    def _api_get(path: str) -> dict | list | None:
+        if not args.api_url:
+            return None
+        req = urllib.request.Request(f"{args.api_url.rstrip('/')}{path}")
+        if args.api_key:
+            req.add_header("X-Anemoi-Api-Key", args.api_key)
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
+                return json.loads(resp.read())
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            print(f"warning: {path} unreachable ({exc}); degrading that signal to empty")
+            return None
+
+    active_storms: tuple[str, ...] = ()
+    storms = _api_get("/v1/storms")
+    if isinstance(storms, list):
+        active_storms = tuple(s["storm_id"] for s in storms if s.get("active"))
+
+    drifted_models: list[str] = []
+    for model in ALL_MODELS:
+        report = _api_get(f"/v1/monitoring/drift/{model}")
+        if isinstance(report, dict) and report.get("alert"):
+            drifted_models.append(model)
+
+    skew = _api_get("/v1/monitoring/skew")
+    if isinstance(skew, dict) and skew.get("alert"):
+        # Real, but not acted on here: the skew audit is system-wide (one
+        # paired ERA5T-vs-operational comparison of "the deterministic
+        # stack"), while `on_skew(model)` needs one specific model to
+        # re-fine-tune -- nothing in the scope or this codebase says which
+        # model(s) a system-wide skew alert should map to. Flagged loudly
+        # rather than guessed at.
+        print(
+            "SKEW ALERT (system-wide, §4.6.3) -- which model(s) this should "
+            "re-fine-tune is not yet defined; not dispatched. See the Roadmap."
+        )
+
+    tracks = parse_hurdat2_file(args.hurdat2)
+    last_trained: datetime | None = None
+    for model in GROUP1_MODELS:
+        try:
+            created = datetime.fromisoformat(registry.latest(model).created_at)
+        except RegistryError:
+            continue
+        if last_trained is None or created > last_trained:
+            last_trained = created
+    new_synoptic_times = (
+        0
+        if last_trained is None
+        else sum(1 for t in tracks for f in t.fixes if f.valid_time > last_trained)
+    )
+
+    jobs = evaluate_all(
+        now,
+        SeasonState(active_storms=active_storms),
+        drifted_models=tuple(drifted_models),
+        new_synoptic_times=new_synoptic_times,
+    )
+
+    print(f"retrain-check: {now:%Y-%m-%d %H:%MZ}, {len(jobs)} real job(s) from evaluate_all")
+    for job in jobs:
+        note = f" -- {job.note}" if job.note else ""
+        print(f"  {job.model:12s} {job.reason.value:18s} cascaded={job.cascaded}{note}")
+
+    dispatchable = {Reason.SCHEDULED_MONTHLY, Reason.PRESEASON, Reason.DATA_VOLUME}
+    if not any(j.reason in dispatchable for j in jobs):
+        print("no dispatchable trigger fired; nothing to train")
+        return 0
+
+    other = [j.reason.value for j in jobs if j.reason not in dispatchable and j.reason != Reason.CASCADE]
+    if other:
+        print(f"note: also reported but not dispatched (out of this command's scope): {sorted(set(other))}")
+
+    if args.dry_run:
+        print("--dry-run: a dispatchable trigger fired, but not running training")
+        return 0
+
+    schedule = build_schedule(Mode.PARALLEL, models=GROUP1_MODELS)
+    runner = RealOrchestratorRunner(
+        tracks=tracks,
+        checkpoint_store=store,
+        era5_cache_dir=args.era5_cache_dir,
+        gdas_cache_dir=args.gdas_cache_dir,
+        registry=registry,
+        seed=args.seed,
+        n_augment=args.n_augment,
+        streaming=args.streaming,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+    )
+    result = run_schedule(schedule, runner)
+    for outcome in result.outcomes:
+        status = "OK" if outcome.ok else "FAILED"
+        print(f"  [{status}] {outcome.task}: {outcome.detail}")
+    print(f"succeeded: {list(result.succeeded)}")
+    print(f"failed: {list(result.failed)}")
+    return 0 if not result.failed else 1
+
+
 def cmd_registry_pull(args: argparse.Namespace) -> int:
     """Hydrate a local registry.json from durable storage (R2/S3) when
     there's no local copy yet.
@@ -477,6 +638,98 @@ def cmd_registry_pull(args: argparse.Namespace) -> int:
         f"registry-pull: {total} registered version(s) across {len(ALL_MODELS)} "
         f"models at {args.registry_root}"
     )
+    return 0
+
+
+def cmd_registry_reconcile(args: argparse.Namespace) -> int:
+    """Re-evaluate staging for every model's already-registered versions
+    against the real champion-vs-candidate comparison `ModelRegistry.
+    champion` now uses, and correct any staging pick that isn't actually
+    the best on record.
+
+    The real, safe remediation for a real bug: `real_orchestrator.py`/
+    `cli.cmd_train` used to compare each new candidate against
+    `versions(...)[-1]` (whatever was registered last) instead of the
+    actual current champion -- both are fixed now, but that only protects
+    *future* registrations. Confirmed live against the deployed registry:
+    lstm's staging pick (v7, track_error_48h_nm=300.5) was worse than two
+    older, unstaged versions (v1=274.3, v2=274.6) -- exactly the failure
+    mode the old comparison allowed. This command re-runs the corrected
+    comparison against versions that already exist -- no training, no GPU,
+    no new checkpoints, `registry.transition()` is the only state it
+    touches, so it is as reversible as any other stage transition.
+
+    Production is never touched (§5.3's manual gate stays exactly that --
+    manual): a model with a production version is skipped entirely,
+    win or lose.
+
+    Re-staging a **Group 1** model can desync it from a derived model's
+    recorded `latent_signature` (§5.7) -- fusion/diffusion were trained
+    against a *specific* Group 1 checkpoint set, and this command doesn't
+    retrain them. That's now safe rather than silently wrong:
+    `training.real_inference_cycle._real_fusion_forecast` refuses a stale
+    signature and degrades to the honest non-learned consensus instead of
+    combining mismatched representations. This command still prints a note
+    when it desyncs a signature a derived model is relying on, since
+    regaining the learned combination's real benefit needs a real
+    diffusion/fusion retrain (§5.7's cascade), which is genuinely out of
+    this command's scope (no training, no GPU, by design).
+    """
+    import math
+
+    from .tracking.checkpoint_store import CheckpointStore, S3Config
+    from .tracking.mlflow_client import mlflow_client_from_env
+    from .tracking.registry import ALL_MODELS, DERIVED_MODELS, ModelRegistry, Stage
+
+    store = CheckpointStore(S3Config.from_env())
+    registry = ModelRegistry(
+        args.registry_root, mlflow_client=mlflow_client_from_env(), checkpoint_store=store,
+    )
+
+    def _finite(v) -> float | None:
+        value = v.metrics.get(args.primary_metric)
+        return value if isinstance(value, int | float) and math.isfinite(value) else None
+
+    changed: list[str] = []
+    for model in ALL_MODELS:
+        if registry.production(model) is not None:
+            print(f"{model}: has a production version -- skipped (§5.3 manual gate)")
+            continue
+        candidates = [v for v in registry.versions(model) if _finite(v) is not None]
+        if not candidates:
+            print(f"{model}: no version has a real, finite {args.primary_metric!r} -- skipped")
+            continue
+        best = min(candidates, key=_finite)
+        current = registry.in_stage(model, Stage.STAGING)
+        if current is not None and current.version == best.version:
+            print(f"{model}: v{best.version} already staging ({args.primary_metric}={_finite(best):.2f})")
+            continue
+        was = f"v{current.version}" if current is not None else "nothing"
+        if args.dry_run:
+            print(
+                f"{model}: would re-stage v{best.version} "
+                f"({args.primary_metric}={_finite(best):.2f}) in place of {was}"
+            )
+            continue
+        registry.transition(model, best.version, Stage.STAGING)
+        changed.append(model)
+        print(
+            f"{model}: re-staged v{best.version} "
+            f"({args.primary_metric}={_finite(best):.2f}) in place of {was}"
+        )
+        for derived in DERIVED_MODELS:
+            derived_champion = registry.champion(derived)
+            if derived_champion is not None and derived_champion.latent_signature and (
+                f"{model}v{best.version}" not in derived_champion.latent_signature
+            ):
+                print(
+                    f"  note: {derived} v{derived_champion.version}'s latent_signature "
+                    f"({derived_champion.latent_signature!r}) no longer includes {model} "
+                    f"v{best.version} -- its learned combination will degrade to the "
+                    "non-learned consensus until it's retrained against this set (§5.7)"
+                )
+
+    print(f"reconciled {len(changed)} model(s): {changed}")
     return 0
 
 
@@ -528,6 +781,20 @@ def main(argv: list[str] | None = None) -> int:
         default=str(Path.home() / ".anemoi" / "registry"),
     )
     p.set_defaults(func=cmd_registry_pull)
+
+    p = sub.add_parser(
+        "registry-reconcile",
+        help="re-stage the real best existing version per model (fixes a stale/wrong staging pick)",
+    )
+    p.add_argument(
+        "--registry-root", dest="registry_root",
+        default=str(Path.home() / ".anemoi" / "registry"),
+    )
+    p.add_argument("--primary-metric", dest="primary_metric", default="track_error_48h_nm")
+    p.add_argument(
+        "--dry-run", action="store_true", help="report what would change, without transitioning",
+    )
+    p.set_defaults(func=cmd_registry_reconcile)
 
     p = sub.add_parser("ablation", help="run the #9 capacity-vs-sample-size ablation")
     p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
@@ -647,6 +914,40 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     p.set_defaults(func=cmd_train_schedule)
+
+    p = sub.add_parser(
+        "retrain-check",
+        help="evaluate real retraining triggers and dispatch training if one fires (§5.5)",
+    )
+    p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
+    p.add_argument(
+        "--api-url", default=None,
+        help="a running Anemoi API base URL, for real active-storm/drift signals "
+             "(e.g. https://anemoi-api-real.<account>.workers.dev); omit to skip those "
+             "signals and evaluate calendar/data-volume triggers only",
+    )
+    p.add_argument("--api-key", default=None, help="X-Anemoi-Api-Key, if the API requires one")
+    p.add_argument(
+        "--dry-run", action="store_true",
+        help="evaluate and print real triggers, but never dispatch training",
+    )
+    p.add_argument(
+        "--now", default=None,
+        help="ISO datetime to evaluate triggers as-of, instead of the real current time "
+             "(debugging/backtesting a specific date; unset uses real wall-clock UTC now)",
+    )
+    p.add_argument("--seed", type=int, default=20260806)
+    p.add_argument("--n-augment", dest="n_augment", type=int, default=3)
+    p.add_argument("--era5-cache-dir", dest="era5_cache_dir", default=None)
+    p.add_argument("--gdas-cache-dir", dest="gdas_cache_dir", default=None)
+    p.add_argument(
+        "--registry-root", dest="registry_root",
+        default=str(Path.home() / ".anemoi" / "registry"),
+    )
+    p.add_argument("--streaming", action="store_true")
+    p.add_argument("--batch-size", dest="batch_size", type=int, default=None)
+    p.add_argument("--num-workers", dest="num_workers", type=int, default=0)
+    p.set_defaults(func=cmd_retrain_check)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
