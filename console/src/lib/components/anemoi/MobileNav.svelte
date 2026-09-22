@@ -43,7 +43,7 @@
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-40 bg-bg/70" />
 		<Dialog.Content
-			class="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[80vw] flex-col border-r border-border bg-surface outline-none"
+			class="bubble fixed inset-y-0 left-0 z-50 flex w-72 max-w-[80vw] flex-col border-r border-border/60 outline-none"
 		>
 			<Dialog.Title class="sr-only">Navigation</Dialog.Title>
 			<div class="flex items-center justify-between gap-2.5 border-b border-border px-4 py-4">

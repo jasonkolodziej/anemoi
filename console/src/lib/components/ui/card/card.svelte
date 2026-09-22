@@ -8,6 +8,6 @@
 	let { class: className, children, ...rest }: Props = $props();
 </script>
 
-<div class={cn('rounded-lg border border-border bg-surface', className)} {...rest}>
+<div class={cn('bubble rounded-lg border border-border/60', className)} {...rest}>
 	{@render children?.()}
 </div>

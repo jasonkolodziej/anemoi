@@ -17,7 +17,7 @@
 	};
 </script>
 
-<a href={`/storms/${storm.storm_id}`} class="block transition-transform hover:-translate-y-0.5">
+<a href={`/storms/${storm.storm_id}`} class="hover-lift block">
 	<Card class="h-full hover:border-border-strong">
 		<CardHeader>
 			<CardTitle>{storm.storm_id}</CardTitle>
