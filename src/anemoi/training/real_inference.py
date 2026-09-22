@@ -101,7 +101,13 @@ def _download_state_dict(
     with tempfile.TemporaryDirectory() as tmpdir:
         local_path = Path(tmpdir) / "checkpoint.pt"
         checkpoint_store.download(checkpoint_uri, local_path)
-        return torch.load(local_path, map_location="cpu")
+        # weights_only=True (unpickles only tensors/plain containers, never
+        # arbitrary objects) -- every save site here is `torch.save(model
+        # .state_dict(), ...)`, nothing else, so this is a pure hardening,
+        # not a behaviour change: a checkpoint_uri traces back to this
+        # repo's own S3/R2 bucket, but there is no reason to trust its
+        # contents any more than that.
+        return torch.load(local_path, map_location="cpu", weights_only=True)
 
 
 def load_trained_model(name: str, version: ModelVersion, checkpoint_store: CheckpointStore):
