@@ -5,7 +5,13 @@ description = "Anemoi hurricane forecast platform: Anemoi-Core deterministic eng
 readme = "README.md"
 license-files = ["LICEN[CS]E*"]
 requires-python = ">=3.11"
-dependencies = ["numpy>=1.26", "pyyaml>=6.0"]
+#: numpy's floor tracks the oldest version this project actually tests
+#: against, not an old default -- 2.5.x itself requires Python>=3.12
+#: (this project supports >=3.11), so 2.4.6 is the real floor across the
+#: whole supported range, not 2.5.3. See uv.lock: 2.4.6 (Python<3.12) /
+#: 2.5.3 (Python>=3.12) are both already the newest release installable
+#: for their respective interpreter, confirmed live against PyPI.
+dependencies = ["numpy>=2.4.6", "pyyaml>=6.0"]
 
 [project.optional-dependencies]
 # Torch-backed model implementations. Kept optional so the operational logic
