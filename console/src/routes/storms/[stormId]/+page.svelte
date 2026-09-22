@@ -24,6 +24,10 @@
 	let cycleInput = $state(cycleLabel(floorSynoptic(new Date())));
 	let members = $state(20);
 	let worstCase = $state(false);
+	// Shared between ConeMap (real per-model map lines) and
+	// ModelStatusPanel (the Model Pantheon list) -- hovering either one
+	// isolates the same model on both.
+	let hoveredModel = $state<string | null>(null);
 
 	async function load() {
 		error = null;
@@ -103,11 +107,17 @@
 
 			<div class="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
 				<div class="space-y-6">
-					<ConeMap history={storm.history} forecastTrack={cycle.products.deterministic_track} cone={cycle.payload.cone} />
+					<ConeMap
+						history={storm.history}
+						forecastTrack={cycle.products.deterministic_track}
+						cone={cycle.payload.cone}
+						perModelTracks={cycle.products.per_model_tracks}
+						bind:hoveredModel
+					/>
 					<IntensityPDFChart pdf={cycle.products.intensity_pdf} />
 				</div>
 				<div class="space-y-6">
-					<ModelStatusPanel contributors={cycle.products.contributors} />
+					<ModelStatusPanel contributors={cycle.products.contributors} bind:hoveredModel />
 					<Card>
 						<CardHeader><CardTitle>Cycle status</CardTitle></CardHeader>
 						<CardContent class="space-y-2 text-xs">
