@@ -46,12 +46,20 @@ different API target means rebuilding with a different
 PUBLIC_ANEMOI_API_URL=https://anemoi-api-real.jasonkolodziej.workers.dev pnpm run cf:deploy
 ```
 
-Live at `https://anemoi-console.jasonkolodziej.workers.dev`, pointed at
-the real-mode API. The real API's `ANEMOI_API_CORS_ORIGINS`
-(`docker/api/Dockerfile`) has to explicitly allow-list this console's
-origin -- main.py's own default only covers local dev
+A `.env` here with the same `PUBLIC_ANEMOI_API_URL` line (see
+`.env.example`) makes this the default for every `pnpm run cf:deploy`
+too, so a plain `pnpm run cf:deploy` doesn't silently fall back to the
+`127.0.0.1:8000` dev default and ship a console that can't reach
+anything -- found the hard way, three real deploys in, once against
+`.env`'s absence.
+
+Live at `https://anemoi.systems` (custom domain, `console/wrangler.jsonc`'s
+`routes`) and `https://anemoi-console.jasonkolodziej.workers.dev`, both
+pointed at the real-mode API. The real API's `ANEMOI_API_CORS_ORIGINS`
+(`docker/api/Dockerfile`) has to explicitly allow-list *both* of this
+console's origins -- main.py's own default only covers local dev
 (`localhost:5173`/`127.0.0.1:5173`), which a browser hitting the deployed
-API from the deployed console's real origin doesn't match; found the hard
+API from either deployed console origin doesn't match; found the hard
 way via a real `Disallowed CORS origin` response, not assumed.
 
 ## Adding more shadcn-svelte components
