@@ -8,7 +8,14 @@
 </script>
 
 <div class="mx-auto max-w-6xl px-6 py-8">
-	<div class="mb-6 max-w-md">
+	<!-- md:sticky -- without this, scrolling to read a page (or landing
+	     directly on a deep #heading anchor) carries the search bar off the
+	     top of <main>'s own scroll region right along with everything
+	     above it. bg-bg so scrolled-past content doesn't show through
+	     underneath. Desktop only: below md, the app's own mobile header is
+	     already sticky at top-0 -- stacking a second top-0 sticky element
+	     there would collide with it rather than stack below it. -->
+	<div class="mb-6 max-w-md md:sticky md:top-0 md:z-10 md:bg-bg md:pt-1 md:pb-4">
 		<WikiSearch />
 	</div>
 	<!-- flex-col below lg -- DocsSections' own <details> takes over there;
