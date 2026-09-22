@@ -29,19 +29,24 @@
 @theme {
 	--font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
 	--font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-	--font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+	--font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
-	/* Neutral scale -- the console's actual palette. Blue-slate, not pure
-	   black: warmer under long viewing, and it keeps the god colours (several
-	   of which are themselves cool) from fighting the background. */
-	--color-bg: oklch(16.2% 0.014 258.36); /* #0a0e14 */
-	--color-surface: oklch(19.9% 0.020 258.33); /* #10161f */
-	--color-surface-raised: oklch(23.0% 0.026 261.02); /* #161d29 */
-	--color-border: oklch(28.6% 0.028 255.17); /* #212b38 */
-	--color-border-strong: oklch(34.9% 0.036 256.60); /* #2e3b4d */
-	--color-text: oklch(94.1% 0.011 256.70); /* #e7ecf3 */
-	--color-text-muted: oklch(67.0% 0.030 260.30); /* #8b96a8 */
-	--color-text-faint: oklch(50.4% 0.030 261.06); /* #5b6576 */
+	/* Neutral scale -- Branding Brief v1.2 "Storm Dark" (abyss/deep/stratus/
+	   cirrus/cumulus, console/tmp/TrainingRunTimeline_v2-2.jsx's `C`). Blue-
+	   slate, not pure black: warmer under long viewing, and it keeps the god
+	   colours (several of which are themselves cool) from fighting the
+	   background. surface-raised and border-strong have no Brief token of
+	   their own -- the Brief's flat single-surface mockup didn't need a third
+	   tier -- so they're interpolated/extrapolated in OKLCH from the same
+	   position they held relative to the old scale, not sourced from a hex. */
+	--color-bg: oklch(16.4% 0.020 265.75); /* abyss, #0a0e17 */
+	--color-surface: oklch(21.0% 0.032 264.66); /* deep, #111827 */
+	--color-surface-raised: oklch(23.5% 0.034 263.01); /* interpolated, surface->border */
+	--color-border: oklch(27.9% 0.037 260.03); /* stratus, #1e293b */
+	--color-border-strong: oklch(33.0% 0.041 256.68); /* extrapolated beyond border */
+	--color-text: oklch(94.1% 0.011 256.70); /* #e7ecf3 -- kept distinct from Fusion/eye on purpose, see rule above */
+	--color-text-muted: oklch(71.1% 0.035 256.79); /* cirrus, #94a3b8 */
+	--color-text-faint: oklch(55.4% 0.041 257.42); /* cumulus, #64748b */
 
 	/* The one interactive hue outside the god set. */
 	--color-action: oklch(71.4% 0.143 254.62); /* #60a5fa */
