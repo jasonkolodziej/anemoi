@@ -115,7 +115,9 @@ def cycle_products_out(output: CycleOutput) -> s.CycleProducts:
     )
 
 
-def cycle_result_out(storm_id: str, output: CycleOutput) -> s.CycleResult:
+def cycle_result_out(storm_id: str, output: CycleOutput | s.CycleResult) -> s.CycleResult:
+    if isinstance(output, s.CycleResult):
+        return output  # restored from durable storage, already in served form (#175)
     return s.CycleResult(
         storm_id=storm_id,
         payload=cycle_payload_out(output),

@@ -762,3 +762,152 @@ def test_pending_retrain_jobs_route_serves_a_real_latent_desync(client):
     desynced = [j for j in body if j["reason"] == "latent_desync"]
     assert {j["model"] for j in desynced} == {"diffusion", "fusion"}
     assert all(j["trigger_tag"] == "latent_desync" for j in desynced)
+
+
+# ---- durable cycle results and drift samples (#175) ----------------------
+
+
+class _MemoryS3Client:
+    """In-memory stand-in for the boto3 client behind a real CheckpointStore
+    -- shared between two RealState instances to simulate a container
+    restart against the same durable bucket."""
+
+    def __init__(self, fail_puts: bool = False) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.fail_puts = fail_puts
+
+    def put(self, key, local_path):
+        if self.fail_puts:
+            raise OSError("simulated R2 outage")
+        self.objects[key] = Path(local_path).read_bytes()
+
+    def get(self, key, local_path):
+        Path(local_path).write_bytes(self.objects[key])
+
+    def exists(self, key):
+        return key in self.objects
+
+    def list_keys(self, prefix):
+        return [k for k in self.objects if k.startswith(prefix)]
+
+
+def _memory_store(client_impl):
+    from anemoi.tracking.checkpoint_store import CheckpointStore, S3Config
+
+    config = S3Config(
+        endpoint_url="https://example.r2.cloudflarestorage.com",
+        bucket="t",
+        access_key_id="k",
+        secret_access_key="s",
+    )
+    return CheckpointStore(config, client=client_impl)
+
+
+def _fresh_real_state(tmp_path, hurdat2_file, store, name):
+    """A new RealState process against the same durable store -- what a
+    container cold start looks like -- installed as the app's singleton."""
+    from anemoi.api import real_state
+
+    state = real_state.RealState(
+        hurdat2_path=str(hurdat2_file), registry_root=str(tmp_path / name),
+        checkpoint_store=store, cache_dir=str(tmp_path / "gdas"),
+    )
+    real_state._REAL_STATE = state
+    return state
+
+
+def test_cycles_survive_a_container_restart(client, tmp_path, hurdat2_file):
+    """The real bug: cycle results lived only in container memory, so every
+    restart (each deploy, and since #172 every sleep) wiped them and the
+    console showed the storm with no cycles."""
+    s3 = _MemoryS3Client()
+    store = _memory_store(s3)
+
+    _fresh_real_state(tmp_path, hurdat2_file, store, "first")
+    ran = client.post("/v1/storms/AL012026/cycles", json={"cycle": "20260901_18Z", "members": 4})
+    assert ran.status_code == 201
+    assert any(k.startswith("api/cycles/AL012026/") for k in s3.objects)
+
+    _fresh_real_state(tmp_path, hurdat2_file, store, "second")  # the restart
+
+    storms = client.get("/v1/storms").json()
+    assert next(s for s in storms if s["storm_id"] == "AL012026")["last_cycle"] == "20260901_18Z"
+    assert client.get("/v1/storms/AL012026").json()["cycles"] == ["20260901_18Z"]
+    restored = client.get("/v1/storms/AL012026/cycles/20260901_18Z")
+    assert restored.status_code == 200
+    assert restored.json() == ran.json()
+
+
+def test_a_failed_cycle_write_never_fails_the_cycle(client, tmp_path, hurdat2_file):
+    _fresh_real_state(tmp_path, hurdat2_file, _memory_store(_MemoryS3Client(fail_puts=True)), "r")
+    r = client.post("/v1/storms/AL012026/cycles", json={"cycle": "20260901_18Z", "members": 4})
+    assert r.status_code == 201
+    assert client.get("/v1/storms/AL012026").json()["cycles"] == ["20260901_18Z"]
+
+
+def test_a_live_storm_keeps_its_cycles_across_a_feed_refresh(client, monkeypatch):
+    """A second, independent cause: each live-feed refresh (every 30 min)
+    rebuilt every live storm's state from scratch, dropping its cycles even
+    while the container stayed warm."""
+    from anemoi.data.besttrack import Fix, Track, TrackQuality
+
+    live_track = Track(
+        storm_id="AL992026",
+        fixes=(
+            Fix(storm_id="AL992026", valid_time=datetime(2026, 9, 22, 0, 0, tzinfo=UTC),
+                lat=25.0, lon=-70.0, max_wind_kt=50.0, min_pressure_mb=995.0,
+                quality=TrackQuality.WORKING),
+        ),
+    )
+    monkeypatch.setattr("anemoi.data.live_atcf.fetch_live_tracks", lambda: [live_track])
+    assert client.post(
+        "/v1/storms/AL992026/cycles", json={"cycle": "20260922_00Z", "members": 4},
+    ).status_code == 201
+
+    _get_real_state(client)._live_storms_fetched_at = None  # force a feed refresh
+
+    assert client.get("/v1/storms/AL992026").json()["cycles"] == ["20260922_00Z"]
+
+
+def test_drift_samples_survive_a_container_restart(client, tmp_path, hurdat2_file):
+    store = _memory_store(_MemoryS3Client())
+    first = _fresh_real_state(tmp_path, hurdat2_file, store, "first")
+    first._ensure_drift_restored()
+    features = np.array([1.0, 2.0, 3.0])
+    forecast = _make_deterministic_forecast(env_features=features, contributors={"cnn": 1})
+    first._record_drift_sample(_FakeCycleOutput(forecast))
+    first._persist_drift_live()
+
+    second = _fresh_real_state(tmp_path, hurdat2_file, store, "second")
+    second._ensure_drift_restored()
+
+    assert len(second._live_env_features) == 1
+    np.testing.assert_array_equal(second._live_env_features[0], features)
+    assert "cnn" in second._models_ever_contributed
+
+
+def test_an_unrestored_drift_window_is_never_written_back(client, tmp_path, hurdat2_file):
+    """If the stored window couldn't be read, writing this process's samples
+    back would overwrite (and lose) the stored history."""
+    s3 = _MemoryS3Client()
+    state = _fresh_real_state(tmp_path, hurdat2_file, _memory_store(s3), "r")
+    state._record_drift_sample(
+        _FakeCycleOutput(_make_deterministic_forecast(env_features=np.array([1.0]))),
+    )
+    state._persist_drift_live()
+    assert "api/drift_live.json" not in s3.objects
+
+
+def test_list_cycle_labels_ignores_keys_that_are_not_cycle_results():
+    from anemoi.api.cycle_store import list_cycle_labels
+
+    s3 = _MemoryS3Client()
+    for key in ("api/cycles/AL012026/20260901_18Z.json", "api/cycles/AL012026/20260902_00Z.json",
+                "api/cycles/AL022026/20260903_06Z.json", "api/cycles/AL012026/notes.txt",
+                "api/cycles/stray.json", "api/drift_live.json"):
+        s3.objects[key] = b"{}"
+
+    assert list_cycle_labels(_memory_store(s3)) == {
+        "AL012026": {"20260901_18Z", "20260902_00Z"},
+        "AL022026": {"20260903_06Z"},
+    }
