@@ -102,7 +102,13 @@
       <div class="border-t border-border p-3 text-[10px] text-text-faint">
         Scope v2.1 · Reference implementation{anemoiVersion
           ? ` · v${anemoiVersion}`
-          : ""}
+          : ""} | GitHub:
+        <a
+          href="https://github.com/jasonkolodziej/anemoi"
+          class="text-text-faint hover:text-text"
+          target="_blank"
+          rel="noopener noreferrer">anemoi/anemoi</a
+        >
       </div>
     </aside>
 
