@@ -46,6 +46,8 @@ from ..inference.scheduler import plan_cycle
 from ..monitoring.drift import DriftError, DriftReport, ReferenceDistribution, detect_feature_drift
 from ..monitoring.skew import SkewMonitor, SkewReport, SkewSample
 from ..tracking.registry import ALL_MODELS, ModelRegistry
+from . import schemas
+from .cycle_store import CycleHistory
 
 #: How recently a storm's latest real fix must be to count as "active" --
 #: still used for archive storms (HURDAT2 has no live signal to be exact
@@ -87,7 +89,7 @@ class RealStormState:
     #: never both, since HURDAT2's archive and live storm-ids don't
     #: overlap in practice today).
     track: Track
-    cycles: dict[str, CycleOutput] = field(default_factory=dict)
+    cycles: CycleHistory = field(default_factory=CycleHistory)
 
     @property
     def season(self) -> int:
@@ -146,8 +148,11 @@ class RealState:
             )
         tracks = parse_hurdat2_file(hurdat2_path)
         recent = sorted(tracks, key=lambda t: t.season)[-n_recent:]
+        #: Stored cycle labels by storm (#175), listed from durable storage
+        #: once per process (`_ensure_cycle_index`); None until that works.
+        self._cycle_index: dict[str, set[str]] | None = None
         self.storms: dict[str, RealStormState] = {
-            t.storm_id: RealStormState(t.storm_id, t) for t in recent
+            t.storm_id: self._new_storm_state(t) for t in recent
         }
         #: Live storms, fetched lazily/re-fetched on TTL expiry rather than
         #: once here at construction -- this process/container instance
@@ -199,19 +204,21 @@ class RealState:
         #: of this process's own real `env_features` (shared across models:
         #: `data.features.compute_environment_features` is model-agnostic,
         #: computed once per cycle regardless of which Group 1 models
-        #: contributed). In-memory only, not durably persisted -- resets on
-        #: every cold start, a real gap worth knowing about rather than
-        #: silently accepting: a long-lived warm container accumulates real
-        #: signal over its own lifetime, but a container that recycles
-        #: often may rarely reach `detect_feature_drift`'s own 30-sample
-        #: minimum. Capped so memory use can't grow unbounded over a very
-        #: long-lived process.
+        #: contributed). Saved to durable storage after each cycle and
+        #: restored on first use (`_ensure_drift_restored`, #175) -- the
+        #: container restarts on every deploy and sleeps when idle (#172),
+        #: so an in-memory-only window rarely reached `detect_feature_drift`'s
+        #: 30-sample minimum. Capped so it can't grow unbounded.
         self._live_env_features: list[np.ndarray] = []
         self._live_env_features_max = 500
         #: Which models have contributed to at least one real cycle this
         #: process's lifetime -- `drift_report(model)` for a model that
         #: never has is an honest n_live=0, not the shared assessment.
         self._models_ever_contributed: set[str] = set()
+        #: Whether the durable drift window has been merged in yet. Until it
+        #: has, nothing is written back, so a failed restore can never
+        #: overwrite the stored history with just this process's samples.
+        self._drift_restored = False
         #: Lazy, loaded at most once per process (not TTL-refreshed like
         #: the registry -- a reference is fit rarely, offline, by
         #: `anemoi drift-reference-fit`, not something that changes
@@ -257,11 +264,49 @@ class RealState:
 
         tracks = fetch_live_tracks()
         if tracks:
-            self._live_storms = {t.storm_id: RealStormState(t.storm_id, t) for t in tracks}
+            # Carry each storm's cycle history over: rebuilding it empty
+            # dropped every cycle run on a live storm on each refresh (#175).
+            self._live_storms = {
+                t.storm_id: self._new_storm_state(t, self._live_storms.get(t.storm_id))
+                for t in tracks
+            }
         self._live_storms_fetched_at = now
+
+    def _new_storm_state(
+        self, track: Track, previous: RealStormState | None = None,
+    ) -> RealStormState:
+        cycles = previous.cycles if previous is not None else CycleHistory(
+            track.storm_id, self._load_stored_cycle,
+        )
+        if self._cycle_index is not None:
+            cycles.add_stored(self._cycle_index.get(track.storm_id, ()))
+        return RealStormState(track.storm_id, track, cycles)
+
+    def _load_stored_cycle(self, storm_id: str, label: str) -> schemas.CycleResult:
+        from .cycle_store import load_cycle_result
+
+        return load_cycle_result(self._checkpoint_store, storm_id, label)
+
+    def _ensure_cycle_index(self) -> None:
+        """List stored cycle labels once per process and attach them to every
+        known storm (#175). Only labels -- each result is downloaded when first
+        read. Retried on the next request if storage isn't configured or
+        reachable; storms still work without it, just without older cycles."""
+        if self._cycle_index is not None:
+            return
+        from .cycle_store import list_cycle_labels
+
+        try:
+            index = list_cycle_labels(self._checkpoint_store)
+        except Exception:  # noqa: BLE001 - no store configured, or unreachable right now
+            return
+        self._cycle_index = index
+        for storm in [*self.storms.values(), *self._live_storms.values()]:
+            storm.cycles.add_stored(index.get(storm.storm_id, ()))
 
     def list_storms(self) -> list[RealStormState]:
         self._refresh_live_storms()
+        self._ensure_cycle_index()
         # Live storms first -- they're what "active storms" genuinely
         # means; archive storms fall outside `_ACTIVE_WINDOW` in every
         # real case today anyway (HURDAT2 tops out at the 2023 season).
@@ -270,6 +315,7 @@ class RealState:
 
     def get_storm(self, storm_id: str) -> RealStormState:
         self._refresh_live_storms()
+        self._ensure_cycle_index()
         if storm_id in self._live_storms:
             return self._live_storms[storm_id]
         try:
@@ -328,6 +374,7 @@ class RealState:
         from ..training.real_inference_ensemble import build_real_ensemble_fn
 
         self.refresh_registry_if_stale()
+        self._ensure_drift_restored()
         storm = self.get_storm(storm_id)
         target = parse_cycle_label(cycle)
         # `LatencyOracle`/`plan_cycle` have no wall-clock concept of "now" --
@@ -412,7 +459,56 @@ class RealState:
         # not shared mutable RealState state) and writes to durable
         # storage, not to any dict this class guards.
         self._record_skew_sample(storm, fix, output)
+        self._persist_cycle(storm_id, output)
+        self._persist_drift_live()
         return output
+
+    def _persist_cycle(self, storm_id: str, output: CycleOutput) -> None:
+        """Best-effort durable copy of the served result (#175), outside the
+        lock for the same reason as `_record_skew_sample`: a failed or slow
+        write must never fail or stall the cycle itself."""
+        from . import convert
+        from .cycle_store import save_cycle_result
+
+        try:
+            save_cycle_result(self._checkpoint_store, convert.cycle_result_out(storm_id, output))
+        except Exception:  # noqa: BLE001 - best-effort, see docstring
+            return
+        if self._cycle_index is not None:
+            self._cycle_index.setdefault(storm_id, set()).add(output.label)
+
+    def _ensure_drift_restored(self) -> None:
+        if self._drift_restored:
+            return
+        from .cycle_store import load_drift_live
+
+        try:
+            restored = load_drift_live(self._checkpoint_store)
+        except Exception:  # noqa: BLE001 - retried next time; nothing is written back until it works
+            return
+        with self._lock:
+            if self._drift_restored:
+                return
+            self._drift_restored = True
+            if restored is not None:
+                features, models = restored
+                self._live_env_features = (features + self._live_env_features)[
+                    -self._live_env_features_max:
+                ]
+                self._models_ever_contributed |= models
+
+    def _persist_drift_live(self) -> None:
+        from .cycle_store import save_drift_live
+
+        with self._lock:
+            if not self._drift_restored:
+                return
+            features = list(self._live_env_features)
+            models = set(self._models_ever_contributed)
+        try:
+            save_drift_live(self._checkpoint_store, features, models)
+        except Exception:  # noqa: BLE001 - best-effort
+            pass
 
     def _record_drift_sample(self, output: CycleOutput) -> None:
         """Real drift-detection bookkeeping (#148) -- called under
@@ -446,7 +542,7 @@ class RealState:
         except Exception:  # noqa: BLE001 - best-effort, never fail a cycle over this
             pass
 
-    def get_cycle(self, storm_id: str, cycle: str) -> CycleOutput:
+    def get_cycle(self, storm_id: str, cycle: str) -> CycleOutput | schemas.CycleResult:
         storm = self.get_storm(storm_id)
         try:
             return storm.cycles[cycle]
@@ -527,6 +623,7 @@ class RealState:
         return self._drift_reference
 
     def drift_report(self, model: str) -> DriftReport:
+        self._ensure_drift_restored()
         reference = self._get_drift_reference()
         if reference is None or model not in self._models_ever_contributed:
             return DriftReport(features=(), n_live=0)
