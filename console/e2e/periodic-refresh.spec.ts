@@ -82,3 +82,34 @@ test('storm detail poll does not fire while a cycle run is in flight', async ({ 
 
 	expect(getCalls).toBe(0);
 });
+
+test('a hidden tab stops polling, and refreshes as soon as it is visible again', async ({ page }) => {
+	// Every request wakes the billed API container and restarts its 5-minute
+	// sleep timer, so a forgotten background tab polling every minute would
+	// keep it awake indefinitely (#172).
+	let storms = 0;
+	page.on('request', (req) => {
+		if (req.url().includes('/v1/storms') && !req.url().includes('/cycles')) storms++;
+	});
+
+	await page.clock.install({ time: new Date() });
+	await page.goto('/');
+	await page.waitForSelector("text=Today's cycle schedule");
+	await page.waitForTimeout(300);
+
+	const setHidden = (hidden: boolean) =>
+		page.evaluate((h) => {
+			Object.defineProperty(document, 'hidden', { configurable: true, get: () => h });
+			document.dispatchEvent(new Event('visibilitychange'));
+		}, hidden);
+
+	await setHidden(true);
+	const whileHidden = storms;
+	await page.clock.fastForward('05:01'); // five poll intervals
+	await page.waitForTimeout(300);
+	expect(storms).toBe(whileHidden);
+
+	await setHidden(false);
+	await page.waitForTimeout(300);
+	expect(storms).toBeGreaterThan(whileHidden);
+});

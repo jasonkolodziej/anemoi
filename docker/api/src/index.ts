@@ -38,6 +38,13 @@ interface RealApiEnv extends Env {
 	S3_ARTIFACT_SECRET_ACCESS_KEY: string;
 }
 
+const SLEEP_DEADLINE_KEY = 'sleepAfterMs';
+
+// Tracked outside the instance so it can't be reset by class-field
+// initialization, whenever the base constructor happens to first call
+// renewActivityTimeout().
+const sleepDeadlineRestored = new WeakSet<object>();
+
 export class AnemoiRealApi extends Container<RealApiEnv> {
 	defaultPort = 8080;
 	// Real cycles run four times a day (per synoptic time), not
@@ -55,6 +62,30 @@ export class AnemoiRealApi extends Container<RealApiEnv> {
 				S3_ARTIFACT_SECRET_ACCESS_KEY: env.S3_ARTIFACT_SECRET_ACCESS_KEY,
 			},
 		});
+	}
+
+	/**
+	 * `@cloudflare/containers` (0.3.7) keeps the idle deadline only in
+	 * memory and resets it to now + `sleepAfter` in its constructor, so every
+	 * time the runtime re-creates this Durable Object (eviction between
+	 * alarms, redeploys) the container got a fresh window no matter how long
+	 * it had really been idle -- measured keeping it awake for hours with no
+	 * traffic (#172). Persisting the deadline makes that first,
+	 * constructor-driven call restore it instead; every later call is real
+	 * activity and renews as normal.
+	 */
+	override renewActivityTimeout(): void {
+		const self = this as unknown as { sleepAfterMs: number };
+		if (!sleepDeadlineRestored.has(this)) {
+			sleepDeadlineRestored.add(this);
+			const persisted = this.ctx.storage.kv.get<number>(SLEEP_DEADLINE_KEY);
+			if (persisted !== undefined) {
+				self.sleepAfterMs = persisted;
+				return;
+			}
+		}
+		super.renewActivityTimeout();
+		this.ctx.storage.kv.put(SLEEP_DEADLINE_KEY, self.sleepAfterMs);
 	}
 
 	override onStart() {
