@@ -278,9 +278,16 @@ class RealState:
         cycles = previous.cycles if previous is not None else CycleHistory(
             track.storm_id, self._load_stored_cycle,
         )
-        if self._cycle_index is not None:
-            cycles.add_stored(self._cycle_index.get(track.storm_id, ()))
+        cycles.add_stored(self._stored_labels(track.storm_id))
         return RealStormState(track.storm_id, track, cycles)
+
+    def _stored_labels(self, storm_id: str) -> tuple[str, ...]:
+        """A copy, taken under the lock: `_persist_cycle` adds to these sets
+        from other request threads."""
+        if self._cycle_index is None:
+            return ()
+        with self._lock:
+            return tuple(self._cycle_index.get(storm_id, ()))
 
     def _load_stored_cycle(self, storm_id: str, label: str) -> schemas.CycleResult:
         from .cycle_store import load_cycle_result
@@ -300,9 +307,12 @@ class RealState:
             index = list_cycle_labels(self._checkpoint_store)
         except Exception:  # noqa: BLE001 - no store configured, or unreachable right now
             return
-        self._cycle_index = index
-        for storm in [*self.storms.values(), *self._live_storms.values()]:
-            storm.cycles.add_stored(index.get(storm.storm_id, ()))
+        with self._lock:
+            self._cycle_index = index
+            known = {**self.storms, **self._live_storms}
+            labels = {storm_id: tuple(index.get(storm_id, ())) for storm_id in known}
+        for storm_id, storm in known.items():
+            storm.cycles.add_stored(labels[storm_id])
 
     def list_storms(self) -> list[RealStormState]:
         self._refresh_live_storms()
@@ -474,8 +484,9 @@ class RealState:
             save_cycle_result(self._checkpoint_store, convert.cycle_result_out(storm_id, output))
         except Exception:  # noqa: BLE001 - best-effort, see docstring
             return
-        if self._cycle_index is not None:
-            self._cycle_index.setdefault(storm_id, set()).add(output.label)
+        with self._lock:
+            if self._cycle_index is not None:
+                self._cycle_index.setdefault(storm_id, set()).add(output.label)
 
     def _ensure_drift_restored(self) -> None:
         if self._drift_restored:

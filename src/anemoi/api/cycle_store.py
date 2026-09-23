@@ -38,7 +38,7 @@ def cycle_key(storm_id: str, label: str) -> str:
 def _put_text(store: CheckpointStore, key: str, text: str) -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         path = Path(tmp_dir) / "object.json"
-        path.write_text(text)
+        path.write_text(text, encoding="utf-8")
         store.upload(path, key)
 
 
@@ -46,7 +46,7 @@ def _get_text(store: CheckpointStore, key: str) -> str:
     with tempfile.TemporaryDirectory() as tmp_dir:
         path = Path(tmp_dir) / "object.json"
         store.download(f"s3://{store.config.bucket}/{key}", path)
-        return path.read_text()
+        return path.read_text(encoding="utf-8")
 
 
 def save_cycle_result(store: CheckpointStore, result: schemas.CycleResult) -> None:
@@ -125,7 +125,9 @@ class CycleHistory(MutableMapping):
         del self._items[label]
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self._items)
+        # A snapshot: request threads iterate (a storm's cycle list, its
+        # last_cycle) while another thread's run_cycle adds a label.
+        return iter(list(self._items))
 
     def __len__(self) -> int:
         return len(self._items)

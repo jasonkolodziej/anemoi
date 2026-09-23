@@ -794,11 +794,13 @@ class _MemoryS3Client:
 def _memory_store(client_impl):
     from anemoi.tracking.checkpoint_store import CheckpointStore, S3Config
 
-    return CheckpointStore(
-        S3Config(endpoint_url="https://example.r2.cloudflarestorage.com", bucket="t",
-                 access_key_id="k", secret_access_key="s"),
-        client=client_impl,
+    config = S3Config(
+        endpoint_url="https://example.r2.cloudflarestorage.com",
+        bucket="t",
+        access_key_id="k",
+        secret_access_key="s",
     )
+    return CheckpointStore(config, client=client_impl)
 
 
 def _fresh_real_state(tmp_path, hurdat2_file, store, name):
