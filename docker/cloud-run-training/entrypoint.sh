@@ -13,6 +13,10 @@ BATCH_SIZE="${BATCH_SIZE:-}"
 NUM_WORKERS="${NUM_WORKERS:-0}"
 DERIVED_FROM_CHAMPIONS="${DERIVED_FROM_CHAMPIONS:-}"
 MODELS="${MODELS:-}"
+# Diffusion-only regularization (#166 follow-up to early stopping) --
+# both default to 0.0, unchanged pre-#166 behavior.
+DIFFUSION_DROPOUT="${DIFFUSION_DROPOUT:-}"
+DIFFUSION_WEIGHT_DECAY="${DIFFUSION_WEIGHT_DECAY:-}"
 
 mkdir -p "${ERA5_CACHE_DIR}" "${GDAS_CACHE_DIR}" "${REGISTRY_ROOT}"
 
@@ -58,6 +62,12 @@ if [ -n "${NUM_WORKERS}" ]; then
 fi
 if [ -n "${DERIVED_FROM_CHAMPIONS}" ]; then
   ARGS+=(--derived-from-champions)
+fi
+if [ -n "${DIFFUSION_DROPOUT}" ]; then
+  ARGS+=(--diffusion-dropout "${DIFFUSION_DROPOUT}")
+fi
+if [ -n "${DIFFUSION_WEIGHT_DECAY}" ]; then
+  ARGS+=(--diffusion-weight-decay "${DIFFUSION_WEIGHT_DECAY}")
 fi
 
 exec anemoi "${ARGS[@]}"

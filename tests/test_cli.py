@@ -275,6 +275,7 @@ def test_cmd_train_schedule_passes_streaming_batch_size_and_num_workers_to_runne
         era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
         registry_root=str(tmp_path / "registry"), streaming=True, batch_size=16,
         num_workers=3, derived_from_champions=False,
+        diffusion_dropout=0.0, diffusion_weight_decay=0.0,
     )
     assert cli.cmd_train_schedule(args) == 0
     assert captured["streaming"] is True
@@ -288,6 +289,7 @@ def _train_schedule_args(tmp_path, **overrides) -> argparse.Namespace:
         era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
         registry_root=str(tmp_path / "registry"), streaming=False, batch_size=None,
         num_workers=0, derived_from_champions=False,
+        diffusion_dropout=0.0, diffusion_weight_decay=0.0,
     )
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -329,6 +331,41 @@ def test_cmd_train_schedule_derived_from_champions_seeds_and_runs_derived_only(
     assert cli.cmd_train_schedule(_train_schedule_args(tmp_path, derived_from_champions=True)) == 0
     assert seeded == [True]
     assert set(scheduled[0].task_names()) == {"latents", "diffusion", "fusion"}
+
+
+def test_cmd_train_schedule_passes_diffusion_dropout_and_weight_decay_to_runner(
+    tmp_path, monkeypatch
+):
+    """#166 follow-up: --diffusion-dropout/--diffusion-weight-decay must
+    reach RealOrchestratorRunner's construction, not silently stay 0.0
+    regardless of what's passed on the command line."""
+    captured: dict = {}
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    class FakeResult:
+        outcomes: list = []
+        skipped: list = []
+        succeeded: list = []
+        failed: list = []
+
+    monkeypatch.setattr("anemoi.training.real_orchestrator.RealOrchestratorRunner", FakeRunner)
+    monkeypatch.setattr(
+        "anemoi.training.orchestrator.run_schedule", lambda schedule, runner: FakeResult()
+    )
+    monkeypatch.setattr("anemoi.tracking.registry.ModelRegistry", lambda *a, **k: object())
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+    monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [])
+
+    args = _train_schedule_args(
+        tmp_path, diffusion_dropout=0.15, diffusion_weight_decay=1e-4,
+    )
+    assert cli.cmd_train_schedule(args) == 0
+    assert captured["diffusion_dropout"] == 0.15
+    assert captured["diffusion_weight_decay"] == 1e-4
 
 
 def test_cmd_train_schedule_derived_from_champions_refuses_models(tmp_path, monkeypatch):

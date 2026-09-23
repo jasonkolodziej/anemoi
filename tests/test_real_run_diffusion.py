@@ -67,6 +67,31 @@ def test_train_diffusion_stage_produces_val_metrics_and_artifacts():
 
 
 @pytest.mark.torch
+def test_train_diffusion_stage_accepts_dropout_and_weight_decay():
+    """#166 follow-up: early stopping alone left a real residual
+    underdispersion gap at 72-120h -- dropout/weight_decay are the next
+    real lever from the issue's own proposed-investigation list. This is
+    a wiring check (both reach `build_diffusion`/the optimizer without
+    erroring and still produce a valid trained model), not a calibration
+    claim -- see the real ablation script/results referenced from #166
+    for whether either value is actually worth promoting."""
+    from anemoi.training.real_run_diffusion import train_diffusion_stage
+
+    train_samples = _make_samples(8, z_dim=16, seed=1)
+    val_samples = _make_samples(4, z_dim=16, seed=2)
+
+    model, train_loss, val_loss, val_metrics, artifacts, epochs_run = train_diffusion_stage(
+        train_samples, val_samples,
+        hidden_dim=8, n_layers=1, n_timesteps=5, epochs=3, n_ensemble_eval=2, seed=3,
+        patience=10, dropout=0.2, weight_decay=1e-4, device="cpu",
+    )
+    assert train_loss >= 0.0
+    assert val_loss >= 0.0
+    assert artifacts.model is model
+    assert 1 <= epochs_run <= 3
+
+
+@pytest.mark.torch
 def test_train_diffusion_stage_rejects_empty_samples():
     from anemoi.training.real_latents import JointLatentSamples
     from anemoi.training.real_run_diffusion import train_diffusion_stage

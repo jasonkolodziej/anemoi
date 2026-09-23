@@ -94,6 +94,8 @@ def train_diffusion_stage(
     n_ensemble_eval: int = 20,
     seed: int = 20260806,
     patience: int = 20,
+    dropout: float = 0.0,
+    weight_decay: float = 0.0,
     device=None,
 ) -> tuple[object, float, float, MetricSet, DiffusionArtifacts, int]:
     """Train the `TrajectoryDenoiser` against one `JointLatentBundle` split.
@@ -119,6 +121,18 @@ def train_diffusion_stage(
     underdispersed) at epoch 199, vs. 0.50-0.93 at epoch 35, on the exact
     same trained-weights history -- only the stopping point differed. See
     GitHub #166 for the full real diagnostic.
+
+    **Real regularization (#166 follow-up), also not previously here.**
+    Early stopping alone left a real residual gap at 72-120h leads
+    (spread/skill 0.4-0.7, still under the 0.8 calibrated threshold) --
+    the architecture had no dropout and this optimizer used no weight
+    decay, both real, standard countermeasures to the same overfitting
+    mechanism early stopping only partially addresses (it picks a better
+    stopping point along the same overfit-prone trajectory; regularization
+    changes the trajectory itself). ``dropout`` forwards to
+    `models.diffusion.build_diffusion`; ``weight_decay`` sets Adam's own
+    L2 penalty. Both default to 0.0 (unchanged behavior) until a real
+    ablation picks a value worth promoting.
     """
     if len(train_samples) == 0 or len(val_samples) == 0:
         raise ValueError("empty train or val latent set -- has the 'latents' task run yet?")
@@ -137,7 +151,7 @@ def train_diffusion_stage(
 
     model, spec = build_diffusion(
         latent_dim=train_samples.z.shape[-1], hidden_dim=hidden_dim, n_layers=n_layers,
-        n_timesteps=n_timesteps, lead_hours=DEFAULT_LEADS,
+        n_timesteps=n_timesteps, dropout=dropout, lead_hours=DEFAULT_LEADS,
     )
     model.to(device)
     n_leads = len(DEFAULT_LEADS)
@@ -152,7 +166,7 @@ def train_diffusion_stage(
     mv = torch.as_tensor(val_samples.mask, dtype=torch.float32, device=device).unsqueeze(-1)
     n_val = zv.shape[0]
 
-    opt = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    opt = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
     def masked_noise_loss(z: object, y: object, m: object, n: int) -> object:
         t = torch.randint(0, n_timesteps, (n,), device=device, generator=generator)
@@ -251,6 +265,8 @@ def run_diffusion_curriculum(
     learning_rate: float = 1e-3,
     n_ensemble_eval: int = 20,
     patience: int = 20,
+    dropout: float = 0.0,
+    weight_decay: float = 0.0,
     curriculum_kwargs: dict | None = None,
 ) -> tuple[CurriculumRun, MetricSet, object, DiffusionArtifacts]:
     """Run the real (single-stage) curriculum for Anemoi-Spread against a
@@ -274,7 +290,7 @@ def run_diffusion_curriculum(
         joint_latents.train, joint_latents.val,
         hidden_dim=hidden_dim, n_layers=n_layers, n_timesteps=n_timesteps,
         epochs=epochs, learning_rate=learning_rate, n_ensemble_eval=n_ensemble_eval, seed=seed,
-        patience=patience,
+        patience=patience, dropout=dropout, weight_decay=weight_decay,
     )
 
     torch = require_torch()

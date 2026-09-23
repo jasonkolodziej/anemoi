@@ -163,6 +163,58 @@ def test_diffusion_accepts_extra_conditioning():
     assert model.sample(torch.randn(1, 24), n_members=3).shape == (3, len(LEADS), 3)
 
 
+def test_diffusion_dropout_is_real_but_inert_at_eval_time():
+    """#166: dropout is a new, opt-in regularization lever -- this pins
+    down both halves of that claim. In `train()` mode, a real nonzero
+    dropout must actually perturb the forward pass (otherwise the
+    parameter would silently do nothing, the exact failure mode that made
+    the original overfitting bug hard to see). In `eval()` mode -- how
+    every real served model runs, `training.real_inference.
+    load_trained_model` always calls `model.eval()` -- dropout must be a
+    no-op, so this is purely a training-time lever with zero effect on
+    real production forecasts, whatever value a promoted checkpoint used."""
+    torch = require_torch()
+    from anemoi.models.diffusion import build_diffusion
+
+    model, _ = build_diffusion(latent_dim=16, hidden_dim=32, n_layers=4,
+                               n_timesteps=10, dropout=0.5, lead_hours=LEADS)
+    noisy = torch.randn(1, len(LEADS), 3)
+    t = torch.zeros(1, dtype=torch.long)
+    cond = torch.randn(1, 16)
+
+    model.train()
+    torch.manual_seed(0)
+    out_a = model(noisy, t, cond)
+    torch.manual_seed(1)
+    out_b = model(noisy, t, cond)
+    assert not torch.allclose(out_a, out_b)
+
+    model.eval()
+    out_eval_a = model(noisy, t, cond)
+    out_eval_b = model(noisy, t, cond)
+    assert torch.allclose(out_eval_a, out_eval_b)
+
+
+def test_diffusion_default_dropout_matches_pre_166_behavior():
+    """Real regression guard: `dropout` defaults to 0.0, so a caller that
+    doesn't pass it (every real caller before #166) gets bit-for-bit the
+    same forward pass as before this parameter existed -- a real train()-
+    mode determinism check, not just an eval()-mode one."""
+    torch = require_torch()
+    from anemoi.models.diffusion import build_diffusion
+
+    model, _ = build_diffusion(latent_dim=16, hidden_dim=32, n_layers=4,
+                               n_timesteps=10, lead_hours=LEADS)
+    noisy = torch.randn(1, len(LEADS), 3)
+    t = torch.zeros(1, dtype=torch.long)
+    cond = torch.randn(1, 16)
+
+    model.train()
+    out_a = model(noisy, t, cond)
+    out_b = model(noisy, t, cond)
+    assert torch.allclose(out_a, out_b)
+
+
 # --- consistency model (#15) -------------------------------------------------
 
 

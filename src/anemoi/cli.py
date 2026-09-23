@@ -446,6 +446,8 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
         streaming=args.streaming,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        diffusion_dropout=args.diffusion_dropout,
+        diffusion_weight_decay=args.diffusion_weight_decay,
     )
     if args.derived_from_champions:
         used = runner.seed_from_champions()
@@ -1268,6 +1270,18 @@ def main(argv: list[str] | None = None) -> int:
             "--streaming only; real DataLoader worker processes (default: 0, "
             "main-process loading) -- training.streaming.make_dataloader"
         ),
+    )
+    p.add_argument(
+        "--diffusion-dropout", dest="diffusion_dropout", type=float, default=0.0,
+        help=(
+            "diffusion-only regularization (#166 follow-up to early stopping); "
+            "default 0.0 is unchanged pre-#166 behavior -- see "
+            "training.real_run_diffusion.train_diffusion_stage's docstring"
+        ),
+    )
+    p.add_argument(
+        "--diffusion-weight-decay", dest="diffusion_weight_decay", type=float, default=0.0,
+        help="diffusion-only Adam weight decay (#166 follow-up); default 0.0 is unchanged",
     )
     p.set_defaults(func=cmd_train_schedule)
 
