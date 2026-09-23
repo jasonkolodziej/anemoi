@@ -81,13 +81,17 @@ def _encode_group1(name: str, model, raw, stats: dict) -> np.ndarray | None:
 def _build_joint_latent(
     registry: ModelRegistry, checkpoint_store: CheckpointStore,
     track: Track, current: Fix, cache_dir: Path | str,
-) -> np.ndarray | None:
+) -> tuple[np.ndarray, dict[str, int]] | None:
     """The real concatenated latent vector all five Group 1 models
-    encode the current live window into, in `real_latents.GROUP1_ORDER`
-    -- ``None`` if any one of the five can't contribute (no registered
-    version, no real live feature, no checkpoint), since the real
-    diffusion model needs the exact ``latent_dim`` it was trained
-    against, not a partial vector."""
+    encode the current live window into, in `real_latents.GROUP1_ORDER`,
+    plus which real Group 1 *version* produced each entry -- ``None`` if
+    any one of the five can't contribute (no registered version, no real
+    live feature, no checkpoint), since the real diffusion model needs
+    the exact ``latent_dim`` it was trained against, not a partial
+    vector. The returned versions are what let the caller check whether
+    diffusion's own recorded `latent_signature` still matches what's
+    actually being served -- see `build_real_ensemble_fn`'s own
+    docstring for the real gap this closes."""
     from ..tracking.registry import Stage
     from .real_inference import (
         InferenceLoadError,
@@ -100,6 +104,7 @@ def _build_joint_latent(
     from .real_latents import GROUP1_ORDER
 
     latents: list[np.ndarray] = []
+    used_versions: dict[str, int] = {}
     for name in GROUP1_ORDER:
         version = registry.production(name) or registry.in_stage(name, Stage.STAGING)
         if version is None:
@@ -125,8 +130,9 @@ def _build_joint_latent(
         if latent is None:
             return None
         latents.append(latent)
+        used_versions[name] = version.version
 
-    return np.concatenate(latents)
+    return np.concatenate(latents), used_versions
 
 
 def build_real_ensemble_fn(
@@ -147,10 +153,27 @@ def build_real_ensemble_fn(
 
     Raises `InferenceEnsembleError` if the real diffusion model can't
     run for this cycle (fewer than five real Group 1 predictions, no
-    registered diffusion version, or no real standardisation stats) --
-    `run_cycle` already catches any `ensemble_fn` exception and degrades
-    to `climatological_ensemble` (§10.1), so this raises freely rather
-    than fabricating spread.
+    registered diffusion version, no real standardisation stats, or --
+    see below -- a real latent_signature mismatch) -- `run_cycle`
+    already catches any `ensemble_fn` exception and degrades to
+    `climatological_ensemble` (§10.1), so this raises freely rather than
+    fabricating spread.
+
+    **A real gap this closes, found while building the real Anemoi-
+    Spread backtest for #10.** `real_inference_cycle._real_fusion_
+    forecast` already refuses to combine Group 1 outputs through a
+    learned fusion checkpoint whose recorded `latent_signature` doesn't
+    match the live champion set (§5.7, #17) -- but this function, which
+    feeds live-encoded Group 1 latents into the real diffusion model,
+    had no equivalent check at all. Confirmed live 2026-09-23 against
+    the deployed registry: diffusion v4 recorded `latent_signature=
+    "lstmv7-cnnv6-transformerv5-gnnv5-pinnv5"`, but the live champions
+    were `lstmv8-cnnv7-transformerv5-gnnv5-pinnv6` -- every real cycle
+    was silently sampling diffusion against latents from a Group 1 set
+    it was never trained to interpret, with nothing refusing or even
+    flagging it. Fixed the same way #17 was: refuse and degrade
+    (raise here, `run_cycle` already falls back to `climatological_
+    ensemble`) rather than serve a real, silently-wrong ensemble.
     """
 
     def ensemble_fn(deterministic: DeterministicForecast, n_members: int) -> list[EnsembleMember]:
@@ -172,16 +195,28 @@ def build_real_ensemble_fn(
             )
         current = window[0]
 
-        z = _build_joint_latent(registry, checkpoint_store, track, current, cache_dir)
-        if z is None:
+        joint = _build_joint_latent(registry, checkpoint_store, track, current, cache_dir)
+        if joint is None:
             raise InferenceEnsembleError(
                 "not all five real Group 1 models could contribute a live latent "
                 "for this cycle -- the real diffusion ensemble needs all five"
             )
+        z, used_versions = joint
 
         version = registry.production("diffusion") or registry.in_stage("diffusion", Stage.STAGING)
         if version is None:
             raise InferenceEnsembleError("no registered diffusion version in staging/production")
+        if version.latent_signature is not None:
+            from ..tracking.registry import latent_signature as compute_latent_signature
+
+            actual_signature = compute_latent_signature(used_versions)
+            if version.latent_signature != actual_signature:
+                raise InferenceEnsembleError(
+                    f"diffusion v{version.version} was trained against latent signature "
+                    f"{version.latent_signature!r}, but the live Group 1 champion set is "
+                    f"{actual_signature!r} -- refusing to sample against mismatched latents "
+                    "(§5.7)"
+                )
         try:
             model, spec = load_trained_model("diffusion", version, checkpoint_store)
         except InferenceLoadError as exc:
