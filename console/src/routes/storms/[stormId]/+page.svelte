@@ -5,6 +5,7 @@
   import { ApiError } from "$lib/api/client";
   import type { StormDetail, CycleResult, SkewReportOut } from "$lib/api/types";
   import { listRegistry } from "$lib/api/endpoints";
+  import { pollWhileVisible } from "$lib/poll";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
   import {
@@ -87,8 +88,7 @@
     // reload to show that. Deliberately does not touch cycleInput/
     // members/coastlineLat/coastlineLon -- a poll must never overwrite
     // an in-progress form edit.
-    const interval = setInterval(load, 60_000);
-    return () => clearInterval(interval);
+    return pollWhileVisible(load, 60_000);
   });
 
   async function handleRunCycle() {

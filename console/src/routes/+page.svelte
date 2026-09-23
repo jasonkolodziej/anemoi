@@ -6,6 +6,7 @@
 	import StormCard from '$lib/components/anemoi/StormCard.svelte';
 	import CycleTimeline from '$lib/components/anemoi/CycleTimeline.svelte';
 	import { cycleLabel } from '$lib/utils';
+	import { pollWhileVisible } from '$lib/poll';
 
 	let storms = $state<StormSummary[] | null>(null);
 	let plans = $state<CyclePlanOut[] | null>(null);
@@ -37,8 +38,7 @@
 
 	onMount(() => {
 		load();
-		const interval = setInterval(load, 60_000);
-		return () => clearInterval(interval);
+		return pollWhileVisible(load, 60_000);
 	});
 </script>
 
