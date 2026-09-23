@@ -265,6 +265,30 @@ deploy` directly instead of through this script does not.
 A real Docker engine must be reachable locally during the deploy; it
 builds and pushes the image as part of it.
 
+### Automated deploy (#97)
+
+`.github/workflows/deploy-docker-api.yml` runs this exact `pnpm run
+cf:deploy` on every push to `main` that touches `docker/api/**` -- but
+it's gated behind the `cloudflare-production` GitHub Environment (a
+required reviewer, the repo owner), so a merge *queues* the deploy and
+nothing real ships until that's approved in the Actions run. Approving
+runs the identical command a manual deploy would, just from CI instead
+of a local machine.
+
+Needs `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` as secrets on that
+environment (Settings -> Environments -> `cloudflare-production` ->
+Environment secrets) -- not set up by the workflow itself; there's no
+portable token to copy in from a local `wrangler login` OAuth session,
+only a real token generated for CI specifically (Cloudflare dashboard ->
+My Profile -> API Tokens -> a scoped token with Cloudflare Containers +
+Workers Scripts edit permissions for this account). Until those secrets
+exist, the workflow runs and fails at the `wrangler deploy` step with an
+auth error -- a clear, real signal, not a silent no-op.
+
+The manual path above still works regardless and isn't being retired --
+useful for a deploy that can't wait for a merge, or while iterating
+locally before something is ready for `main`.
+
 ## Regenerating types
 
 `worker-configuration.d.ts` (the `Env` interface, `ExportedHandler`, and

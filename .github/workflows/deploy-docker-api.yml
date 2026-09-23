@@ -1,0 +1,78 @@
+name: Deploy docker/api
+
+# Automates the real deploy this project has run manually every time so far
+# (`cd docker/api && pnpm run cf:deploy`, #91). Real production infra, not a
+# build/lint check -- gated by the `cloudflare-production` GitHub Environment
+# (required reviewer: the repo owner) so a merge to main queues the deploy
+# but nothing real ships until someone clicks approve. See docker/api's own
+# README.md for what `wrangler deploy` actually does here (it builds and
+# pushes the Cloudflare Containers image itself -- no separate docker
+# build/push step needed).
+#
+# Needs CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID as secrets on the
+# cloudflare-production environment (Settings -> Environments ->
+# cloudflare-production -> Environment secrets) -- not added by this
+# workflow; there is no portable token to copy in, only a local
+# `wrangler login` OAuth session.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docker/api/**"
+  workflow_dispatch: {} # manual re-run, e.g. after adding secrets for the first time
+
+jobs:
+  deploy:
+    name: wrangler deploy (Cloudflare Containers)
+    runs-on: ubuntu-latest
+    environment: cloudflare-production
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        working-directory: docker/api
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Confirm the runner's Docker daemon is genuine Docker
+        run: |
+          # A real, documented gotcha (docker/api/README.md "problem 3"):
+          # a local shell with DOCKER_HOST pointed at podman silently broke
+          # `wrangler deploy`'s image build, with no error at the point
+          # DOCKER_HOST was set -- only much later, inside the build. That
+          # was a local-machine-specific misconfiguration, not something a
+          # GitHub-hosted runner should ever have, but this checks it
+          # directly rather than assuming.
+          if [ -n "${DOCKER_HOST:-}" ]; then
+            echo "DOCKER_HOST is set ($DOCKER_HOST) on this runner -- unexpected, refusing to deploy" >&2
+            exit 1
+          fi
+          docker info --format 'Docker daemon OK: {{.ServerVersion}} ({{.OperatingSystem}})'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Deploy
+        # cf:deploy already wraps `env -u DOCKER_HOST wrangler deploy` --
+        # a GitHub-hosted runner has no ambient DOCKER_HOST to strip, but
+        # this keeps the exact same command real local deploys use rather
+        # than a CI-specific variant that could drift from it.
+        run: pnpm run cf:deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
