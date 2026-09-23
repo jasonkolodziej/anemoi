@@ -68,6 +68,7 @@ Build and push:
 ```bash
 docker build \
   -f docker/cloud-run-training/Dockerfile \
+  --build-arg UV_TOOLS_IMAGE=ghcr.io/astral-sh/uv:0.8.22 \
   --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --build-arg VCS_REF="$(git rev-parse HEAD)" \
   --build-arg VERSION="${GHCR_TAG}" \
@@ -79,6 +80,8 @@ docker build \
 docker push "${IMAGE_URI}"
 docker push "${GHCR_REGISTRY}/${GHCR_NAMESPACE}/${GHCR_IMAGE}:latest"
 ```
+
+`UV_TOOLS_IMAGE` is pinned in the Dockerfile and can be bumped intentionally during upgrades.
 
 If `docker login ghcr.io` returns HTTP 403:
 

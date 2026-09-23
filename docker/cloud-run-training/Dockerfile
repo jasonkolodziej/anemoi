@@ -1,5 +1,8 @@
 FROM python:3.12-slim
 
+ARG UV_TOOLS_IMAGE=ghcr.io/astral-sh/uv:0.8.22
+COPY --from=${UV_TOOLS_IMAGE} /uv /uvx /bin/
+
 ARG BUILD_DATE=unknown
 ARG VCS_REF=unknown
 ARG VERSION=dev
@@ -7,11 +10,15 @@ ARG REPO_URL=https://github.com/jasonkolodziej/anemoi
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-ENV PIP_NO_CACHE_DIR=1
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
+ENV UV_NO_DEV=1
+ENV UV_PYTHON_DOWNLOADS=0
 ENV IMAGE_REGISTRY=ghcr.io
 ENV IMAGE_NAMESPACE=jasonkolodziej
 ENV IMAGE_NAME=anemoi-train
 ENV IMAGE_TAG=latest
+ENV PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app
 
@@ -29,14 +36,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libeccodes0 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md LICENSE ./
+
+# Install third-party dependencies first for better layer reuse when app code changes.
+RUN uv sync --locked --no-install-project \
+    --extra torch \
+    --extra tracking \
+    --extra gridded \
+    --extra storage
+
 COPY src ./src
 
-# torch: real model training
-# tracking: optional MLflow client integration
-# gridded: ERA5/GDAS real data deps
-# storage: S3/R2-backed checkpoint and registry sync
-RUN pip install --upgrade pip && pip install ".[torch,tracking,gridded,storage]"
+# Install the project itself into the existing uv-managed environment.
+RUN uv sync --locked \
+    --extra torch \
+    --extra tracking \
+    --extra gridded \
+    --extra storage
 
 # Keep the default HURDAT2 archive in-image for unattended jobs.
 RUN mkdir -p /app/data \
