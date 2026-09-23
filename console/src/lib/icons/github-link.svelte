@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
   // import { siteConfig } from "$lib/registry/blocks/navigation/components/site.context.svelte";
-  import Button from "$lib/registry/ui/button/button.svelte";
+  import Button from "$lib/components/ui/button/button.svelte";
   import GithubIcon from "./github.svelte";
+  import { goto } from "$app/navigation";
 
   async function getGithubStarCount() {
     try {
@@ -19,19 +20,17 @@
   // 	stars = await getGithubStarCount();
   // });
 
-  let { href, stars = $bindable(0) }: { href: string; stars: number } =
+  let { href, stars = $bindable(0) }: { href: string; stars?: number } =
     $props();
 </script>
 
 <Button
-  {href}
-  target="_blank"
-  rel="noreferrer"
   size="sm"
   variant="ghost"
   class="h-8 shadow-none"
+  onclick={() => goto(href)}
 >
-  <GithubIcon />
+  <GithubIcon class="inline-block text-muted-foreground" />
   <span class="text-muted-foreground inline-flex text-xs tabular-nums">
     {stars >= 1000 ? `${(stars / 1000).toFixed(1)}k` : stars.toLocaleString()}
   </span>

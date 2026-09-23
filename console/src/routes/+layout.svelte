@@ -7,6 +7,8 @@
   import { health } from "$lib/api/endpoints";
   import { cn } from "$lib/utils";
   import Waiter from "$lib/components/waiter/waiter.svelte";
+  import { GithubLink } from "$lib/icons";
+  import Github from "$lib/icons/github.svelte";
 
   let { children } = $props();
 
@@ -42,6 +44,7 @@
     if (href === "/") return page.url.pathname === "/";
     return page.url.pathname.startsWith(href);
   }
+  let version = $derived(anemoiVersion);
 </script>
 
 <!-- md:h-screen (not min-h-screen) + main's own md:overflow-y-auto is what
@@ -100,14 +103,14 @@
         {/each}
       </nav>
       <div class="border-t border-border p-3 text-[10px] text-text-faint">
-        Scope v2.1 · Reference implementation{anemoiVersion
-          ? ` · v${anemoiVersion}`
-          : ""} | GitHub:
+        {version ? `v${version} · ` : ""}
+
+        <Github class="inline-block size-2.5 text-text-faint mr-1" />
         <a
           href="https://github.com/jasonkolodziej/anemoi"
           class="text-text-faint hover:text-text"
           target="_blank"
-          rel="noopener noreferrer">anemoi/anemoi</a
+          rel="noopener noreferrer">jasonkolodziej/anemoi</a
         >
       </div>
     </aside>
