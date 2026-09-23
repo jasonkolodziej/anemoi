@@ -2,10 +2,14 @@
 @import 'tw-animate-css';
 @import 'shadcn-svelte/tailwind.css';
 @import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
 @import '@fontsource-variable/inter';
 @plugin '@tailwindcss/typography';
 
+
 @custom-variant dark (&:is(.dark *));
+@custom-variant fixed (&:is(.layout-fixed *));
+
 
 /*
  * Design tokens for the Anemoi console.
@@ -70,6 +74,8 @@
 	--color-bg: oklch(16.43% 0.0202 265.75); /* abyss, #0a0e17 */
 	--color-surface: oklch(21.01% 0.0318 264.66); /* deep, #111827 */
 	--color-surface-raised: oklch(23.5% 0.034 263.01); /* interpolated, surface->border */
+	--color-selection: var(--selection);
+	--color-selection-foreground: var(--selection-foreground);
 	--color-border: oklch(27.95% 0.0368 260.03); /* stratus, #1e293b */
 	--color-border-strong: oklch(33.0% 0.041 256.68); /* extrapolated beyond border */
 	--color-eye: oklch(98.42% 0.0034 247.86); /* #f8fafc */
@@ -157,6 +163,14 @@
 	--color-sidebar-accent-foreground: var(--color-text);
 	--color-sidebar-border: var(--color-border);
 	--color-sidebar-ring: var(--color-action);
+
+	/* Additional breakpoints */
+	--breakpoint-3xl: 1600px;
+	--breakpoint-4xl: 2000px;
+
+	--selection: oklch(0.922 0 0);
+	--selection-foreground: oklch(0.205 0 0);
+
 }
 
 @layer base {
@@ -169,6 +183,8 @@
 	}
 	::selection {
 		background: color-mix(in oklab, var(--color-action) 35%, transparent);
+		@apply bg-selection text-selection-foreground;
+
 	}
 	:focus-visible {
 		outline: 2px solid var(--color-action);
@@ -190,6 +206,47 @@
 			transition-duration: 0.001ms !important;
 			scroll-behavior: auto !important;
 		}
+	}
+}
+
+@utility step {
+	counter-increment: step;
+	@apply relative;
+
+	&:before {
+		@apply end-0 me-2 hidden size-7 items-center justify-center rounded-full text-center -indent-px font-mono text-sm font-medium text-muted-foreground md:absolute;
+		content: counter(step);
+	}
+}
+
+@utility extend-touch-target {
+	@media (pointer: coarse) {
+		@apply relative touch-manipulation after:absolute after:-inset-2;
+	}
+}
+
+@utility section-soft {
+	@apply bg-gradient-to-b from-background to-surface/40 dark:bg-background 3xl:fixed:bg-none;
+}
+
+@utility theme-container {
+	@apply font-sans;
+}
+
+@utility container-wrapper {
+	@apply mx-auto w-full px-2 3xl:fixed:max-w-[calc(var(--breakpoint-2xl)+2rem)];
+}
+
+@utility container {
+	@apply mx-auto max-w-350 px-4 3xl:max-w-screen-2xl lg:px-8;
+}
+
+@utility no-scrollbar {
+	-ms-overflow-style: none;
+	scrollbar-width: none;
+
+	&::-webkit-scrollbar {
+		display: none;
 	}
 }
 
