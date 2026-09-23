@@ -54,6 +54,30 @@ class SpreadBacktestError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class ConeOutcome:
+    """What the real served cone (`inference.postprocess.build_cone`) did on
+    these cases: how often it used the ensemble's own spread rather than
+    falling back to climatology, and how often the truth then fell outside
+    the radius actually served at the longest lead. The cone is a 2/3
+    probability circle, so a calibrated cone misses about a third."""
+
+    lead_hours: int
+    n_cases: int
+    n_ensemble_basis: int
+    miss_rate_ensemble: float | None
+    miss_rate_climatology: float | None
+
+    def to_dict(self) -> dict:
+        return {
+            "lead_hours": self.lead_hours,
+            "n_cases": self.n_cases,
+            "n_ensemble_basis": self.n_ensemble_basis,
+            "miss_rate_ensemble": self.miss_rate_ensemble,
+            "miss_rate_climatology": self.miss_rate_climatology,
+        }
+
+
 @dataclass(slots=True)
 class SpreadBacktestReport:
     diffusion_version: int
@@ -64,6 +88,7 @@ class SpreadBacktestReport:
     recurving: list[LeadCalibration]
     recommendation: str
     reasons: list[str] = field(default_factory=list)
+    cone: ConeOutcome | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -75,7 +100,47 @@ class SpreadBacktestReport:
             "recurving": [r.to_dict() for r in self.recurving],
             "recommendation": self.recommendation,
             "reasons": self.reasons,
+            "cone": self.cone.to_dict() if self.cone else None,
         }
+
+
+def served_cone_outcome(
+    members_abs: np.ndarray, true_abs: np.ndarray, mask: np.ndarray, lead_hours: tuple[int, ...],
+) -> ConeOutcome | None:
+    """Run the real `build_cone` on each case and score the cone it would
+    actually serve at the longest lead that has verifying observations."""
+    from ..geo import haversine_nm
+    from ..inference.postprocess import EnsembleMember, build_cone
+
+    li = len(lead_hours) - 1
+    cases = np.flatnonzero(mask[:, li])
+    if len(cases) == 0:
+        return None
+    hits: dict[str, list[bool]] = {"ensemble": [], "climatology": []}
+    for ci in cases:
+        members = [
+            EnsembleMember(
+                member_id=mi, lead_hours=lead_hours,
+                lats=members_abs[ci, mi, :, 0], lons=members_abs[ci, mi, :, 1],
+                winds_kt=members_abs[ci, mi, :, 2],
+            )
+            for mi in range(members_abs.shape[1])
+        ]
+        segments, _notes = build_cone(members, lead_hours)
+        seg = segments[li]
+        miss = haversine_nm(seg.center_lat, seg.center_lon, *true_abs[ci, li, :2]) > seg.radius_nm
+        hits[seg.basis].append(bool(miss))
+
+    def rate(xs: list[bool]) -> float | None:
+        return float(np.mean(xs)) if xs else None
+
+    return ConeOutcome(
+        lead_hours=int(lead_hours[li]),
+        n_cases=len(cases),
+        n_ensemble_basis=len(hits["ensemble"]),
+        miss_rate_ensemble=rate(hits["ensemble"]),
+        miss_rate_climatology=rate(hits["climatology"]),
+    )
 
 
 def recommend_extra_conditioning(
@@ -203,6 +268,7 @@ def run_spread_backtest(
         recurving=recurving,
         recommendation=recommendation,
         reasons=reasons,
+        cone=served_cone_outcome(members_abs, true_abs, val.mask, lead_hours),
     )
 
 
@@ -225,6 +291,18 @@ def format_report(report: SpreadBacktestReport) -> str:
                 f"{r.spread_skill.spread:>9.1f} {r.spread_skill.skill:>9.1f} "
                 f"{r.ratio:>6.2f} {r.outer_rank_fraction:>8.0%}  {r.verdict}"
             )
+    if report.cone is not None:
+        c = report.cone
+
+        def pct(x):
+            return "n/a" if x is None else f"{x:.0%}"
+
+        lines.append(
+            f"\nserved cone at {c.lead_hours}h (build_cone, 2/3-probability circle -- "
+            f"calibrated misses ~33%): ensemble basis on {c.n_ensemble_basis}/{c.n_cases} "
+            f"cases; truth outside the served cone: ensemble-basis {pct(c.miss_rate_ensemble)}, "
+            f"climatology-basis {pct(c.miss_rate_climatology)}"
+        )
     lines.append(f"\nextra_conditioning_dim: {report.recommendation}")
     lines.extend(f"  - {reason}" for reason in report.reasons)
     return "\n".join(lines)

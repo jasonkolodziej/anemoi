@@ -209,5 +209,41 @@ def test_runs_end_to_end_through_a_real_diffusion_model(tmp_path, patched):
         assert sum(r.rank_counts) == r.n_cases
         assert np.isfinite(r.ratio)
     assert report.recommendation in {"warranted", "not_warranted", "insufficient_data"}
+    assert report.cone is not None and report.cone.lead_hours == 120
+    assert "served cone" in format_report(report)
     assert "extra_conditioning_dim" in format_report(report)
     json.dumps(report.to_dict())  # serialisable for the CLI's --out
+
+
+def test_served_cone_scores_what_build_cone_actually_serves():
+    """A tight ensemble must be scored against the climatological cone
+    build_cone falls back to; a wide one against its own spread -- and a
+    truth far outside the served radius counts as a miss either way."""
+    from anemoi.geo import offset_position
+    from anemoi.training.spread_backtest import served_cone_outcome
+
+    leads = (24, 120)
+    rng = np.random.default_rng(1)
+
+    def ensemble(sigma_nm, n_members=20):
+        out = np.zeros((n_members, len(leads), 3))
+        for mi in range(n_members):
+            for li in range(len(leads)):
+                e, n = rng.normal(0, sigma_nm, size=2)
+                bearing = float(np.degrees(np.arctan2(e, n)))
+                out[mi, li, :2] = offset_position(25.0, -70.0, float(np.hypot(e, n)), bearing)
+                out[mi, li, 2] = 80.0
+        return out
+
+    tight, wide = ensemble(5.0), ensemble(400.0)
+    members = np.stack([tight, wide])
+    far_truth = offset_position(25.0, -70.0, 1500.0, 0.0)
+    truth = np.array([[[25.0, -70.0, 80.0], [*far_truth, 80.0]]] * 2)
+
+    outcome = served_cone_outcome(members, truth, np.ones((2, 2), dtype=bool), leads)
+
+    assert outcome.lead_hours == 120
+    assert outcome.n_cases == 2
+    assert outcome.n_ensemble_basis == 1  # only the wide one keeps its own spread
+    assert outcome.miss_rate_ensemble == 1.0
+    assert outcome.miss_rate_climatology == 1.0
