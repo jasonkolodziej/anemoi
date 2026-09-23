@@ -6,6 +6,10 @@
 #     --substitutions _IMAGE=us-central1-docker.pkg.dev/${PROJECT_ID}/anemoi/anemoi-train,_TAG=$(git rev-parse --short=12 HEAD) .
 steps:
   - name: gcr.io/cloud-builders/docker
+    # BuildKit: the Dockerfile's `COPY --from=${UV_TOOLS_IMAGE}` needs it, and
+    # this builder otherwise uses the legacy engine, which doesn't expand it.
+    env:
+      - DOCKER_BUILDKIT=1
     args:
       - build
       - -f
