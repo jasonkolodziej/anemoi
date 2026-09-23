@@ -97,6 +97,10 @@ def distill_consistency_model(
 
     if len(train_samples) == 0 or len(val_samples) == 0:
         raise ValueError("empty train or val latent set")
+    if epochs < 1:
+        raise ValueError("epochs must be >= 1")
+    if patience < 1:
+        raise ValueError("patience must be >= 1")
 
     torch = require_torch()
     device = device or get_device()
@@ -121,10 +125,11 @@ def distill_consistency_model(
     # keeps using that same reference for CPU-only inference afterwards
     # (`evaluate_step_budget_tradeoff`, mirroring `spread_backtest`'s own
     # convention) -- moving it here for training speed must not leak back
-    # to the caller as a side effect, so it is restored below.
+    # to the caller as a side effect, so both device and train/eval mode
+    # are restored in `finally` below, even if training itself raises
+    # (OOM, a NaN loss, a keyboard interrupt).
     teacher_original_device = next(teacher.parameters()).device
-    teacher.to(device)
-    teacher.eval()
+    teacher_original_training = teacher.training
 
     def prep(samples: JointLatentSamples):
         z = torch.as_tensor((samples.z - z_mean) / z_std, dtype=torch.float32, device=device)
@@ -136,7 +141,6 @@ def distill_consistency_model(
     zv, yv, mv = prep(val_samples)
 
     opt = torch.optim.Adam(student.parameters(), lr=learning_rate)
-    alpha_bars = teacher.alpha_bars
 
     def step_loss(predict_net, target_net, z, y, m, n: int) -> object:
         idx = torch.randperm(z.shape[0], generator=generator, device=device)[
@@ -147,6 +151,7 @@ def distill_consistency_model(
         n_idx = torch.randint(0, n_timesteps - 1, (bsz,), device=device, generator=generator)
         t_next = n_idx + 1
         noise = torch.randn(y.shape, device=device, generator=generator)
+        alpha_bars = teacher.alpha_bars
         ab_next = alpha_bars[t_next].view(-1, 1, 1)
         x_next = torch.sqrt(ab_next) * y + torch.sqrt(1.0 - ab_next) * noise
         with torch.no_grad():
@@ -160,44 +165,51 @@ def distill_consistency_model(
         loss_elem = _pseudo_huber(pred - target_val, huber_c)
         return (loss_elem * m).sum() / m.sum().clamp(min=1.0)
 
-    best_val_loss = float("inf")
-    best_state: dict | None = None
-    epochs_run = 0
-    since_improve = 0
-    n_train = train_samples.z.shape[0]
-    for epoch in range(epochs):
-        student.train()
-        opt.zero_grad()
-        loss = step_loss(student, target, zt, yt, mt, n_train)
-        loss.backward()
-        opt.step()
-        with torch.no_grad():
-            for p_t, p_s in zip(target.parameters(), student.parameters(), strict=True):
-                p_t.mul_(ema_decay).add_(p_s, alpha=1.0 - ema_decay)
-        epochs_run = epoch + 1
+    try:
+        teacher.to(device)
+        teacher.eval()
 
-        student.eval()
+        best_val_loss = float("inf")
+        best_state: dict | None = None
+        epochs_run = 0
+        since_improve = 0
+        n_train = train_samples.z.shape[0]
+        for epoch in range(epochs):
+            student.train()
+            opt.zero_grad()
+            loss = step_loss(student, target, zt, yt, mt, n_train)
+            loss.backward()
+            opt.step()
+            with torch.no_grad():
+                for p_t, p_s in zip(target.parameters(), student.parameters(), strict=True):
+                    p_t.mul_(ema_decay).add_(p_s, alpha=1.0 - ema_decay)
+            epochs_run = epoch + 1
+
+            student.eval()
+            target.eval()
+            with torch.no_grad():
+                val_loss_val = float(
+                    step_loss(target, target, zv, yv, mv, n_val_samples_per_epoch).item()
+                )
+            if val_loss_val < best_val_loss:
+                best_val_loss = val_loss_val
+                best_state = {k: v.detach().clone() for k, v in target.state_dict().items()}
+                since_improve = 0
+            else:
+                since_improve += 1
+                if since_improve >= patience:
+                    break
+
+        target.load_state_dict(best_state)
         target.eval()
         with torch.no_grad():
-            val_loss_val = float(
-                step_loss(target, target, zv, yv, mv, n_val_samples_per_epoch).item()
+            train_loss = float(
+                step_loss(target, target, zt, yt, mt, n_train).item()
             )
-        if val_loss_val < best_val_loss:
-            best_val_loss = val_loss_val
-            best_state = {k: v.detach().clone() for k, v in target.state_dict().items()}
-            since_improve = 0
-        else:
-            since_improve += 1
-            if since_improve >= patience:
-                break
+    finally:
+        teacher.to(teacher_original_device)
+        teacher.train(teacher_original_training)
 
-    target.load_state_dict(best_state)
-    target.eval()
-    with torch.no_grad():
-        train_loss = float(
-            step_loss(target, target, zt, yt, mt, n_train).item()
-        )
-    teacher.to(teacher_original_device)
     target.to("cpu")
     return target, train_loss, best_val_loss, epochs_run
 
@@ -395,8 +407,8 @@ def evaluate_step_budget_tradeoff(
             student_ratio = student_ratios.get((lead, quantity))
             if student_ratio is None:
                 shortfalls.append(
-                    f"{config.label}: {quantity} at {lead}h had no lead meeting the minimum "
-                    f"case count (teacher ratio {teacher_ratio:.2f})"
+                    f"{config.label}: {quantity} at {lead}h did not meet the minimum case "
+                    f"count for the student (teacher ratio {teacher_ratio:.2f})"
                 )
             elif student_ratio < underdispersion_tolerance * teacher_ratio:
                 shortfalls.append(

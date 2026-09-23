@@ -141,6 +141,42 @@ def test_distillation_trains_a_student_without_mutating_the_teachers_device(teac
     assert np.isfinite(val_loss)
 
 
+@pytest.mark.parametrize("kwargs", [{"epochs": 0}, {"patience": 0}])
+def test_distillation_rejects_a_non_positive_epochs_or_patience(teacher_and_data, kwargs):
+    from anemoi.training.consistency_distillation import distill_consistency_model
+
+    teacher, train, val, stats = teacher_and_data
+    with pytest.raises(ValueError, match="epochs|patience"):
+        distill_consistency_model(teacher, train, val, arch_params=_ARCH, **kwargs, **stats)
+
+
+def test_distillation_restores_the_teachers_device_and_mode_even_if_training_raises(
+    teacher_and_data,
+):
+    """The real regression Copilot review caught on PR #170: a mid-loop
+    exception (OOM, a NaN loss, a keyboard interrupt) must not leave the
+    caller's `teacher` stranded on the training device or in train() mode
+    -- both must be restored in `finally`, not only on the success path."""
+    from anemoi.training.consistency_distillation import distill_consistency_model
+
+    teacher, train, val, stats = teacher_and_data
+    device_before = next(teacher.parameters()).device
+    teacher.eval()
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("simulated mid-training failure")
+
+    teacher.forward = boom
+
+    with pytest.raises(RuntimeError, match="simulated mid-training failure"):
+        distill_consistency_model(
+            teacher, train, val, arch_params=_ARCH, epochs=6, patience=3, **stats,
+        )
+
+    assert next(teacher.parameters()).device == device_before
+    assert teacher.training is False
+
+
 def test_evaluate_step_budget_tradeoff_runs_end_to_end(teacher_and_data):
     from anemoi.models.consistency import build_consistency_model
 
