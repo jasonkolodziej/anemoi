@@ -6,6 +6,9 @@
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
 	import { colorFor } from '$lib/branding';
+	import { BarChart } from 'layerchart';
+	import * as Chart from '$lib/components/ui/chart';
+	import type { ChartConfig } from '$lib/components/ui/chart';
 
 	let drift = $state<DriftReportOut[] | null>(null);
 	let skew = $state<SkewReportOut | null>(null);
@@ -18,6 +21,20 @@
 			error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
 		}
 	});
+
+	// Real per-feature drift is already computed server-side
+	// (`FeatureDriftOut.standardized_shift`) -- it was only ever rendered
+	// as a scrolling list of numbers, and only for the alerting subset.
+	// This charts every feature the model tracks, not just the drifted
+	// ones, so "how close is this to alerting" is visible before it
+	// alerts. There is no historical snapshot to chart a trend *over
+	// time* against (`DriftReportOut` is a live snapshot, not a series --
+	// see `cycle_store.save_drift_live`), so this deliberately stays a
+	// per-feature magnitude chart rather than fabricating a time axis
+	// with only one real point on it.
+	const shiftConfig: ChartConfig = {
+		shift: { label: 'standardized shift (σ)', color: 'var(--color-fusion)' }
+	};
 </script>
 
 <div class="mx-auto max-w-5xl px-6 py-8">
@@ -63,15 +80,33 @@
 						</CardHeader>
 						<CardContent>
 							<p class="text-xs text-text-muted">{report.summary}</p>
-							{#if report.alert}
-								<div class="mt-3 space-y-1">
-									{#each report.features.filter((f) => f.drifted) as f (f.name)}
-										<div class="flex justify-between text-[11px]">
-											<span class="font-data text-text-faint">{f.name}</span>
-											<span class="font-data text-text-muted">{f.standardized_shift > 0 ? '+' : ''}{f.standardized_shift.toFixed(2)}σ</span>
-										</div>
-									{/each}
-								</div>
+							{#if report.features.length > 0}
+								<Chart.Container
+									config={shiftConfig}
+									class="mt-3 w-full"
+									style={`height:${Math.max(140, report.features.length * 26)}px`}
+								>
+									<BarChart
+										data={report.features}
+										orientation="horizontal"
+										y="name"
+										padding={{ left: 84 }}
+										c={(f: (typeof report.features)[number]) =>
+											f.drifted ? 'drifted' : 'stable'}
+										cDomain={['stable', 'drifted']}
+										cRange={['var(--color-fusion)', 'var(--color-status-degraded)']}
+										series={[
+											{
+												key: 'shift',
+												value: (f: (typeof report.features)[number]) => f.standardized_shift
+											}
+										]}
+									>
+										{#snippet tooltip()}
+											<Chart.Tooltip labelKey="name" />
+										{/snippet}
+									</BarChart>
+								</Chart.Container>
 							{/if}
 						</CardContent>
 					</Card>

@@ -268,6 +268,8 @@
             rapidIntensification={cycle.payload.rapid_intensification}
             riProbability={cycle.payload.ri_probability}
             {skironCrps}
+            perModelTracks={cycle.products.per_model_tracks}
+            bind:hoveredModel
           />
         </div>
         <div class="space-y-6">

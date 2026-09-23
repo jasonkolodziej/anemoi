@@ -19,10 +19,19 @@
    * rather than going through the browser's CSS cascade). The legend
    * now floats over the map itself (bottom-left), not below it.
    *
-   * Cone circles are real geodesic polygons (`geoCircle`), not
-   * MapLibre's screen-space `circle-radius` -- a 300nm cone must shrink/
-   * grow with the map's real geographic scale when zooming, the same
-   * real-distance correctness the old `nmToPx` conversion had.
+   * The cone itself is the convex hull (`d3-polygon`) of every lead
+   * time's own real geodesic circle (`geoCircle`, not MapLibre's screen-
+   * space `circle-radius` -- a 300nm cone must shrink/grow with the
+   * map's real geographic scale when zooming, same as the old `nmToPx`
+   * conversion). v1.3: drawing each `ConeSegmentOut` as its own separate
+   * circle read as an unreadable Venn diagram in real user testing
+   * ("what are the large transparent circles?") -- one hull over all of
+   * them is the same real uncertainty region as one legible shape. Real
+   * user testing also asked for tap-for-detail on a forecast point: see
+   * `onForecastPointClick` below for why that's a positioned shadcn
+   * `Tooltip` anchored to the click's screen pixel rather than a real
+   * DOM trigger -- the circle it's tapping is canvas-rendered, not a
+   * DOM element a trigger could sit on.
    *
    * Layout/interaction (in-map legend, a pulsing current-fix marker,
    * per-model tracks) is deliberately modeled on the original
@@ -35,9 +44,9 @@
    * end-to-end for this. The concept mock's raw Skiron ensemble-member
    * polylines are a different story: `ConeSegmentOut` is one aggregate
    * radius per lead time, not per-member positions, so there is no
-   * real per-member geometry to draw -- the cone-circle rendering
-   * already here is the honest equivalent of that spread, and its own
-   * legend entry says so ("cone/spread"). The legend itself is real
+   * real per-member geometry to draw -- the cone hull rendered here is
+   * the honest equivalent of that spread, and its own legend entry says
+   * so ("uncertainty cone"). The legend itself is real
    * and clickable (each entry toggles its own layer's real MapLibre
    * `visibility`), not just a static key the way the concept mock's
    * map-embedded legend was.
@@ -60,6 +69,7 @@
   import type {
     Map as MaplibreMap,
     ExpressionSpecification,
+    MapLayerMouseEvent,
   } from "maplibre-gl";
   import {
     MapLibre,
@@ -71,9 +81,11 @@
     Marker,
     AttributionControl,
   } from "svelte-maplibre-gl";
+  import { polygonHull } from "d3-polygon";
   import type { ConeSegmentOut, FixOut, TrackPointOut } from "$lib/api/types";
   import { cn, SAFFIR_SIMPSON, saffirSimpson } from "$lib/utils";
   import { colorFor } from "$lib/branding";
+  import * as Tooltip from "$lib/components/ui/tooltip";
 
   interface Props {
     history: FixOut[];
@@ -200,16 +212,40 @@
     return ring;
   }
 
-  const coneFeatures = $derived({
-    type: "FeatureCollection" as const,
-    features: cone.map((seg) => ({
+  // A single envelope over every lead-time's real uncertainty circle,
+  // instead of drawing each `ConeSegmentOut` as its own overlapping
+  // circle (the "what are the large transparent circles?" complaint --
+  // real, found via user testing). `basis` is decided once per cone, not
+  // per lead time (`postprocess.build_cone` picks ensemble-vs-climatology
+  // from the *longest* lead's spread and applies it to every segment), so
+  // there is never a mixed-basis cone to represent here.
+  //
+  // The convex hull of the segment circles' own boundary points is an
+  // honest approximation of the true region those circles sweep, not
+  // fabricated geometry -- for a track that loops back on itself sharply
+  // it can be looser than a true polygon union (unavailable without a
+  // real boolean-union library), but it never claims a smaller area of
+  // uncertainty than the real per-segment circles it's built from.
+  const coneHull = $derived.by(() => {
+    if (cone.length === 0) return null;
+    const boundaryPoints = cone.flatMap((seg) =>
+      geoCircle(seg.lat, seg.lon, seg.radius_nm, 32),
+    );
+    const hull = polygonHull(boundaryPoints);
+    if (!hull) return null;
+    return {
       type: "Feature" as const,
-      properties: { basis: seg.basis },
+      properties: { basis: cone[0].basis },
       geometry: {
         type: "Polygon" as const,
-        coordinates: [geoCircle(seg.lat, seg.lon, seg.radius_nm)],
+        coordinates: [[...hull, hull[0]]],
       },
-    })),
+    };
+  });
+
+  const coneFeatures = $derived({
+    type: "FeatureCollection" as const,
+    features: coneHull ? [coneHull] : [],
   });
 
   const historyLine = $derived({
@@ -338,6 +374,32 @@
     return on ? "visible" : "none";
   }
 
+  // Real tap-for-detail on a forecast point (the proposal's "can the
+  // projection point have a tool tip such that when you tap the
+  // projection point the hour and other data comes up?"). The circle is
+  // canvas-rendered by MapLibre, not a real DOM element, so there is no
+  // element for a shadcn `Tooltip.Trigger` to sit on -- instead the
+  // trigger is a zero-size DOM anchor positioned at the click's real
+  // screen pixel (`event.point`, already in the map container's own
+  // coordinate space), and the tooltip's open state is driven directly
+  // rather than through the trigger's own hover/focus handlers. Click
+  // hit-testing (unlike continuous hover) is reliable against these
+  // small circles in real browser testing -- see the module docstring
+  // for why a hover popup was tried and dropped earlier.
+  let tooltipPoint = $state<TrackPointOut | null>(null);
+  let tooltipAnchor = $state<{ x: number; y: number } | null>(null);
+  let tooltipOpen = $state(false);
+
+  function onForecastPointClick(e: MapLayerMouseEvent) {
+    const props = e.features?.[0]?.properties as { lead_hours?: number } | undefined;
+    if (props?.lead_hours === undefined) return;
+    const point = forecastTrack.find((t) => t.lead_hours === props.lead_hours);
+    if (!point) return;
+    tooltipPoint = point;
+    tooltipAnchor = { x: e.point.x, y: e.point.y };
+    tooltipOpen = true;
+  }
+
   let map = $state<MaplibreMap | undefined>();
   // A plain boolean, not `map` itself -- `bind:map` gets rewritten by
   // MapLibre.svelte's own internal move/zoom listener on every pan (it
@@ -383,6 +445,18 @@
     const m = untrack(() => map);
     m?.fitBounds(bounds, { padding: 48, duration: 0 });
   });
+
+  // The tap tooltip's anchor is a screen pixel, not a real lon/lat -- it
+  // goes stale the instant the map pans/zooms, so close it on the next
+  // real camera move rather than trying to re-project it every frame.
+  $effect(() => {
+    if (!mapReady) return;
+    const m = untrack(() => map);
+    if (!m) return;
+    const close = () => (tooltipOpen = false);
+    m.on("movestart", close);
+    return () => m.off("movestart", close);
+  });
 </script>
 
 <div class="relative" bind:this={mapContainerEl}>
@@ -403,25 +477,15 @@
     <GeoJSONSource data={coneFeatures}>
       <FillLayer
         layout={{ visibility: vis(visible.cone) }}
-        paint={{ "fill-color": colors.fusion, "fill-opacity": 0.05 }}
+        paint={{ "fill-color": colors.fusion, "fill-opacity": 0.08 }}
       />
       <LineLayer
-        filter={["==", ["get", "basis"], "climatology"]}
         layout={{ visibility: vis(visible.cone) }}
         paint={{
           "line-color": colors.fusion,
           "line-width": 1,
-          "line-opacity": 0.35,
-          "line-dasharray": [2, 2],
-        }}
-      />
-      <LineLayer
-        filter={["!=", ["get", "basis"], "climatology"]}
-        layout={{ visibility: vis(visible.cone) }}
-        paint={{
-          "line-color": colors.fusion,
-          "line-width": 1,
-          "line-opacity": 0.35,
+          "line-opacity": 0.4,
+          "line-dasharray": coneHull?.properties.basis === "climatology" ? [2, 2] : [1, 0],
         }}
       />
     </GeoJSONSource>
@@ -477,6 +541,7 @@
           "circle-stroke-color": colors.bg,
           "circle-stroke-width": 1.5,
         }}
+        onclick={onForecastPointClick}
       />
       <SymbolLayer
         layout={{
@@ -575,9 +640,10 @@
         !visible.cone && "opacity-40",
       )}
     >
-      <span class="h-2 w-2 rounded-full bg-fusion opacity-20"></span>cone/spread
-      (dashed = climatology fallback)
+      <span class="h-2 w-2 rounded-full bg-fusion opacity-20"></span>uncertainty
+      cone (dashed = climatology fallback)
     </button>
+    <span class="px-1 py-0.5 text-text-faint/70">tap a forecast point for detail</span>
     {#if modelSlugs.length > 0}
       <button
         type="button"
@@ -611,6 +677,34 @@
       </button>
     {/if}
   </div>
+
+  <!-- Relies on the single `Tooltip.Provider` at the root layout
+       (+layout.svelte) -- bits-ui's own singleton-tooltip model expects
+       exactly one, not one per component. -->
+  <Tooltip.Root bind:open={tooltipOpen}>
+    <Tooltip.Trigger
+      tabindex={-1}
+      class="pointer-events-none absolute h-0 w-0 border-0 bg-transparent p-0"
+      style={tooltipAnchor
+        ? `left:${tooltipAnchor.x}px; top:${tooltipAnchor.y}px`
+        : "display:none"}
+    ></Tooltip.Trigger>
+    <Tooltip.Content side="top">
+      {#if tooltipPoint}
+        <div class="font-data space-y-0.5">
+          <p class="font-medium">+{tooltipPoint.lead_hours}h</p>
+          <p>
+            {tooltipPoint.wind_kt.toFixed(0)}kt · {saffirSimpson(
+              tooltipPoint.wind_kt,
+            ).label}
+          </p>
+          <p class="text-background/70">
+            {tooltipPoint.lat.toFixed(1)}°, {tooltipPoint.lon.toFixed(1)}°
+          </p>
+        </div>
+      {/if}
+    </Tooltip.Content>
+  </Tooltip.Root>
 </div>
 
 <style>

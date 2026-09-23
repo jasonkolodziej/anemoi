@@ -8,6 +8,7 @@
   import { cn } from "$lib/utils";
   import Waiter from "$lib/components/waiter/waiter.svelte";
   import { GithubLink } from "$lib/icons";
+  import * as Tooltip from "$lib/components/ui/tooltip/index.js";
   import Github from "$lib/icons/github.svelte";
 
   let { children } = $props();
@@ -47,7 +48,8 @@
   let version = $derived(anemoiVersion);
 </script>
 
-<!-- md:h-screen (not min-h-screen) + main's own md:overflow-y-auto is what
+<Tooltip.Provider delayDuration={150}>
+  <!-- md:h-screen (not min-h-screen) + main's own md:overflow-y-auto is what
      actually makes main the scroll container on desktop, keeping aside
      fixed in place -- min-h-screen alone lets the whole flex row just grow
      past the viewport together, so the real scroll happens on <html>
@@ -55,81 +57,84 @@
      docs was the first page with genuinely tall content. Mobile keeps
      min-h-screen/normal document scroll -- the sticky header works fine
      with that, no container trick needed. -->
-<div class="flex min-h-screen flex-col md:h-screen md:flex-row">
-  <!-- Desktop: persistent rail. A fixed 224px sidebar eats over half a
+  <div class="flex min-h-screen flex-col md:h-screen md:flex-row">
+    <!-- Desktop: persistent rail. A fixed 224px sidebar eats over half a
 	     phone viewport, so this is `md:`-and-up only -- see MobileNav for
 	     the small-screen equivalent below. -->
-  <Waiter
-    fullPage={true}
-    carriageWidth="0.5em"
-    iconComponent={{
-      component: HurricaneIcon,
-      props: {
-        spinning: "teeter-spin",
-        class: "pb-4",
-      },
-    }}
-  >
-    <aside
-      class="hidden w-56 shrink-0 flex-col border-r border-border bg-surface pt-[env(safe-area-inset-top)] md:flex"
+    <Waiter
+      fullPage={true}
+      carriageWidth="0.5em"
+      iconComponent={{
+        component: HurricaneIcon,
+        props: {
+          spinning: "teeter-spin",
+          class: "pb-4",
+        },
+      }}
     >
-      <a
-        href="/"
-        class="flex items-center gap-2.5 border-b border-border px-4 py-4"
+      <aside
+        class="hidden w-56 shrink-0 flex-col border-r border-border bg-surface pt-[env(safe-area-inset-top)] md:flex"
       >
-        <HurricaneIcon size={26} />
-        <div>
+        <a
+          href="/"
+          class="flex items-center gap-2.5 border-b border-border px-4 py-4"
+        >
+          <HurricaneIcon size={26} />
+          <div>
+            <p
+              class="font-display text-sm font-semibold leading-none text-text"
+            >
+              Anemoi
+            </p>
+            <p class="text-[10px] leading-none text-text-faint mt-1">
+              Many winds. One forecast.
+            </p>
+          </div>
+        </a>
+        <nav class="flex-1 space-y-0.5 overflow-y-auto p-2">
+          {#each nav as item (item.href)}
+            <a
+              href={item.href}
+              class={cn(
+                "block rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                isActive(item.href)
+                  ? "bg-surface-raised text-text"
+                  : "text-text-muted hover:bg-surface-raised/60 hover:text-text",
+              )}
+            >
+              {item.label}
+            </a>
+          {/each}
+        </nav>
+        <div class="border-t border-border p-3 text-[10px] text-text-faint">
+          {version ? `v${version} · ` : ""}
+
+          <Github class="inline-block size-2.5 text-text-faint mr-1" />
+          <a
+            href="https://github.com/jasonkolodziej/anemoi"
+            class="text-text-faint hover:text-text"
+            target="_blank"
+            rel="noopener noreferrer">jasonkolodziej/anemoi</a
+          >
+        </div>
+      </aside>
+
+      <!-- Mobile: a slim top bar + off-canvas drawer instead of the rail. -->
+      <header
+        class="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-border bg-surface px-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] pb-3 md:hidden"
+      >
+        <a href="/" class="flex items-center gap-2">
+          <HurricaneIcon size={22} />
           <p class="font-display text-sm font-semibold leading-none text-text">
             Anemoi
           </p>
-          <p class="text-[10px] leading-none text-text-faint mt-1">
-            Many winds. One forecast.
-          </p>
-        </div>
-      </a>
-      <nav class="flex-1 space-y-0.5 overflow-y-auto p-2">
-        {#each nav as item (item.href)}
-          <a
-            href={item.href}
-            class={cn(
-              "block rounded-md px-3 py-2 text-sm font-medium transition-colors",
-              isActive(item.href)
-                ? "bg-surface-raised text-text"
-                : "text-text-muted hover:bg-surface-raised/60 hover:text-text",
-            )}
-          >
-            {item.label}
-          </a>
-        {/each}
-      </nav>
-      <div class="border-t border-border p-3 text-[10px] text-text-faint">
-        {version ? `v${version} · ` : ""}
+        </a>
+        <MobileNav {nav} {anemoiVersion} />
+      </header>
 
-        <Github class="inline-block size-2.5 text-text-faint mr-1" />
-        <a
-          href="https://github.com/jasonkolodziej/anemoi"
-          class="text-text-faint hover:text-text"
-          target="_blank"
-          rel="noopener noreferrer">jasonkolodziej/anemoi</a
-        >
-      </div>
-    </aside>
-
-    <!-- Mobile: a slim top bar + off-canvas drawer instead of the rail. -->
-    <header
-      class="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-border bg-surface px-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] pb-3 md:hidden"
-    >
-      <a href="/" class="flex items-center gap-2">
-        <HurricaneIcon size={22} />
-        <p class="font-display text-sm font-semibold leading-none text-text">
-          Anemoi
-        </p>
-      </a>
-      <MobileNav {nav} {anemoiVersion} />
-    </header>
-
-    <main class="min-w-0 flex-1 md:overflow-y-auto">
-      {@render children?.()}
-    </main>
-  </Waiter>
-</div>
+      <main class="min-w-0 flex-1 md:overflow-y-auto">
+        {@render children?.()}
+      </main>
+    </Waiter>
+  </div>
+</Tooltip.Provider>
