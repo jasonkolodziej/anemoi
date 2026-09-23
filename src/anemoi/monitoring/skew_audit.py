@@ -501,9 +501,17 @@ def audit_run(
     n_audited = 0
     n_new_samples = 0
     for record in due:
-        new_samples = audit_one(
-            record, registry, checkpoint_store, cache_dir, era5_store=era5_store
-        )
+        try:
+            new_samples = audit_one(
+                record, registry, checkpoint_store, cache_dir, era5_store=era5_store
+            )
+        except Exception:  # noqa: BLE001 - one bad record (corrupted payload, a
+            # real mismatch between a stored record's lead_hours/op_* arrays
+            # tripping audit_one's own zip(..., strict=True)) must degrade,
+            # not abort every other due record's audit this run -- the same
+            # per-record degrade contract list_operational_records already
+            # uses for an unreadable durable record.
+            new_samples = []
         if new_samples:
             samples.extend(new_samples)
             n_new_samples += len(new_samples)

@@ -233,3 +233,55 @@ def test_audit_run_replays_only_due_records_and_persists_the_result(tmp_path, mo
     )
     assert seen_labels == []
     assert summary2["n_audited"] == 0
+
+
+def test_audit_run_degrades_per_record_when_audit_one_raises(tmp_path, monkeypatch):
+    """A real gap from PR review: a corrupted record or a mismatched
+    forecast/record lead_hours count (audit_one's own zip(..., strict=True)
+    raising) must not abort every other due record's audit this run -- the
+    same per-record degrade contract list_operational_records already uses
+    for an unreadable durable record."""
+    from anemoi.monitoring import skew_audit as sa
+
+    monkeypatch.setattr(
+        "anemoi.data.real_gridded.open_era5_store",
+        lambda: (_ for _ in ()).throw(RuntimeError("no real network in this unit test")),
+    )
+
+    now = datetime(2026, 9, 20, tzinfo=UTC)
+    broken_record = _record(label="broken", target_time=now - AUDIT_DELAY - timedelta(days=1))
+    healthy_record = _record(label="healthy", target_time=now - AUDIT_DELAY - timedelta(days=1))
+
+    store = CheckpointStore(_CONFIG, client=_FakeClient())
+    for record in (broken_record, healthy_record):
+        record_operational_cycle(
+            record.storm_id, record.track(), record.current,
+            _make_output({"lstm": 1.0}, label=record.label, target_time=record.target_time),
+            local_root=tmp_path, checkpoint_store=store,
+        )
+
+    def flaky_audit_one(record, registry, checkpoint_store, cache_dir, *, era5_store=None):
+        if record.label == "broken":
+            raise ValueError("simulated corrupted record / mismatched array shapes")
+        return [
+            SkewSample(
+                target_time=record.target_time, lead_hours=48,
+                operational_lat=record.op_lats[0], operational_lon=record.op_lons[0],
+                operational_wind_kt=record.op_winds_kt[0],
+                era5t_lat=record.op_lats[0] + 0.5, era5t_lon=record.op_lons[0] - 0.5,
+                era5t_wind_kt=record.op_winds_kt[0] - 3.0,
+            )
+        ]
+
+    monkeypatch.setattr(sa, "audit_one", flaky_audit_one)
+
+    summary = audit_run(
+        registry=object(), checkpoint_store=store, cache_dir=tmp_path, local_root=tmp_path, now=now,
+    )
+
+    # The healthy record must still have been audited despite the broken
+    # one raising -- the whole run must not abort.
+    assert summary["n_records"] == 2
+    assert summary["n_samples_added"] == 1
+    persisted = load_skew_samples(tmp_path / "skew" / "skew_samples.json", store)
+    assert len(persisted) == 1
