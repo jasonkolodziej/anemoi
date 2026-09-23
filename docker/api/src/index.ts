@@ -40,6 +40,11 @@ interface RealApiEnv extends Env {
 
 const SLEEP_DEADLINE_KEY = 'sleepAfterMs';
 
+// Tracked outside the instance so it can't be reset by class-field
+// initialization, whenever the base constructor happens to first call
+// renewActivityTimeout().
+const sleepDeadlineRestored = new WeakSet<object>();
+
 export class AnemoiRealApi extends Container<RealApiEnv> {
 	defaultPort = 8080;
 	// Real cycles run four times a day (per synoptic time), not
@@ -47,8 +52,6 @@ export class AnemoiRealApi extends Container<RealApiEnv> {
 	// paying for an idle container, matching Containers' pay-per-active-
 	// second billing model.
 	sleepAfter = '5m';
-
-	private sleepDeadlineRestored = false;
 
 	constructor(ctx: DurableObject['ctx'], env: RealApiEnv) {
 		super(ctx, env, {
@@ -73,8 +76,8 @@ export class AnemoiRealApi extends Container<RealApiEnv> {
 	 */
 	override renewActivityTimeout(): void {
 		const self = this as unknown as { sleepAfterMs: number };
-		if (!this.sleepDeadlineRestored) {
-			this.sleepDeadlineRestored = true;
+		if (!sleepDeadlineRestored.has(this)) {
+			sleepDeadlineRestored.add(this);
 			const persisted = this.ctx.storage.kv.get<number>(SLEEP_DEADLINE_KEY);
 			if (persisted !== undefined) {
 				self.sleepAfterMs = persisted;
