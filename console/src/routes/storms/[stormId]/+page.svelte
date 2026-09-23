@@ -247,7 +247,9 @@
       <div class="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
         <div class="space-y-6">
           <Card>
-            <CardHeader><CardTitle>Wind Rose Projection</CardTitle></CardHeader>
+            <CardHeader class="border-none"
+              ><CardTitle>Wind Rose Projection</CardTitle></CardHeader
+            >
             <CardContent>
               <ConeMap
                 history={storm.history}
@@ -276,7 +278,7 @@
           />
           <Card>
             <CardHeader><CardTitle>Cycle status</CardTitle></CardHeader>
-            <CardContent class="space-y-2 text-xs">
+            <CardContent class="space-y-2 pt-2 text-xs">
               <div class="flex justify-between">
                 <span class="text-text-faint">vitals</span><Badge
                   variant="outline">{cycle.payload.vitals}</Badge
@@ -304,7 +306,7 @@
           </Card>
           <Card>
             <CardHeader><CardTitle>Landfall Projection</CardTitle></CardHeader>
-            <CardContent class="space-y-2 text-xs">
+            <CardContent class="space-y-2 pt-2 text-xs">
               {#if cycle.products.landfall_probability !== null}
                 <div class="flex items-baseline justify-between">
                   <span class="text-text-faint">probability</span>
@@ -346,7 +348,7 @@
           </Card>
           <Card>
             <CardHeader><CardTitle>Flags &amp; notes</CardTitle></CardHeader>
-            <CardContent>
+            <CardContent class="pt-2">
               <FlagsList
                 flags={cycle.payload.flags}
                 notes={cycle.products.notes}
@@ -379,7 +381,7 @@
             >
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent class="pt-2">
           <p class="mb-3 text-[11px] text-text-faint">
             System-wide {skew.lead_hours}h-lead ERA5T-vs-operational skew audit
             (§4.6.3) -- not specific to {storm.storm_id}, the same rolling

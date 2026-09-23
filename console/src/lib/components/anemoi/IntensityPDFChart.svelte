@@ -283,7 +283,7 @@
       </p>
       {#if peak}
         <div class="mt-3 border-t border-border pt-3">
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div class="grid gap-3 grid-cols-3">
             <div
               class="rounded-md border-none border-border/60 bg-surface/50 px-3 py-2"
             >
