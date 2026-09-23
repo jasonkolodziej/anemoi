@@ -884,6 +884,34 @@ def cmd_skew_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_spread_backtest(args: argparse.Namespace) -> int:
+    """Real Anemoi-Spread calibration backtest (GitHub #10): rank histograms
+    and spread-skill per lead, on the validation split, for the current
+    champions -- and the resulting call on `extra_conditioning_dim`. See
+    `training.spread_backtest`'s module docstring for exactly what's
+    measured and why it's the val split rather than test."""
+    from .data.hurdat2 import parse_hurdat2_file
+    from .tracking.checkpoint_store import CheckpointStore, S3Config
+    from .tracking.registry import ModelRegistry
+    from .training.spread_backtest import SpreadBacktestError, format_report, run_spread_backtest
+
+    store = CheckpointStore(S3Config.from_env())
+    registry = ModelRegistry(args.registry_root, checkpoint_store=store)
+    try:
+        report = run_spread_backtest(
+            parse_hurdat2_file(args.hurdat2), registry, store, args.gdas_cache_dir,
+            n_members=args.members, seed=args.seed,
+        )
+    except SpreadBacktestError as exc:
+        print(f"spread-backtest: {exc}")
+        return 1
+    print(format_report(report))
+    if args.out:
+        Path(args.out).write_text(json.dumps(report.to_dict(), indent=2))
+        print(f"\nwrote {args.out}")
+    return 0
+
+
 def cmd_splits(args: argparse.Namespace) -> int:
     tracks = generate_archive(args.start, args.end, seed=args.seed)
     assignment = assign_splits(tracks)
@@ -957,6 +985,22 @@ def main(argv: list[str] | None = None) -> int:
         default=str(Path.home() / ".anemoi" / "registry"),
     )
     p.set_defaults(func=cmd_drift_reference_fit)
+
+    p = sub.add_parser(
+        "spread-backtest",
+        help="real Anemoi-Spread calibration backtest on the val split (#10)",
+    )
+    p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
+    p.add_argument("--gdas-cache-dir", dest="gdas_cache_dir", required=True)
+    p.add_argument("--members", type=int, default=20)
+    p.add_argument("--seed", type=int, default=20260806,
+                   help="must match training's seed to reproduce its val windows")
+    p.add_argument("--out", default=None, help="also write the full report as JSON")
+    p.add_argument(
+        "--registry-root", dest="registry_root",
+        default=str(Path.home() / ".anemoi" / "registry"),
+    )
+    p.set_defaults(func=cmd_spread_backtest)
 
     p = sub.add_parser(
         "skew-audit",
