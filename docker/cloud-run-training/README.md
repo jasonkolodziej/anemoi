@@ -45,6 +45,49 @@ gcloud builds submit \
   .
 ```
 
+## Build and push image to GHCR
+
+Use repository-root context so `COPY pyproject.toml README.md LICENSE ./` resolves correctly.
+
+```bash
+export GHCR_REGISTRY=ghcr.io
+export GHCR_NAMESPACE=<github-owner>
+export GHCR_IMAGE=anemoi-train
+export GHCR_TAG=$(git rev-parse --short=12 HEAD)
+export IMAGE_URI=${GHCR_REGISTRY}/${GHCR_NAMESPACE}/${GHCR_IMAGE}:${GHCR_TAG}
+```
+
+Log in:
+
+```bash
+echo "${GHCR_PAT}" | docker login ghcr.io -u "${GHCR_NAMESPACE}" --password-stdin
+```
+
+Build and push:
+
+```bash
+docker build \
+  -f docker/cloud-run-training/Dockerfile \
+  --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --build-arg VCS_REF="$(git rev-parse HEAD)" \
+  --build-arg VERSION="${GHCR_TAG}" \
+  --build-arg REPO_URL="https://github.com/${GHCR_NAMESPACE}/anemoi" \
+  -t "${IMAGE_URI}" \
+  -t "${GHCR_REGISTRY}/${GHCR_NAMESPACE}/${GHCR_IMAGE}:latest" \
+  .
+
+docker push "${IMAGE_URI}"
+docker push "${GHCR_REGISTRY}/${GHCR_NAMESPACE}/${GHCR_IMAGE}:latest"
+```
+
+If `docker login ghcr.io` returns HTTP 403:
+
+1. Verify `GHCR_PAT` is a classic PAT with `write:packages` and `read:packages`.
+2. If the repository is private, add `repo` scope too.
+3. Confirm `GHCR_NAMESPACE` matches the PAT owner account exactly.
+4. Re-run login from a shell where `GHCR_PAT` is actually set (`echo ${GHCR_PAT}` should be non-empty).
+5. If SSO is enforced in your org, authorize the PAT for that org.
+
 ## Create a Cloud Run Job (CPU baseline)
 
 This profile avoids the 1-hour GPU task cap and is the easiest migration path.
