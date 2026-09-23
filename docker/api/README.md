@@ -275,15 +275,25 @@ nothing real ships until that's approved in the Actions run. Approving
 runs the identical command a manual deploy would, just from CI instead
 of a local machine.
 
-Needs `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` as secrets on that
-environment (Settings -> Environments -> `cloudflare-production` ->
-Environment secrets) -- not set up by the workflow itself; there's no
-portable token to copy in from a local `wrangler login` OAuth session,
-only a real token generated for CI specifically (Cloudflare dashboard ->
-My Profile -> API Tokens -> a scoped token with Cloudflare Containers +
-Workers Scripts edit permissions for this account). Until those secrets
-exist, the workflow runs and fails at the `wrangler deploy` step with an
-auth error -- a clear, real signal, not a silent no-op.
+It uses two secrets on that environment (Settings -> Environments ->
+`cloudflare-production` -> Environment secrets), both set as of
+2026-09-23. The first CI deploy (run 35861580104) built and pushed the
+image and uploaded the Worker successfully:
+
+- `CLOUDFLARE_ACCOUNT_ID`: the account the Worker lives on.
+- `CLOUDFLARE_API_TOKEN`: a custom token scoped to that one account with
+  **Account > Workers Scripts > Edit** (Worker upload, its Durable
+  Object, the workers.dev route) and **Account > Containers > Edit**
+  (image build/push to `registry.cloudflare.com` and the container app
+  update). Nothing else is needed: no zone permissions (this Worker is
+  only on workers.dev), and no Cloudchamber permission (Wrangler 4.x
+  deploys containers through the Containers API,
+  `/accounts/{id}/containers`).
+
+A local `wrangler login` OAuth session can't be reused here; CI needs its
+own token. The container's `S3_ARTIFACT_*` credentials are Worker
+secrets (`wrangler secret put`), stored on the Worker itself, so they
+aren't needed in CI and `wrangler deploy` leaves them untouched.
 
 The manual path above still works regardless and isn't being retired --
 useful for a deploy that can't wait for a merge, or while iterating
