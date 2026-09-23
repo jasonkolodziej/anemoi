@@ -192,6 +192,10 @@ rather than hours into a warm/idle cycle.
   hydrate from immediately, rather than waiting for the next full
   training run. Confirmed for real: `/v1/registry` on the live deployment
   now returns all 7 models at their real versions.
+- ~~Nothing triggered a real forecast cycle automatically~~ **Done.** See
+  "Automatic cycle triggering" below -- every cycle in production before
+  this was a manual `POST .../cycles`, which is also why drift/skew
+  monitoring had almost no real samples to work with.
 
 Also not done, per #91's remaining scope:
 
@@ -200,6 +204,38 @@ Also not done, per #91's remaining scope:
 - The console (`console/`) deploying to Cloudflare Workers/Pages.
 - CI building and pushing this image on merge to `main`.
 - Wiki documentation of the live deployment topology.
+
+## Automatic cycle triggering
+
+`src/index.ts`'s `scheduled` handler runs the real operational cycle for
+every currently-active storm, gated on `wrangler.jsonc`'s cron trigger
+(`30 1,7,13,19 * * *`, UTC): `t+1:30` after each synoptic time
+(00/06/12/18Z), 10 minutes past `scheduler.derive_vitals_timeout()`'s own
+real `t+1:20` -- by fire time, TC-Vitals has either landed or
+`RealState.run_cycle`'s honest `vitals_estimated` fallback is the real
+answer, not a race against it. It's idempotent against each storm's
+`last_cycle` (Cron Triggers are at-least-once, and the trigger could also
+overlap a cycle someone ran by hand), and one storm's failure is logged
+and doesn't stop the rest -- there's no dashboard for this, `wrangler
+tail` is where a run's real per-storm outcome is visible.
+
+Runs for **every** active storm, trained basin or not -- an untrained
+basin (only `AL` has real trained models, `data.atcf.TRAINED_BASINS`)
+still gets the real, honestly-flagged synthetic fallback product, which
+is a legitimate deliverable, not an error.
+
+The cycle-label math (`currentCycleLabel` in `src/index.ts`) is a
+TypeScript reimplementation of `time_utils.cycle_label(time_utils
+.floor_synoptic(now))` -- verified to agree with the real Python function
+at every synoptic-hour boundary (`:00` and `:59` of hours 0, 6, 12, 18,
+plus the hours in between), since there's no way to import the Python
+module across the container boundary. The whole `runDueCycles` flow was
+also verified against the real deployed API directly (not just unit
+logic): a dry run correctly identified which of the real live storms
+were due, then a real run issued real `201`s for the due ones and
+correctly skipped the one already-current storm, and running it again
+immediately afterward skipped all three -- real, live proof of
+idempotency, not just the intent of the code.
 
 ## Local build/run
 

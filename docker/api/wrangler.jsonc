@@ -8,6 +8,16 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2026-09-21",
 
+	// Fires the real operational cycle for every active storm (src/index.ts's
+	// `scheduled` handler) -- nothing did this before (#178);
+	// every cycle in production until now was a manual POST. UTC, t+1:30
+	// after each synoptic time (00/06/12/18Z), 10 minutes past the real
+	// TC-Vitals timeout (`scheduler.derive_vitals_timeout()`, t+1:20) so the
+	// vitals-vs-fallback question is already honestly resolved by fire time.
+	"triggers": {
+		"crons": ["30 1,7,13,19 * * *"],
+	},
+
 	"containers": [
 		{
 			"class_name": "AnemoiRealApi",

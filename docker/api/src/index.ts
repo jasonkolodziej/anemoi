@@ -101,9 +101,104 @@ export class AnemoiRealApi extends Container<RealApiEnv> {
 	}
 }
 
+//: Synoptic hours per Scope v2.1 §6.2 (`time_utils.SYNOPTIC_HOURS`) -- kept
+// in sync by hand, not imported, since this is TypeScript reaching for a
+// Python constant across the container boundary.
+const SYNOPTIC_HOURS = [0, 6, 12, 18];
+
+/** The synoptic cycle label containing `now`, e.g. `20260923_18Z` -- the
+ * TS equivalent of `time_utils.cycle_label(time_utils.floor_synoptic(now))`.
+ * Always `<= now` by construction, so it always clears `RealState.run_cycle`'s
+ * own "hasn't started yet" guard. */
+function currentCycleLabel(now: Date): string {
+	const hour = SYNOPTIC_HOURS.filter((h) => h <= now.getUTCHours()).pop()!;
+	const y = now.getUTCFullYear();
+	const m = String(now.getUTCMonth() + 1).padStart(2, '0');
+	const d = String(now.getUTCDate()).padStart(2, '0');
+	return `${y}${m}${d}_${String(hour).padStart(2, '0')}Z`;
+}
+
+interface StormSummaryOut {
+	storm_id: string;
+	active: boolean;
+	last_cycle: string | null;
+}
+
+/**
+ * Runs the real operational cycle for every currently-active storm (#178:
+ * nothing triggered a real cycle automatically -- every one in
+ * production so far was a manual `POST .../cycles`, which is also why
+ * drift/skew monitoring had almost no real samples to report on). Scheduled
+ * `t+1:30` after each synoptic time (`wrangler.jsonc`'s cron), 10 minutes
+ * past `scheduler.derive_vitals_timeout()`'s own real `t+1:20` -- by firing
+ * time, TC-Vitals has either landed or the real `vitals_estimated` fallback
+ * `RealState.run_cycle` already has is the honest answer, not a race against
+ * it. Idempotent against `last_cycle` so a retried/duplicate invocation
+ * (Cron Triggers are at-least-once) doesn't double-run a cycle; one storm's
+ * failure is logged and does not stop the rest (`wrangler tail` is where
+ * this becomes visible -- there is no dashboard for it otherwise).
+ */
+async function runDueCycles(env: Env, cycleLabel: string): Promise<void> {
+	const container = getContainer(env.ANEMOI_REAL_API);
+	let storms: StormSummaryOut[];
+	try {
+		const stormsRes = await container.fetch(new Request('https://internal/v1/storms'));
+		if (!stormsRes.ok) {
+			console.error(`scheduled cycle: GET /v1/storms -> ${stormsRes.status}, aborting`);
+			return;
+		}
+		const body: unknown = await stormsRes.json();
+		if (!Array.isArray(body)) {
+			console.error('scheduled cycle: GET /v1/storms did not return an array, aborting', body);
+			return;
+		}
+		storms = body as StormSummaryOut[];
+	} catch (err) {
+		// Network error, or the container never woke up -- a per-storm try/
+		// catch further down can't help here, since there's no list to loop
+		// over yet. Real gap Copilot review caught on this PR (#179): an
+		// unhandled throw here previously took the whole scheduled
+		// invocation down noisily instead of a clear logged abort.
+		console.error('scheduled cycle: GET /v1/storms threw, aborting', err);
+		return;
+	}
+	const active = storms.filter((s) => s.active);
+	console.log(`scheduled cycle ${cycleLabel}: ${active.length}/${storms.length} storm(s) active`);
+
+	for (const storm of active) {
+		if (storm.last_cycle === cycleLabel) {
+			console.log(`scheduled cycle ${cycleLabel}: ${storm.storm_id} already has it, skipping`);
+			continue;
+		}
+		try {
+			const res = await container.fetch(
+				new Request(`https://internal/v1/storms/${storm.storm_id}/cycles`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ cycle: cycleLabel, members: 20 }),
+				}),
+			);
+			if (!res.ok) {
+				console.error(
+					`scheduled cycle ${cycleLabel}: ${storm.storm_id} -> ${res.status} ${await res.text()}`,
+				);
+			} else {
+				console.log(`scheduled cycle ${cycleLabel}: ${storm.storm_id} -> ${res.status}`);
+			}
+		} catch (err) {
+			console.error(`scheduled cycle ${cycleLabel}: ${storm.storm_id} threw`, err);
+		}
+	}
+}
+
 export default {
 	async fetch(request, env) {
 		const container = getContainer(env.ANEMOI_REAL_API);
 		return container.fetch(request);
+	},
+
+	async scheduled(controller, env, ctx) {
+		const cycleLabel = currentCycleLabel(new Date(controller.scheduledTime));
+		ctx.waitUntil(runDueCycles(env, cycleLabel));
 	},
 } satisfies ExportedHandler<Env>;
