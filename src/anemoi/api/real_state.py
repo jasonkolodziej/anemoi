@@ -398,7 +398,16 @@ class RealState:
         with self._lock:
             storm.cycles[output.label] = output
             self._record_drift_sample(output)
-            self._record_skew_sample(storm, fix, output)
+        # Outside the lock: unlike _record_drift_sample (in-memory only,
+        # cheap), this does real disk I/O and a best-effort network upload
+        # via CheckpointStore -- holding self._lock across that would block
+        # every other request needing it (list_storms/get_storm/run_cycle
+        # for an unrelated storm) for as long as a slow/stalled durable
+        # store takes to time out. Nothing it does needs the lock: it only
+        # reads storm/fix/output (all already-published-by-here values,
+        # not shared mutable RealState state) and writes to durable
+        # storage, not to any dict this class guards.
+        self._record_skew_sample(storm, fix, output)
         return output
 
     def _record_drift_sample(self, output: CycleOutput) -> None:
@@ -545,8 +554,24 @@ class RealState:
         except Exception:  # noqa: BLE001 - see _get_drift_reference: local-only must still work
             store = None
         try:
-            path = Path(self.registry.root) / "skew_samples.json"
-            self._skew_samples = load_skew_samples(path, store)
+            # Must match monitoring.skew_audit.audit_run's own samples_path
+            # (Path(local_root) / "skew" / "skew_samples.json") -- a real
+            # bug this fixes: this used to read registry_root/skew_samples
+            # .json (no "skew/" subdirectory), a path audit_run never
+            # wrote to, so a durable-store hiccup (or no store configured
+            # at all) would always degrade to an empty corpus even with a
+            # real local file sitting one directory over.
+            path = Path(self.registry.root) / "skew" / "skew_samples.json"
+            samples = load_skew_samples(path, store)
+            if not samples and not path.exists():
+                # Best-effort fallback to the pre-fix flat path, in case a
+                # local skew-audit run already wrote there against an
+                # older build of this code -- never the primary source of
+                # truth, just avoids silently losing a real local corpus.
+                legacy_path = Path(self.registry.root) / "skew_samples.json"
+                if legacy_path.exists():
+                    samples = load_skew_samples(legacy_path)
+            self._skew_samples = samples
         except Exception:  # noqa: BLE001 - a missing/broken corpus must never crash a cycle
             self._skew_samples = self._skew_samples or []
         self._skew_samples_fetched_at = now

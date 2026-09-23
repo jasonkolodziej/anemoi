@@ -616,7 +616,9 @@ def test_record_skew_sample_persists_locally_without_a_configured_checkpoint_sto
     forecast = _make_deterministic_forecast(contributors={"lstm": 1.0})
     state._record_skew_sample(storm, fix, _FakeCycleOutput(forecast))
 
-    local_path = Path(state.registry.root) / "skew" / "operational" / storm.storm_id / "20260901_00Z.json"
+    local_path = (
+        Path(state.registry.root) / "skew" / "operational" / storm.storm_id / "20260901_00Z.json"
+    )
     assert local_path.exists()
 
 
@@ -640,10 +642,43 @@ def test_skew_report_alerts_on_real_skew_once_enough_samples_are_persisted(clien
         )
         for i in range(10)
     ]
-    save_skew_samples(samples, Path(state.registry.root) / "skew_samples.json")
+    # The canonical path -- must match monitoring.skew_audit.audit_run's
+    # own samples_path exactly, or a real deployment's skew corpus silently
+    # reads as empty despite audit_run having written real samples.
+    save_skew_samples(samples, Path(state.registry.root) / "skew" / "skew_samples.json")
     state._skew_samples = None  # force a reload from the file just written
 
     report = state.skew_report()
     assert report.n == 10
     assert report.alert is True
     assert report.mean_abs_intensity_delta_kt == pytest.approx(30.0)
+
+
+def test_skew_report_falls_back_to_the_legacy_flat_path(client):
+    """A real local file at the pre-fix `registry_root/skew_samples.json`
+    path (no "skew/" subdirectory) must still be found -- `_get_skew_samples`
+    only reaches this fallback when the canonical path is empty both
+    locally and durably, so this also confirms the canonical path is tried
+    first and doesn't error out just because it's missing."""
+    from datetime import timedelta
+
+    from anemoi.monitoring.skew import SkewSample
+    from anemoi.monitoring.skew_audit import save_skew_samples
+
+    state = _get_real_state(client)
+    anchor = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    anchor = anchor.replace(hour=(anchor.hour // 6) * 6)
+    samples = [
+        SkewSample(
+            target_time=anchor - timedelta(hours=6 * (i + 1)), lead_hours=48,
+            operational_lat=20.0, operational_lon=-60.0, operational_wind_kt=90.0,
+            era5t_lat=22.0, era5t_lon=-63.0, era5t_wind_kt=60.0,
+        )
+        for i in range(10)
+    ]
+    save_skew_samples(samples, Path(state.registry.root) / "skew_samples.json")
+    state._skew_samples = None
+
+    report = state.skew_report()
+    assert report.n == 10
+    assert report.alert is True
