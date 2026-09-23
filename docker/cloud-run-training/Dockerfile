@@ -1,10 +1,27 @@
 FROM python:3.12-slim
 
+ARG BUILD_DATE=unknown
+ARG VCS_REF=unknown
+ARG VERSION=dev
+ARG REPO_URL=https://github.com/jasonkolodziej/anemoi
+
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
+ENV IMAGE_REGISTRY=ghcr.io
+ENV IMAGE_NAMESPACE=jasonkolodziej
+ENV IMAGE_NAME=anemoi-train
+ENV IMAGE_TAG=latest
 
 WORKDIR /app
+
+LABEL org.opencontainers.image.title="anemoi cloud-run training" \
+    org.opencontainers.image.description="Anemoi training image for Cloud Run Jobs" \
+    org.opencontainers.image.source="${REPO_URL}" \
+    org.opencontainers.image.url="${REPO_URL}" \
+    org.opencontainers.image.version="${VERSION}" \
+    org.opencontainers.image.revision="${VCS_REF}" \
+    org.opencontainers.image.created="${BUILD_DATE}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
