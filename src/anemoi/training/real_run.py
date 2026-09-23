@@ -105,14 +105,13 @@ class RunArtifacts:
     """Everything beyond ``(CurriculumRun, MetricSet)`` that
     `training.real_latents.extract_joint_latents` needs from a completed
     Stage B run: the trained model, and the EXACT standardisation stats
-    Stage B fit its inputs/targets with. Neither is recoverable any other
-    way -- `tracking.registry.ModelVersion` doesn't record a checkpoint_uri
-    (so the model can't just be reloaded), and the z-score stats are local
-    variables inside `train_lstm_stage`/its per-model siblings, never
-    returned anywhere else. Re-fitting them independently later (e.g. from
-    the same tracks with a fresh RNG draw) would only approximate the real
-    ones the model was actually trained against -- close, but not the
-    exact inverse of what the model's output space actually is.
+    Stage B fit its inputs/targets with. Re-fitting the stats
+    independently later (e.g. from the same tracks with a fresh RNG draw)
+    would only approximate the real ones -- close, but not the exact
+    inverse of the model's output space. Since #78 both the checkpoint and
+    these exact stats are persisted on every registered version, so
+    `real_inference.load_run_artifacts` can rebuild one of these from the
+    registry rather than only from an in-memory training run.
     """
 
     model: object

@@ -415,7 +415,7 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
     from .tracking.checkpoint_store import CheckpointStore, S3Config
     from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ModelRegistry
-    from .training.orchestrator import Mode, build_schedule, run_schedule
+    from .training.orchestrator import Mode, build_derived_schedule, build_schedule, run_schedule
     from .training.real_orchestrator import RealOrchestratorRunner
 
     tracks = parse_hurdat2_file(args.hurdat2)
@@ -425,9 +425,15 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
     )
 
     mode = Mode(args.mode)
-    default_models = ("lstm", "cnn", "transformer", "gnn", "pinn")
-    models = tuple(args.models.split(",")) if args.models else default_models
-    schedule = build_schedule(mode, models=models)
+    if args.derived_from_champions:
+        if args.models:
+            print("--derived-from-champions retrains no Group 1 model; drop --models")
+            return 1
+        schedule = build_derived_schedule(mode)
+    else:
+        default_models = ("lstm", "cnn", "transformer", "gnn", "pinn")
+        models = tuple(args.models.split(",")) if args.models else default_models
+        schedule = build_schedule(mode, models=models)
 
     runner = RealOrchestratorRunner(
         tracks=tracks,
@@ -441,6 +447,9 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
         batch_size=args.batch_size,
         num_workers=args.num_workers,
     )
+    if args.derived_from_champions:
+        used = runner.seed_from_champions()
+        print("derived-from-champions: " + ", ".join(f"{m} v{v}" for m, v in used.items()))
     result = run_schedule(schedule, runner)
 
     print(f"schedule: {mode.value}, {len(schedule.task_names())} tasks")
@@ -1047,6 +1056,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--models", default=None,
         help="comma-separated Group 1 models to schedule (default: all five)",
+    )
+    p.add_argument(
+        "--derived-from-champions", dest="derived_from_champions", action="store_true",
+        help=(
+            "retrain only latents/diffusion/fusion, against the current Group 1 "
+            "champions (no Group 1 retrain) -- re-syncs a desynced derived model "
+            "(§5.7, #149)"
+        ),
     )
     p.add_argument("--seed", type=int, default=20260806)
     p.add_argument("--n-augment", dest="n_augment", type=int, default=3)

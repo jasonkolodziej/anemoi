@@ -174,3 +174,46 @@ def load_trained_pinn_candidate(version: ModelVersion, checkpoint_store: Checkpo
     model.load_state_dict(state_dict)
     model.eval()
     return model, spec
+
+
+def load_run_artifacts(name: str, version: ModelVersion, checkpoint_store: CheckpointStore):
+    """A real `real_run.RunArtifacts` rebuilt from an already-registered
+    Group 1 ``version`` -- the same checkpoint, standardisation stats, and
+    (PINN) candidate LSTM a real training run would have held in memory.
+
+    Lets `training.real_latents.extract_joint_latents` build diffusion/
+    fusion training latents from the *current champions* instead of only
+    from models trained in the same session (§5.7, GitHub #149).
+    `RunArtifacts`' own docstring says a registered version "can't just be
+    reloaded"; that stopped being true with #78 (`checkpoint_uri`,
+    `arch_params`, standardisation stats and the PINN candidate are all
+    persisted on the version now) -- this is the same set of loaders real
+    inference already uses.
+
+    Raises `InferenceLoadError` for a version registered before #78.
+    """
+    from .real_run import RunArtifacts
+
+    model, _spec = load_trained_model(name, version, checkpoint_store)
+    stats = load_standardization_stats(version)
+    kwargs: dict = {
+        "model": model,
+        "arch_params": _decode_arch_params(version, "arch_params"),
+        **{k: stats[k] for k in ("x_mean", "x_std", "y_mean", "y_std") if k in stats},
+    }
+    if name == "pinn":
+        if "env_mean" not in stats or "env_std" not in stats:
+            raise InferenceLoadError(f"pinn v{version.version} has no env standardisation stats")
+        candidate_model, _cspec = load_trained_pinn_candidate(version, checkpoint_store)
+        kwargs.update(
+            candidate_model=candidate_model,
+            env_mean=stats["env_mean"],
+            env_std=stats["env_std"],
+            candidate_arch_params=_decode_arch_params(version, "candidate_arch_params"),
+            candidate_checkpoint_uri=version.tags.get("candidate_checkpoint_uri"),
+        )
+    elif "x_mean" not in stats or "y_mean" not in stats:
+        raise InferenceLoadError(
+            f"{name} v{version.version} has no x/y standardisation stats (predates #82)"
+        )
+    return RunArtifacts(**kwargs)

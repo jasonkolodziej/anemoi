@@ -215,15 +215,46 @@ class RealOrchestratorRunner:
     val_metrics: dict[str, MetricSet] = field(default_factory=dict, init=False)
     promotions: dict[str, PromotionDecision] = field(default_factory=dict, init=False)
     #: Trained Stage B `real_run.RunArtifacts`, keyed by Group 1 model
-    #: name -- kept in memory rather than reloaded from checkpoint storage,
-    #: since `tracking.registry.ModelVersion` doesn't record a
-    #: checkpoint_uri today (#22). Populated by each `_run_*` dispatcher as
-    #: it completes; PINN's bundle also carries its candidate-generator
-    #: LSTM, never uploaded to checkpoint storage on its own.
+    #: name. Populated by each `_run_*` dispatcher as it completes, or --
+    #: for a derived-only re-sync -- by `seed_from_champions`, which
+    #: reloads already-registered champions via `real_inference
+    #: .load_run_artifacts` (possible since #78 persisted checkpoints and
+    #: standardisation stats on every version).
     trained_artifacts: dict[str, object] = field(default_factory=dict, init=False)
+    #: Which registered Group 1 *version* each `trained_artifacts` entry
+    #: is -- what a derived model's `latent_signature` must record. Not
+    #: `registry.latest(m)`: that's the most recently registered version,
+    #: which is only the one actually used when every Group 1 model was
+    #: trained in this same session (and wrong for `seed_from_champions`).
+    #: A real, found consequence of using `latest`: fusion v5 recorded
+    #: `lstmv9-...` because v9 was latest, though v8 stayed champion.
+    group1_versions: dict[str, int] = field(default_factory=dict, init=False)
     #: Set by the "latents" task once all five Group 1 models have run;
     #: consumed by the diffusion/fusion tasks that depend on it.
     joint_latents: object | None = field(default=None, init=False)
+
+    def seed_from_champions(self) -> dict[str, int]:
+        """Pre-load every Group 1 model's *current champion* (production,
+        else staging) as this runner's trained artifacts, so a
+        `orchestrator.build_derived_schedule` run trains diffusion/fusion
+        against exactly the checkpoints real inference is serving (§5.7,
+        GitHub #149). Returns the champion versions used.
+
+        Raises `OrchestrationError` if any Group 1 model has no champion,
+        and lets `real_inference.InferenceLoadError` propagate for a
+        champion registered before #78 -- both mean there's no coherent
+        set to re-sync to, not something to skip past.
+        """
+        from .real_inference import load_run_artifacts
+
+        champions = {m: self.registry.champion(m) for m in GROUP1_MODELS}
+        missing = [m for m, v in champions.items() if v is None]
+        if missing:
+            raise OrchestrationError(f"no staging/production champion for: {missing}")
+        for name, version in champions.items():
+            self.trained_artifacts[name] = load_run_artifacts(name, version, self.checkpoint_store)
+            self.group1_versions[name] = version.version
+        return dict(self.group1_versions)
 
     def __call__(self, task: Task) -> RunOutcome:
         if task.kind == "latents":
@@ -257,8 +288,7 @@ class RealOrchestratorRunner:
 
         sig: str | None = None
         if task.name in DERIVED_MODELS:
-            group1_versions = {m: self.registry.latest(m).version for m in GROUP1_MODELS}
-            sig = latent_signature(group1_versions)
+            sig = latent_signature(self.group1_versions)
 
         # The incumbent a candidate must beat is the version real inference
         # is actually using (production, else staging) -- not `versions(...)
@@ -268,6 +298,19 @@ class RealOrchestratorRunner:
         # version could still reach staging if that predecessor wasn't
         # itself the champion. See `ModelRegistry.champion`'s own docstring.
         champion = self.registry.champion(task.name)
+        if (
+            champion is not None
+            and task.name in DERIVED_MODELS
+            and task.name in self.registry.desynced_derived_models()
+        ):
+            # A desynced derived champion can't serve at all -- the real
+            # inference path refuses it (`_real_fusion_forecast` /
+            # `build_real_ensemble_fn`'s latent_signature checks). Its val
+            # metric isn't a real bar a servable candidate has to clear;
+            # requiring it to would leave the system stuck serving nothing
+            # learned (§5.7, GitHub #149). `evaluate_promotion` still
+            # rejects a non-finite candidate on its own.
+            champion = None
         incumbent = (
             MetricSet(split="val", flavor=champion.input_flavor, values=champion.metrics)
             if champion
@@ -298,6 +341,11 @@ class RealOrchestratorRunner:
             checkpoint_uri=run.results[-1].checkpoint_uri,
             mlflow_run_id=mlflow_run_id,
         )
+        if task.name in GROUP1_MODELS:
+            # This session's trained_artifacts[task.name] IS this version,
+            # staged or not -- so it's what any derived model built from
+            # this session's latents must record in its latent_signature.
+            self.group1_versions[task.name] = version.version
         decision = evaluate_promotion(task.name, run, val_metrics, incumbent_val_metrics=incumbent)
         self.promotions[task.name] = decision
         # The decision alone was computed and reported (in this task's own

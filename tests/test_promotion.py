@@ -77,6 +77,23 @@ def test_incomplete_curriculum_blocks_promotion():
         evaluate_promotion("lstm", run, good_metrics())
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_non_finite_first_candidate_is_not_staged(bad):
+    """Real, previously-documented gap: with no incumbent, staging used to
+    be unconditional, so NaN diffusion/fusion runs auto-staged."""
+    decision = evaluate_promotion("fusion", complete_run(), good_metrics(track_error_48h_nm=bad))
+    assert not decision.promote_to_staging
+    assert any("non-finite" in r for r in decision.reasons)
+
+
+def test_non_finite_candidate_does_not_beat_an_incumbent_either():
+    decision = evaluate_promotion(
+        "lstm", complete_run(), good_metrics(track_error_48h_nm=float("nan")),
+        incumbent_val_metrics=good_metrics(track_error_48h_nm=500.0),
+    )
+    assert not decision.promote_to_staging
+
+
 def test_candidate_worse_than_incumbent_is_not_staged():
     incumbent = good_metrics(track_error_48h_nm=60.0)
     decision = evaluate_promotion(

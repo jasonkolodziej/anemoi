@@ -357,3 +357,124 @@ def test_parallel_schedule_also_trains_every_task(runner):
     for name in ("lstm", "cnn", "transformer", "gnn", "pinn", "latents", "diffusion", "fusion"):
         assert name in result.succeeded
     assert result.complete
+
+
+# --- derived-only re-sync against current champions (§5.7, #149) -------------
+
+
+def _register_group1_versions(registry, *, champion_version: int, n_versions: int) -> None:
+    """Register ``n_versions`` of every Group 1 model and stage
+    ``champion_version`` -- so ``latest`` and ``champion`` genuinely
+    differ when champion_version < n_versions, the real production case
+    (2026-09-23: lstm v9 latest, v8 champion)."""
+    from anemoi.tracking.registry import GROUP1_MODELS
+
+    for name in GROUP1_MODELS:
+        for _ in range(n_versions):
+            registry.register(
+                name, run_id=f"run-{name}", input_flavor=Flavor.GDAS_FINETUNE,
+                metrics=dict(FAKE_METRICS_VALUES),
+            )
+        registry.transition(name, champion_version, Stage.STAGING)
+
+
+@pytest.fixture
+def fake_load_run_artifacts(monkeypatch):
+    loaded: list[tuple[str, int]] = []
+
+    def fake(name, version, checkpoint_store):
+        loaded.append((name, version.version))
+        return SimpleNamespace(model=f"champion-{name}-v{version.version}", arch_params={})
+
+    monkeypatch.setattr("anemoi.training.real_inference.load_run_artifacts", fake)
+    return loaded
+
+
+def test_seed_from_champions_loads_each_champion_not_the_latest(runner, fake_load_run_artifacts):
+    _register_group1_versions(runner.registry, champion_version=1, n_versions=2)
+
+    used = runner.seed_from_champions()
+
+    assert used == {"lstm": 1, "cnn": 1, "transformer": 1, "gnn": 1, "pinn": 1}
+    assert sorted(fake_load_run_artifacts) == sorted((m, 1) for m in used)
+    assert runner.trained_artifacts["lstm"].model == "champion-lstm-v1"
+
+
+def test_seed_from_champions_refuses_an_incomplete_champion_set(runner, fake_load_run_artifacts):
+    from anemoi.training.orchestrator import OrchestrationError
+
+    runner.registry.register(
+        "lstm", run_id="r", input_flavor=Flavor.GDAS_FINETUNE, metrics=dict(FAKE_METRICS_VALUES),
+    )
+    runner.registry.transition("lstm", 1, Stage.STAGING)
+
+    with pytest.raises(OrchestrationError, match="no staging/production champion"):
+        runner.seed_from_champions()
+
+
+def test_derived_resync_records_the_champion_signature_and_ends_in_sync(
+    runner, fake_load_run_artifacts,
+):
+    """The real #149 fix end to end: diffusion/fusion retrained against the
+    current champions record *those* versions in latent_signature (not
+    `registry.latest`, which is what put `lstmv9-...` on the real fusion v5
+    while lstm v8 stayed champion), get staged, and leave nothing desynced."""
+    from anemoi.training.orchestrator import build_derived_schedule
+
+    _register_group1_versions(runner.registry, champion_version=1, n_versions=2)
+    runner.seed_from_champions()
+
+    result = run_schedule(build_derived_schedule(Mode.SEQUENTIAL), runner)
+
+    assert result.complete
+    for name in ("diffusion", "fusion"):
+        champion = runner.registry.champion(name)
+        assert champion.latent_signature == "lstmv1-cnnv1-transformerv1-gnnv1-pinnv1"
+    assert runner.registry.desynced_derived_models() == ()
+
+
+def test_a_desynced_derived_champion_is_not_a_bar_a_servable_candidate_must_clear(
+    runner, fake_load_run_artifacts,
+):
+    """A desynced derived champion can't serve at all (the inference path
+    refuses it), so its better-looking val metric must not keep a
+    servable, re-synced candidate out of staging -- otherwise the system
+    stays stuck serving nothing learned."""
+    from anemoi.training.orchestrator import build_derived_schedule
+
+    _register_group1_versions(runner.registry, champion_version=1, n_versions=2)
+    stale_but_better = dict(FAKE_METRICS_VALUES, track_error_48h_nm=1.0)  # beats the fake 40.0
+    for name in ("diffusion", "fusion"):
+        v = runner.registry.register(
+            name, run_id=f"stale-{name}", input_flavor=Flavor.GDAS_FINETUNE,
+            metrics=stale_but_better, latent_signature="lstmv2-cnnv2-transformerv2-gnnv2-pinnv2",
+        )
+        runner.registry.transition(name, v.version, Stage.STAGING)
+    assert set(runner.registry.desynced_derived_models()) == {"diffusion", "fusion"}
+
+    runner.seed_from_champions()
+    run_schedule(build_derived_schedule(Mode.SEQUENTIAL), runner)
+
+    assert runner.registry.desynced_derived_models() == ()
+    assert runner.promotions["fusion"].promote_to_staging
+
+
+def test_a_servable_derived_champion_is_still_a_real_bar(runner, fake_load_run_artifacts):
+    """The flip side: a derived champion that IS in sync stays a real
+    incumbent -- a worse re-trained candidate must not replace it."""
+    from anemoi.training.orchestrator import build_derived_schedule
+
+    _register_group1_versions(runner.registry, champion_version=1, n_versions=1)
+    better = dict(FAKE_METRICS_VALUES, track_error_48h_nm=1.0)
+    for name in ("diffusion", "fusion"):
+        v = runner.registry.register(
+            name, run_id=f"synced-{name}", input_flavor=Flavor.GDAS_FINETUNE,
+            metrics=better, latent_signature="lstmv1-cnnv1-transformerv1-gnnv1-pinnv1",
+        )
+        runner.registry.transition(name, v.version, Stage.STAGING)
+
+    runner.seed_from_champions()
+    run_schedule(build_derived_schedule(Mode.SEQUENTIAL), runner)
+
+    assert not runner.promotions["fusion"].promote_to_staging
+    assert runner.registry.champion("fusion").run_id == "synced-fusion"
