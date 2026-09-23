@@ -163,6 +163,72 @@ def test_diffusion_accepts_extra_conditioning():
     assert model.sample(torch.randn(1, 24), n_members=3).shape == (3, len(LEADS), 3)
 
 
+# --- consistency model (#15) -------------------------------------------------
+
+
+def _consistency_model(**overrides):
+    from anemoi.models.consistency import build_consistency_model
+
+    kwargs = dict(latent_dim=16, hidden_dim=32, n_layers=2, n_timesteps=10, lead_hours=LEADS)
+    kwargs.update(overrides)
+    return build_consistency_model(**kwargs)
+
+
+def test_consistency_boundary_condition_is_exact_at_step_zero():
+    """f(x, 0) = x is the defining property of a consistency function
+    (Song et al. 2023) -- not approximate, exact by the skip-connection
+    construction (`models.consistency`'s own module docstring), for any
+    input, any conditioning, any untrained weights."""
+    torch = require_torch()
+    model, _ = _consistency_model()
+
+    x = torch.randn(5, len(LEADS), 3)
+    t0 = torch.zeros(5, dtype=torch.long)
+    cond = torch.randn(5, 16)
+    out = model.consistency_fn(x, t0, cond)
+
+    assert torch.allclose(out, x)
+
+
+def test_consistency_one_step_sampling_produces_distinct_members():
+    torch = require_torch()
+    model, _ = _consistency_model()
+
+    members = model.sample(torch.randn(1, 16), n_members=6, n_steps=1)
+    assert members.shape == (6, len(LEADS), 3)
+    assert not torch.allclose(members[0], members[1])
+
+
+def test_consistency_multistep_sampling_matches_one_step_shape_and_is_deterministic():
+    torch = require_torch()
+    model, _ = _consistency_model()
+    cond = torch.randn(1, 16)
+
+    gen_a = torch.Generator().manual_seed(7)
+    out_a = model.sample(cond, n_members=4, n_steps=4, generator=gen_a)
+    gen_b = torch.Generator().manual_seed(7)
+    out_b = model.sample(cond, n_members=4, n_steps=4, generator=gen_b)
+
+    assert out_a.shape == (4, len(LEADS), 3)
+    assert torch.allclose(out_a, out_b)
+
+
+def test_consistency_rejects_a_non_positive_step_count():
+    from anemoi.models.consistency import build_consistency_model
+
+    model, _ = build_consistency_model(latent_dim=4, hidden_dim=8, n_layers=1,
+                                       n_timesteps=5, lead_hours=LEADS)
+    with pytest.raises(ValueError, match="n_steps"):
+        model.sample(require_torch().randn(1, 4), n_members=2, n_steps=0)
+
+
+def test_consistency_accepts_extra_conditioning():
+    torch = require_torch()
+    model, spec = _consistency_model(extra_conditioning_dim=8)
+    assert spec.input_dim == 24
+    assert model.sample(torch.randn(1, 24), n_members=3, n_steps=2).shape == (3, len(LEADS), 3)
+
+
 def test_fusion_weights_are_normalised_and_floored():
     torch = require_torch()
     from anemoi.models.fusion import build_fusion

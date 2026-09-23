@@ -912,6 +912,95 @@ def cmd_spread_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_consistency_distill(args: argparse.Namespace) -> int:
+    """Real consistency-distillation evaluation (GitHub #15): distil a
+    student from the current (or ``--diffusion-version``) champion diffusion
+    model, then measure the real one-step-vs-multistep compute/quality
+    tradeoff against the teacher's own full-budget ancestral sample. See
+    `training.consistency_distillation`'s module docstring for what's
+    measured and the decision rule it applies."""
+    from .data.hurdat2 import parse_hurdat2_file
+    from .tracking.checkpoint_store import CheckpointStore, S3Config
+    from .tracking.registry import GROUP1_MODELS, ModelRegistry, RegistryError, latent_signature
+    from .training.consistency_distillation import (
+        distill_consistency_model,
+        evaluate_step_budget_tradeoff,
+        format_tradeoff_report,
+    )
+    from .training.real_inference import (
+        _decode_arch_params,
+        load_run_artifacts,
+        load_standardization_stats,
+        load_trained_model,
+    )
+    from .training.real_latents import extract_joint_latents
+
+    store = CheckpointStore(S3Config.from_env())
+    registry = ModelRegistry(args.registry_root, checkpoint_store=store)
+
+    champions = {m: registry.champion(m) for m in GROUP1_MODELS}
+    missing = [m for m, v in champions.items() if v is None]
+    if missing:
+        print(f"consistency-distill: no staging/production champion for: {missing}")
+        return 1
+    group1_versions = {m: v.version for m, v in champions.items()}
+
+    if args.diffusion_version is not None:
+        try:
+            diffusion = registry.get("diffusion", args.diffusion_version)
+        except RegistryError as exc:
+            print(f"consistency-distill: {exc}")
+            return 1
+    else:
+        diffusion = registry.champion("diffusion")
+    if diffusion is None:
+        print("consistency-distill: no staging/production diffusion version")
+        return 1
+    expected = latent_signature(group1_versions)
+    if diffusion.latent_signature != expected:
+        print(
+            f"consistency-distill: diffusion v{diffusion.version} was trained against "
+            f"{diffusion.latent_signature!r}, not the live champion set {expected!r} -- "
+            "re-sync first (train-schedule --derived-from-champions)"
+        )
+        return 1
+
+    artifacts = {m: load_run_artifacts(m, v, store) for m, v in champions.items()}
+    tracks = parse_hurdat2_file(args.hurdat2)
+    bundle = extract_joint_latents(tracks, artifacts, args.gdas_cache_dir, seed=args.seed)
+    if len(bundle.train) == 0 or len(bundle.val) == 0:
+        print("consistency-distill: no cached gridded fields for train/val windows")
+        return 1
+
+    teacher, _spec = load_trained_model("diffusion", diffusion, store)
+    stats = load_standardization_stats(diffusion)
+    if not {"z_mean", "z_std", "y_mean", "y_std"} <= set(stats):
+        print(f"consistency-distill: diffusion v{diffusion.version} has no standardisation stats")
+        return 1
+    arch_params = _decode_arch_params(diffusion, "arch_params")
+
+    student, train_loss, val_loss, epochs_run = distill_consistency_model(
+        teacher, bundle.train, bundle.val, arch_params=arch_params,
+        epochs=args.epochs, patience=args.patience, seed=args.seed, **stats,
+    )
+    print(
+        f"distilled a student consistency model: {epochs_run} epoch(s), "
+        f"train_loss={train_loss:.4f} val_loss={val_loss:.4f}\n"
+    )
+
+    report = evaluate_step_budget_tradeoff(
+        teacher, student, bundle.val, stats, tuple(arch_params["lead_hours"]),
+        teacher_n_timesteps=arch_params["n_timesteps"],
+        student_step_options=tuple(args.student_steps), n_members=args.members,
+        sample_seed=args.seed,
+    )
+    print(format_tradeoff_report(report))
+    if args.out:
+        Path(args.out).write_text(json.dumps(report.to_dict(), indent=2))
+        print(f"\nwrote {args.out}")
+    return 0
+
+
 def cmd_splits(args: argparse.Namespace) -> int:
     tracks = generate_archive(args.start, args.end, seed=args.seed)
     assignment = assign_splits(tracks)
@@ -1006,6 +1095,33 @@ def main(argv: list[str] | None = None) -> int:
         default=str(Path.home() / ".anemoi" / "registry"),
     )
     p.set_defaults(func=cmd_spread_backtest)
+
+    p = sub.add_parser(
+        "consistency-distill",
+        help="distil + evaluate a one-step/multistep consistency model from the "
+             "champion diffusion model (#15)",
+    )
+    p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
+    p.add_argument("--gdas-cache-dir", dest="gdas_cache_dir", required=True)
+    p.add_argument("--members", type=int, default=20)
+    p.add_argument("--seed", type=int, default=20260806,
+                   help="must match training's seed to reproduce its train/val windows")
+    p.add_argument("--epochs", type=int, default=300)
+    p.add_argument("--patience", type=int, default=30)
+    p.add_argument(
+        "--student-steps", dest="student_steps", type=int, nargs="+", default=[1, 2, 4],
+        help="student step counts to measure against the teacher's full budget",
+    )
+    p.add_argument("--out", default=None, help="also write the full tradeoff report as JSON")
+    p.add_argument(
+        "--diffusion-version", dest="diffusion_version", type=int, default=None,
+        help="distil from this registered diffusion version instead of the current champion",
+    )
+    p.add_argument(
+        "--registry-root", dest="registry_root",
+        default=str(Path.home() / ".anemoi" / "registry"),
+    )
+    p.set_defaults(func=cmd_consistency_distill)
 
     p = sub.add_parser(
         "skew-audit",
