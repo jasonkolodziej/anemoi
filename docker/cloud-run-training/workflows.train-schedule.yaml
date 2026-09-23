@@ -63,7 +63,7 @@ runAndWaitForJob:
     - failIfRunOperationFailed:
         switch:
           - condition: ${map.get(finishedOp, "error") != null}
-            raise: ${"run operation failed for job " + job + ": " + string(finishedOp.error)}
+            raise: '${"run operation failed for job " + job + ": " + string(finishedOp.error)}'
 
     - extractExecutionName:
         assign:
@@ -80,7 +80,7 @@ runAndWaitForJob:
     - failIfExecutionFailed:
         switch:
           - condition: ${finalExecution.state != "SUCCEEDED"}
-            raise: ${"execution failed for job " + job + ": state=" + finalExecution.state + ", execution=" + executionName}
+            raise: '${"execution failed for job " + job + ": state=" + finalExecution.state + ", execution=" + executionName}'
 
     - returnExecution:
         return:
@@ -111,7 +111,7 @@ waitForOperation:
     - checkTimeout:
         switch:
           - condition: ${i >= maxPollCycles}
-            raise: ${"timed out waiting for operation: " + opName}
+            raise: '${"timed out waiting for operation: " + opName}'
 
     - sleep:
         call: sys.sleep
@@ -147,7 +147,7 @@ waitForExecution:
     - checkTimeout:
         switch:
           - condition: ${i >= maxPollCycles}
-            raise: ${"timed out waiting for execution: " + executionName}
+            raise: '${"timed out waiting for execution: " + executionName}'
 
     - sleep:
         call: sys.sleep
