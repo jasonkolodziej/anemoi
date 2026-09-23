@@ -1,38 +1,63 @@
+# Runs Cloud Run jobs one after another, stopping at the first that fails.
+#
+# The `jobs.run` connector waits for the job's execution to finish and returns
+# that Execution; a failed or cancelled execution makes the call raise, which
+# ends the workflow. `timeoutSeconds` is the connector's wait limit per job --
+# its default is only 30 minutes, shorter than any real training job.
+#
+# Args (all optional except a project, which defaults to the workflow's own):
+#   projectId, region, jobs (list of job names), timeoutSeconds
 main:
   params: [args]
   steps:
+    # `{}` isn't allowed inside an expression, so default to an empty map
+    # here and override it only when the run passed arguments.
+    - defaultArgs:
+        assign:
+          - inputArgs: {}
+    - readArgs:
+        switch:
+          - condition: ${args != null}
+            steps:
+              - useArgs:
+                  assign:
+                    - inputArgs: ${args}
     - init:
         assign:
-          - inputArgs: ${default(args, {})}
           - projectId: ${default(map.get(inputArgs, "projectId"), sys.get_env("GOOGLE_CLOUD_PROJECT_ID"))}
           - region: ${default(map.get(inputArgs, "region"), "us-central1")}
           - jobs: ${default(map.get(inputArgs, "jobs"), ["anemoi-train-lstm", "anemoi-train-cnn", "anemoi-train-transformer", "anemoi-train-gnn", "anemoi-train-pinn", "anemoi-train-derived"])}
-          - pollSeconds: ${default(map.get(inputArgs, "pollSeconds"), 20)}
-          - maxPollCycles: ${default(map.get(inputArgs, "maxPollCycles"), 360)}
+          - timeoutSeconds: ${default(map.get(inputArgs, "timeoutSeconds"), 7200)}
           - results: []
-
-    - validateProject:
-        switch:
-          - condition: ${projectId == null or projectId == ""}
-            raise: "projectId must be set (args.projectId or GOOGLE_CLOUD_PROJECT_ID)"
 
     - runJobsInOrder:
         for:
           value: job
           in: ${jobs}
           steps:
-            - executeJob:
-                call: runAndWaitForJob
+            - runJob:
+                call: googleapis.run.v2.projects.locations.jobs.run
                 args:
-                  projectId: ${projectId}
-                  region: ${region}
-                  job: ${job}
-                  pollSeconds: ${pollSeconds}
-                  maxPollCycles: ${maxPollCycles}
-                result: one
+                  name: ${"projects/" + projectId + "/locations/" + region + "/jobs/" + job}
+                  connector_params:
+                    timeout: ${timeoutSeconds}
+                result: execution
+
+            # The connector normally raises for a failed execution already;
+            # this also catches one that returns with failed or cancelled
+            # tasks. Zero-valued counts are omitted from the response, hence
+            # map.get with a default rather than direct field access.
+            - checkSucceeded:
+                switch:
+                  - condition: ${default(map.get(execution, "failedCount"), 0) > 0 or default(map.get(execution, "cancelledCount"), 0) > 0}
+                    raise: '${"job " + job + " finished with failed or cancelled tasks: " + execution.name}'
 
             - collectResult:
                 assign:
+                  - one:
+                      job: ${job}
+                      execution: ${execution.name}
+                      completionTime: ${default(map.get(execution, "completionTime"), null)}
                   - results: ${list.concat(results, [one])}
 
     - done:
@@ -41,122 +66,3 @@ main:
           projectId: ${projectId}
           region: ${region}
           jobs: ${results}
-
-runAndWaitForJob:
-  params: [projectId, region, job, pollSeconds, maxPollCycles]
-  steps:
-    - run:
-        call: googleapis.run.v2.projects.locations.jobs.run
-        args:
-          name: ${"projects/" + projectId + "/locations/" + region + "/jobs/" + job}
-        result: runOp
-        retry: ${http.default_retry_non_idempotent}
-
-    - waitForRunOperation:
-        call: waitForOperation
-        args:
-          opName: ${runOp.name}
-          pollSeconds: ${pollSeconds}
-          maxPollCycles: ${maxPollCycles}
-        result: finishedOp
-
-    - failIfRunOperationFailed:
-        switch:
-          - condition: ${map.get(finishedOp, "error") != null}
-            raise: '${"run operation failed for job " + job + ": " + string(finishedOp.error)}'
-
-    - extractExecutionName:
-        assign:
-          - executionName: ${finishedOp.response.name}
-
-    - waitForExecutionTerminalState:
-        call: waitForExecution
-        args:
-          executionName: ${executionName}
-          pollSeconds: ${pollSeconds}
-          maxPollCycles: ${maxPollCycles}
-        result: finalExecution
-
-    - failIfExecutionFailed:
-        switch:
-          - condition: ${finalExecution.state != "SUCCEEDED"}
-            raise: '${"execution failed for job " + job + ": state=" + finalExecution.state + ", execution=" + executionName}'
-
-    - returnExecution:
-        return:
-          job: ${job}
-          execution: ${executionName}
-          state: ${finalExecution.state}
-          completionTime: ${finalExecution.completionTime}
-
-waitForOperation:
-  params: [opName, pollSeconds, maxPollCycles]
-  steps:
-    - init:
-        assign:
-          - i: 0
-
-    - poll:
-        call: googleapis.run.v2.projects.locations.operations.get
-        args:
-          name: ${opName}
-        result: op
-        retry: ${http.default_retry}
-
-    - doneSwitch:
-        switch:
-          - condition: ${op.done == true}
-            return: ${op}
-
-    - checkTimeout:
-        switch:
-          - condition: ${i >= maxPollCycles}
-            raise: '${"timed out waiting for operation: " + opName}'
-
-    - sleep:
-        call: sys.sleep
-        args:
-          seconds: ${pollSeconds}
-
-    - inc:
-        assign:
-          - i: ${i + 1}
-
-    - continue:
-        next: poll
-
-waitForExecution:
-  params: [executionName, pollSeconds, maxPollCycles]
-  steps:
-    - init:
-        assign:
-          - i: 0
-
-    - poll:
-        call: googleapis.run.v2.projects.locations.jobs.executions.get
-        args:
-          name: ${executionName}
-        result: exec
-        retry: ${http.default_retry}
-
-    - doneSwitch:
-        switch:
-          - condition: ${exec.state == "SUCCEEDED" or exec.state == "FAILED" or exec.state == "CANCELLED"}
-            return: ${exec}
-
-    - checkTimeout:
-        switch:
-          - condition: ${i >= maxPollCycles}
-            raise: '${"timed out waiting for execution: " + executionName}'
-
-    - sleep:
-        call: sys.sleep
-        args:
-          seconds: ${pollSeconds}
-
-    - inc:
-        assign:
-          - i: ${i + 1}
-
-    - continue:
-        next: poll
