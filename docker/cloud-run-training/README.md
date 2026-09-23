@@ -44,6 +44,18 @@ If your real run exceeds 1 hour, use one of these patterns:
 5. Optional, for MLflow tracking parity with the VM: `MLFLOW_TRACKING_URI` as an env var, plus `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` as secrets (the MLflow server sits behind Cloudflare Access). Without them tracking degrades to the local JSON store; the registry itself is still mirrored to R2.
 6. The job's service account (the default compute service account unless you set `--service-account`) needs `roles/secretmanager.secretAccessor` on those secrets and `roles/storage.objectUser` on the cache bucket.
 7. Optional but recommended: a Cloud Storage bucket mounted at `/cache` for the ERA5/GDAS caches between runs.
+8. For "Workflow orchestration" below: a dedicated service account for the workflow itself, since the default compute service account's `roles/editor` does **not** include `run.jobs.run` (confirmed live -- the workflow failed with `IAM permission denied` under it):
+
+   ```bash
+   gcloud iam service-accounts create anemoi-workflows \
+     --display-name "Anemoi training orchestrator (Workflows)"
+   gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+     --member serviceAccount:anemoi-workflows@${PROJECT_ID}.iam.gserviceaccount.com \
+     --role roles/run.invoker
+   gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+     --member serviceAccount:anemoi-workflows@${PROJECT_ID}.iam.gserviceaccount.com \
+     --role roles/run.viewer
+   ```
 
 ## Build and push image
 
@@ -134,6 +146,8 @@ podman system prune -a -f
 
 This profile avoids the 1-hour GPU task cap and is the easiest migration path.
 
+This is the real job run in `anemoi-training` (2026-09-23): a CPU-only job with the cache bucket mounted at `/cache` and the full secret set, including MLflow (item 5 above) -- omit the last three `--set-secrets` entries if you skipped MLflow.
+
 ```bash
 gcloud run jobs create anemoi-train-schedule \
   --region us-central1 \
@@ -144,13 +158,15 @@ gcloud run jobs create anemoi-train-schedule \
   --task-timeout 86400s \
   --cpu 8 \
   --memory 32Gi \
+  --add-volume name=cache,type=cloud-storage,bucket=${CACHE_BUCKET} \
+  --add-volume-mount volume=cache,mount-path=/cache \
   --set-env-vars MODE=sequential,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
-  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest
+  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest,CF_ACCESS_CLIENT_ID=CF_ACCESS_CLIENT_ID:latest,CF_ACCESS_CLIENT_SECRET=CF_ACCESS_CLIENT_SECRET:latest,MLFLOW_TRACKING_URI=MLFLOW_TRACKING_URI:latest
 ```
 
-`REGISTRY_ROOT` can stay on local disk: `entrypoint.sh` runs `anemoi registry-pull` first, and the registry is mirrored to R2, so it doesn't need the cache bucket.
+`REGISTRY_ROOT` can stay on local disk (`/tmp`, not `/cache`): `entrypoint.sh` runs `anemoi registry-pull` first, and the registry is mirrored to R2, so it doesn't need the cache bucket -- and a `/cache`-mounted GCS FUSE volume is slower for the many small registry writes than local disk.
 
-If you want persistent local cache paths between runs, mount Cloud Storage to `/cache`:
+To add the cache mount to a job created without it:
 
 ```bash
 gcloud run jobs update anemoi-train-schedule \
@@ -252,9 +268,13 @@ gcloud run jobs update anemoi-train-schedule \
   --task-timeout 3600s
 ```
 
-## Recommended multi-job GPU split plan
+## Recommended multi-job GPU split plan -- not yet validated, CPU baseline is what's actually running
 
 Source Plan: PLAN.md §5 and #22 execution stream.
+
+**As of 2026-09-23, `anemoi-train-schedule` (the CPU baseline above) is the real job in use, and no per-model GPU jobs have been created.** The CPU job's `86400s` timeout has real headroom against the 1-hour GPU cap, so there's been no need to split it yet. This section is the plan for if/when a full CPU run turns out too slow -- it hasn't been benchmarked, and the "important limitation" below (some models may not fit in an hour even split out) was already a known risk when it was written, not resolved since.
+
+Before creating any of these jobs, measure real per-model wall-clock time from an `anemoi-train-schedule` execution's logs (each model's stage boundaries are logged) -- that's the actual evidence for whether the split even clears the 1-hour cap, not the assumption below.
 
 If you want to use Cloud Run GPU jobs, split the schedule into independent executions.
 Each execution should run a narrow unit of work and write checkpoints to object storage.
@@ -295,8 +315,13 @@ gcloud run jobs create anemoi-train-lstm \
   --no-gpu-zonal-redundancy \
   --cpu 4 \
   --memory 16Gi \
+  --add-volume name=cache,type=cloud-storage,bucket=${CACHE_BUCKET} \
+  --add-volume-mount volume=cache,mount-path=/cache \
   --set-env-vars MODE=sequential,MODELS=lstm,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
-  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest
+  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest,CF_ACCESS_CLIENT_ID=CF_ACCESS_CLIENT_ID:latest,CF_ACCESS_CLIENT_SECRET=CF_ACCESS_CLIENT_SECRET:latest,MLFLOW_TRACKING_URI=MLFLOW_TRACKING_URI:latest
+
+# Repeat for cnn, transformer, gnn, pinn -- same flags, MODELS=<name> and
+# the job name changed.
 ```
 
 Create derived-only job:
@@ -314,8 +339,10 @@ gcloud run jobs create anemoi-train-derived \
   --no-gpu-zonal-redundancy \
   --cpu 4 \
   --memory 16Gi \
+  --add-volume name=cache,type=cloud-storage,bucket=${CACHE_BUCKET} \
+  --add-volume-mount volume=cache,mount-path=/cache \
   --set-env-vars MODE=sequential,DERIVED_FROM_CHAMPIONS=1,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
-  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest
+  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest,CF_ACCESS_CLIENT_ID=CF_ACCESS_CLIENT_ID:latest,CF_ACCESS_CLIENT_SECRET=CF_ACCESS_CLIENT_SECRET:latest,MLFLOW_TRACKING_URI=MLFLOW_TRACKING_URI:latest
 ```
 
 Execute in order:
@@ -329,26 +356,28 @@ gcloud run jobs execute anemoi-train-pinn --region us-central1
 gcloud run jobs execute anemoi-train-derived --region us-central1
 ```
 
-For automation, run this order from Cloud Workflows or CI/CD, and gate each step on successful completion.
+For automation, run this order from Cloud Workflows or CI/CD, and gate each step on successful completion -- see "Workflow orchestration" below, which does exactly this (once the GPU split above is actually in use; today it orchestrates whatever job names you give it, GPU-split or not).
 
 ## Workflow orchestration (included)
 
 This folder includes `workflows.train-schedule.yaml`, a Cloud Workflows definition that:
 
-1. Runs the six Cloud Run jobs in order.
-2. Waits for each Run API operation to finish.
-3. Waits for each execution to reach a terminal state.
-4. Stops immediately on first failed/cancelled execution.
+1. Runs a list of Cloud Run jobs in order (default: the six `anemoi-train-*` GPU-split jobs above, unvalidated per that section -- pass your own `jobs` list, e.g. `["anemoi-train-schedule"]`, to orchestrate what's actually running).
+2. Each `jobs.run` call blocks until that job's execution reaches a terminal state (Workflows' connectors do this for any long-running-operation call automatically) and returns the `Execution`.
+3. Stops immediately if an execution has any failed or cancelled task, or if the API call itself fails -- either way the job step raises, and an uncaught raise ends the workflow with `state: FAILED`.
+
+**Needs its own service account.** The default compute service account (`roles/editor`) does **not** include `run.jobs.run` -- confirmed live: `IAM permission denied for service account ...-compute@developer.gserviceaccount.com`. See prerequisite 8 above to create `anemoi-workflows` and grant it `roles/run.invoker` + `roles/run.viewer`.
 
 Deploy the workflow:
 
 ```bash
 gcloud workflows deploy anemoi-train-orchestrator \
   --location us-central1 \
-  --source docker/cloud-run-training/workflows.train-schedule.yaml
+  --source docker/cloud-run-training/workflows.train-schedule.yaml \
+  --service-account anemoi-workflows@${PROJECT_ID}.iam.gserviceaccount.com
 ```
 
-Execute with defaults (uses the six `anemoi-train-*` jobs listed above):
+Execute with defaults (the six GPU-split jobs -- only meaningful once those jobs exist):
 
 ```bash
 gcloud workflows run anemoi-train-orchestrator \
@@ -356,7 +385,7 @@ gcloud workflows run anemoi-train-orchestrator \
   --data '{"projectId":"'"${PROJECT_ID}"'","region":"us-central1"}'
 ```
 
-Execute with custom job list and polling settings:
+Execute against the real CPU-baseline job instead, or any other custom job list, with a longer per-job timeout (the connector's own default is 30 minutes, too short for training):
 
 ```bash
 gcloud workflows run anemoi-train-orchestrator \
@@ -364,20 +393,14 @@ gcloud workflows run anemoi-train-orchestrator \
   --data '{
     "projectId": "'"${PROJECT_ID}"'",
     "region": "us-central1",
-    "jobs": [
-      "anemoi-train-lstm",
-      "anemoi-train-cnn",
-      "anemoi-train-transformer",
-      "anemoi-train-gnn",
-      "anemoi-train-pinn",
-      "anemoi-train-derived"
-    ],
-    "pollSeconds": 20,
-    "maxPollCycles": 360
+    "jobs": ["anemoi-train-schedule"],
+    "timeoutSeconds": 86400
   }'
 ```
 
-`maxPollCycles * pollSeconds` is the per-job upper wait bound before the workflow aborts.
+`timeoutSeconds` is the `jobs.run` connector's own wait limit per job (`connector_params.timeout`), not a client-side poll loop.
+
+**Verified live** (2026-09-23) with two disposable smoke-test jobs standing in for real training jobs -- one that always exits 0, one that always exits 2 -- run as `["ok", "fail", "ok"]`: the first job's execution completed and was recorded, the second's failure surfaced as the workflow's own error (`Task ... failed with exit code: 2`, `state: FAILED`), and the third job's execution list confirms it never ran. Stop-on-first-failure is real, not just intended by the YAML.
 
 ## Execute the job
 
@@ -391,8 +414,13 @@ Pass arguments to run any `anemoi` subcommand with the same image, secrets, and 
 
 ```bash
 gcloud run jobs execute anemoi-train-schedule --region us-central1 \
+  --task-timeout 1800s \
   --args=drift-reference-fit,--gdas-cache-dir,/cache/gdas_cache,--registry-root,/tmp/registry
 ```
+
+`--task-timeout` here overrides the job's default (`86400s` above) for this one execution only -- useful for a short one-off command you don't want to wait a day for if it hangs. Run live 2026-09-23: fit from 1,794 real cached GDAS samples, ~4 minutes of container run time (most of an ~8-minute wall-clock execution was pulling the image), confirmed via `anemoi.api.real_state`'s drift report going from `n_live: 0` to real samples after.
+
+Add `--wait` to block until the execution finishes in your shell -- useful for a quick check, but it sometimes keeps polling briefly after the dashboard already shows the execution complete; the Cloud Console execution page or `gcloud run jobs executions describe <name>` is the source of truth, not the command returning.
 
 ## Common env knobs
 
