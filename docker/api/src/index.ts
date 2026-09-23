@@ -125,8 +125,8 @@ interface StormSummaryOut {
 }
 
 /**
- * Runs the real operational cycle for every currently-active storm (#175's
- * follow-up: nothing triggered a real cycle automatically -- every one in
+ * Runs the real operational cycle for every currently-active storm (#178:
+ * nothing triggered a real cycle automatically -- every one in
  * production so far was a manual `POST .../cycles`, which is also why
  * drift/skew monitoring had almost no real samples to report on). Scheduled
  * `t+1:30` after each synoptic time (`wrangler.jsonc`'s cron), 10 minutes
@@ -140,12 +140,28 @@ interface StormSummaryOut {
  */
 async function runDueCycles(env: Env, cycleLabel: string): Promise<void> {
 	const container = getContainer(env.ANEMOI_REAL_API);
-	const stormsRes = await container.fetch(new Request('https://internal/v1/storms'));
-	if (!stormsRes.ok) {
-		console.error(`scheduled cycle: GET /v1/storms -> ${stormsRes.status}, aborting`);
+	let storms: StormSummaryOut[];
+	try {
+		const stormsRes = await container.fetch(new Request('https://internal/v1/storms'));
+		if (!stormsRes.ok) {
+			console.error(`scheduled cycle: GET /v1/storms -> ${stormsRes.status}, aborting`);
+			return;
+		}
+		const body: unknown = await stormsRes.json();
+		if (!Array.isArray(body)) {
+			console.error('scheduled cycle: GET /v1/storms did not return an array, aborting', body);
+			return;
+		}
+		storms = body as StormSummaryOut[];
+	} catch (err) {
+		// Network error, or the container never woke up -- a per-storm try/
+		// catch further down can't help here, since there's no list to loop
+		// over yet. Real gap Copilot review caught on this PR (#179): an
+		// unhandled throw here previously took the whole scheduled
+		// invocation down noisily instead of a clear logged abort.
+		console.error('scheduled cycle: GET /v1/storms threw, aborting', err);
 		return;
 	}
-	const storms = (await stormsRes.json()) as StormSummaryOut[];
 	const active = storms.filter((s) => s.active);
 	console.log(`scheduled cycle ${cycleLabel}: ${active.length}/${storms.length} storm(s) active`);
 
