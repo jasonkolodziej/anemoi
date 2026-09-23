@@ -9,10 +9,12 @@
 # models (lstm/cnn/transformer/gnn/pinn) via training.orchestrator, backed
 # by the real per-model runners (training.real_orchestrator). Alternative
 # to launching each train_<model>.sbatch by hand: one job, one log,
-# registry + promotion for every model. latents/diffusion/fusion have no
-# real implementation yet and report as such in the output -- expected,
-# not a failure of this job. Needs the torch and storage extras plus real
-# R2 credentials (S3_ARTIFACT_* in .env).
+# registry + promotion for every model, then latents/diffusion/fusion.
+# DERIVED_FROM_CHAMPIONS=1 instead retrains only latents/diffusion/fusion
+# against the current Group 1 champions -- the re-sync for a desynced
+# derived model (§5.7, GitHub #149); no Group 1 model is retrained. Needs
+# the torch and storage extras plus real R2 credentials (S3_ARTIFACT_* in
+# .env).
 #
 # Real SLURM cluster:  sbatch slurm/train_schedule.sbatch [sequential|parallel]
 # This VM (no scheduler): slurm/run_local.sh slurm/train_schedule.sbatch [sequential|parallel]
@@ -40,6 +42,7 @@ N_AUGMENT="${N_AUGMENT:-3}"
 STREAMING="${STREAMING:-}"
 BATCH_SIZE="${BATCH_SIZE:-}"
 NUM_WORKERS="${NUM_WORKERS:-}"
+DERIVED_FROM_CHAMPIONS="${DERIVED_FROM_CHAMPIONS:-}"
 
 if [ ! -f "$HURDAT2" ]; then
   echo "HURDAT2 archive not found at $HURDAT2 -- fetch it first:" >&2
@@ -51,6 +54,7 @@ EXTRA_ARGS=()
 if [ -n "$STREAMING" ]; then EXTRA_ARGS+=(--streaming); fi
 if [ -n "$BATCH_SIZE" ]; then EXTRA_ARGS+=(--batch-size "$BATCH_SIZE"); fi
 if [ -n "$NUM_WORKERS" ]; then EXTRA_ARGS+=(--num-workers "$NUM_WORKERS"); fi
+if [ -n "$DERIVED_FROM_CHAMPIONS" ]; then EXTRA_ARGS+=(--derived-from-champions); fi
 
 uv run anemoi train-schedule \
   --mode "$MODE" \
