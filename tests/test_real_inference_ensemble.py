@@ -211,6 +211,44 @@ def test_build_real_ensemble_fn_produces_real_finite_members(tmp_path):
     assert not np.allclose(members[0].lats, members[1].lats)
 
 
+@pytest.mark.torch
+def test_build_real_ensemble_fn_refuses_a_mismatched_latent_signature(tmp_path):
+    """The real bug found while building the #10 backtest: diffusion had
+    no equivalent of `_real_fusion_forecast`'s consistency check at all,
+    so a Group 1 champion change (a fresh retrain, or a real
+    `registry-reconcile` re-stage) left it silently sampling against
+    latents from a Group 1 set it was never trained to interpret.
+    Confirmed live 2026-09-23 against the deployed registry."""
+    from anemoi.inference.scheduler import CyclePlan
+
+    track = make_track("AL011985", n=SEQUENCE_LENGTH + 5)
+    current = track.fixes[-1]
+    cache_current_fix(tmp_path, track, current)
+
+    registry = ModelRegistry(tmp_path / "registry")
+    store = _store()
+    _register_all_five_and_diffusion(registry, store, tmp_path)
+
+    # A real Group 1 champion changes after diffusion was trained/registered
+    # -- diffusion's own recorded latent_signature is now stale, exactly
+    # the real, repeated #149 scenario applied to the ensemble path.
+    _register(
+        "lstm", {"input_dim": 5, "hidden_dim": _HIDDEN, "lead_hours": _LEADS},
+        x_shape=(5,), registry=registry, store=store, tmp_path=tmp_path,
+    )
+
+    deterministic_fn = build_real_deterministic_fn(track, registry, store, tmp_path)
+    ensemble_fn = build_real_ensemble_fn(track, registry, store, tmp_path)
+    plan = CyclePlan(
+        target_time=current.valid_time, cycle_start=current.valid_time,
+        stages=(), inputs=None, vitals_estimated=False,
+    )
+    deterministic = deterministic_fn(plan, current)
+
+    with pytest.raises(InferenceEnsembleError, match="latent signature"):
+        ensemble_fn(deterministic, 4)
+
+
 def test_build_real_ensemble_fn_raises_without_all_five_models(tmp_path):
     from anemoi.inference.cycle import DeterministicForecast
 
