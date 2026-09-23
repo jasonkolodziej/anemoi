@@ -247,3 +247,39 @@ def test_served_cone_scores_what_build_cone_actually_serves():
     assert outcome.n_ensemble_basis == 1  # only the wide one keeps its own spread
     assert outcome.miss_rate_ensemble == 1.0
     assert outcome.miss_rate_climatology == 1.0
+
+
+def test_diffusion_version_override_measures_that_version_not_the_champion(tmp_path, patched):
+    """#166's own real need: measure a real trained-but-not-yet-staged
+    candidate's calibration before deciding whether to promote it."""
+    store = _store()
+    registry = _registry_with_champions(tmp_path, store)
+    champion_version = registry.champion("diffusion").version
+
+    report = run_spread_backtest(
+        [], registry, store, tmp_path, n_members=4, min_cases=10,
+        diffusion_version=champion_version,
+    )
+
+    assert report.diffusion_version == champion_version
+
+
+def test_diffusion_version_override_still_enforces_the_real_latent_signature(tmp_path, patched):
+    store = _store()
+    registry = _registry_with_champions(
+        tmp_path, store, diffusion_signature="lstmv9-cnnv9-transformerv9-gnnv9-pinnv9",
+    )
+    stale_version = registry.champion("diffusion").version
+
+    with pytest.raises(SpreadBacktestError, match="re-sync first"):
+        run_spread_backtest(
+            [], registry, store, tmp_path, diffusion_version=stale_version,
+        )
+
+
+def test_diffusion_version_override_raises_cleanly_for_an_unknown_version(tmp_path, patched):
+    store = _store()
+    registry = _registry_with_champions(tmp_path, store)
+
+    with pytest.raises(SpreadBacktestError, match="not found"):
+        run_spread_backtest([], registry, store, tmp_path, diffusion_version=9999)
