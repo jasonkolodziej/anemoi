@@ -29,6 +29,7 @@
     "@tanstack/table-core": "^9.2.4",
     "@types/node": "^26.6.2",
     "cn": "^0.3.0",
+    "layerchart": "^2.5.0",
     "rehype-slug": "^6.0.0",
     "rehype-stringify": "^10.0.1",
     "remark-gfm": "^4.0.1",
