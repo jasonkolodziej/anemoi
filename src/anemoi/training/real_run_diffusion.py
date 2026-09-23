@@ -93,8 +93,9 @@ def train_diffusion_stage(
     learning_rate: float = 1e-3,
     n_ensemble_eval: int = 20,
     seed: int = 20260806,
+    patience: int = 20,
     device=None,
-) -> tuple[object, float, float, MetricSet, DiffusionArtifacts]:
+) -> tuple[object, float, float, MetricSet, DiffusionArtifacts, int]:
     """Train the `TrajectoryDenoiser` against one `JointLatentBundle` split.
 
     Mirrors `real_run.train_lstm_stage`'s shape (masked loss, verification
@@ -102,6 +103,22 @@ def train_diffusion_stage(
     model's training loop can -- the real difference is the DDPM objective
     (predict the noise added at a random timestep) in place of direct
     supervised regression.
+
+    **Real early stopping (#166), not previously here.** Every epoch's own
+    real val loss is now tracked; training stops once `patience` epochs
+    pass with no real improvement, and the returned model is the real
+    *best-val-loss* checkpoint, not whatever epoch `epochs` happened to
+    land on. Confirmed live 2026-09-23 against the real deployed model
+    (diffusion v6): with no early stopping, real val loss fell to a real
+    minimum at epoch 35 of a fixed 200, then rose monotonically to 2.1x
+    that minimum by epoch 199 while train loss kept falling -- a real,
+    clean overfitting curve, not a training instability. The real
+    consequence for the *ensemble*, not just the point-verification
+    metric: real spread/skill ratio (`metrics.probabilistic.SpreadSkill`)
+    across every real lead and quantity was 0.10-0.19 (severely
+    underdispersed) at epoch 199, vs. 0.50-0.93 at epoch 35, on the exact
+    same trained-weights history -- only the stopping point differed. See
+    GitHub #166 for the full real diagnostic.
     """
     if len(train_samples) == 0 or len(val_samples) == 0:
         raise ValueError("empty train or val latent set -- has the 'latents' task run yet?")
@@ -130,39 +147,55 @@ def train_diffusion_stage(
     mt = torch.as_tensor(train_samples.mask, dtype=torch.float32, device=device).unsqueeze(-1)
     n_train = zt.shape[0]
 
+    zv = torch.as_tensor(z_val, dtype=torch.float32, device=device)
+    yv = torch.as_tensor(y_val_z, dtype=torch.float32, device=device)
+    mv = torch.as_tensor(val_samples.mask, dtype=torch.float32, device=device).unsqueeze(-1)
+    n_val = zv.shape[0]
+
     opt = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-    def masked_noise_loss() -> object:
-        t = torch.randint(0, n_timesteps, (n_train,), device=device, generator=generator)
-        noise = torch.randn(yt.shape, device=device, generator=generator)
+    def masked_noise_loss(z: object, y: object, m: object, n: int) -> object:
+        t = torch.randint(0, n_timesteps, (n,), device=device, generator=generator)
+        noise = torch.randn(y.shape, device=device, generator=generator)
         alpha_bar = model.alpha_bars[t].view(-1, 1, 1)
-        noisy = torch.sqrt(alpha_bar) * yt + torch.sqrt(1.0 - alpha_bar) * noise
-        predicted_noise = model(noisy, t, zt)
-        diff2 = (predicted_noise - noise) ** 2 * mt
-        return diff2.sum() / mt.sum().clamp(min=1.0)
+        noisy = torch.sqrt(alpha_bar) * y + torch.sqrt(1.0 - alpha_bar) * noise
+        predicted_noise = model(noisy, t, z)
+        diff2 = (predicted_noise - noise) ** 2 * m
+        return diff2.sum() / m.sum().clamp(min=1.0)
 
-    model.train()
-    for _ in range(epochs):
+    best_val_loss = float("inf")
+    best_state: dict | None = None
+    epochs_run = 0
+    epochs_since_improvement = 0
+    for epoch in range(epochs):
+        model.train()
         opt.zero_grad()
-        loss = masked_noise_loss()
+        loss = masked_noise_loss(zt, yt, mt, n_train)
         loss.backward()
         opt.step()
+        epochs_run = epoch + 1
+
+        model.eval()
+        with torch.no_grad():
+            val_l = float(masked_noise_loss(zv, yv, mv, n_val).item())
+        if val_l < best_val_loss:
+            best_val_loss = val_l
+            best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            epochs_since_improvement = 0
+        else:
+            epochs_since_improvement += 1
+            if epochs_since_improvement >= patience:
+                break
+
+    # best_state always exists once at least one epoch has run (the first
+    # epoch's val loss is < inf by construction); `epochs >= 1` is a real
+    # precondition every real caller already satisfies.
+    model.load_state_dict(best_state)
 
     model.eval()
     with torch.no_grad():
-        train_loss = float(masked_noise_loss().item())
-
-        zv = torch.as_tensor(z_val, dtype=torch.float32, device=device)
-        yv = torch.as_tensor(y_val_z, dtype=torch.float32, device=device)
-        mv = torch.as_tensor(val_samples.mask, dtype=torch.float32, device=device).unsqueeze(-1)
-        n_val = zv.shape[0]
-        t = torch.randint(0, n_timesteps, (n_val,), device=device, generator=generator)
-        noise = torch.randn(yv.shape, device=device, generator=generator)
-        alpha_bar = model.alpha_bars[t].view(-1, 1, 1)
-        noisy = torch.sqrt(alpha_bar) * yv + torch.sqrt(1.0 - alpha_bar) * noise
-        predicted_noise = model(noisy, t, zv)
-        diff2 = (predicted_noise - noise) ** 2 * mv
-        val_loss = float((diff2.sum() / mv.sum().clamp(min=1.0)).item())
+        train_loss = float(masked_noise_loss(zt, yt, mt, n_train).item())
+        val_loss = best_val_loss
 
         pred_mean_z = np.zeros((n_val, n_leads, 3), dtype=np.float32)
         for i in range(n_val):
@@ -203,7 +236,7 @@ def train_diffusion_stage(
         model=model, z_mean=z_mean, z_std=z_std, y_mean=y_mean, y_std=y_std,
         arch_params=arch_params,
     )
-    return model, train_loss, val_loss, val_metrics, artifacts
+    return model, train_loss, val_loss, val_metrics, artifacts, epochs_run
 
 
 def run_diffusion_curriculum(
@@ -217,6 +250,7 @@ def run_diffusion_curriculum(
     epochs: int = 200,
     learning_rate: float = 1e-3,
     n_ensemble_eval: int = 20,
+    patience: int = 20,
     curriculum_kwargs: dict | None = None,
 ) -> tuple[CurriculumRun, MetricSet, object, DiffusionArtifacts]:
     """Run the real (single-stage) curriculum for Anemoi-Spread against a
@@ -227,17 +261,20 @@ def run_diffusion_curriculum(
     as its own return value for backward compatibility with existing
     callers; ``artifacts`` (added #78) carries the real standardisation
     stats and `build_diffusion(...)` kwargs a real inference path needs
-    that ``model``/``run``/``val_metrics`` don't.
+    that ``model``/``run``/``val_metrics`` don't. ``model`` is the real
+    early-stopped (best real val loss) checkpoint (#166), not necessarily
+    the one trained for the full ``epochs``.
     """
     require_torch()
     curriculum = Curriculum(model_name="diffusion", stages=(stage_b(**(curriculum_kwargs or {})),))
     run = CurriculumRun(curriculum=curriculum)
     stage = curriculum.stages[0]
 
-    model, train_loss, val_loss, val_metrics, artifacts = train_diffusion_stage(
+    model, train_loss, val_loss, val_metrics, artifacts, epochs_run = train_diffusion_stage(
         joint_latents.train, joint_latents.val,
         hidden_dim=hidden_dim, n_layers=n_layers, n_timesteps=n_timesteps,
         epochs=epochs, learning_rate=learning_rate, n_ensemble_eval=n_ensemble_eval, seed=seed,
+        patience=patience,
     )
 
     torch = require_torch()
@@ -249,7 +286,7 @@ def run_diffusion_curriculum(
 
     run.record(
         StageResult(
-            stage_name=stage.name, flavor=stage.flavor, epochs_completed=epochs,
+            stage_name=stage.name, flavor=stage.flavor, epochs_completed=epochs_run,
             final_train_loss=train_loss, final_val_loss=val_loss, checkpoint_uri=checkpoint_uri,
             completed_at=datetime.now(UTC),
         )

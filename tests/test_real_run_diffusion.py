@@ -50,10 +50,10 @@ def test_train_diffusion_stage_produces_val_metrics_and_artifacts():
     train_samples = _make_samples(8, z_dim=16, seed=1)
     val_samples = _make_samples(4, z_dim=16, seed=2)
 
-    model, train_loss, val_loss, val_metrics, artifacts = train_diffusion_stage(
+    model, train_loss, val_loss, val_metrics, artifacts, epochs_run = train_diffusion_stage(
         train_samples, val_samples,
         hidden_dim=8, n_layers=1, n_timesteps=5, epochs=3, n_ensemble_eval=2, seed=3,
-        device="cpu",
+        patience=10, device="cpu",
     )
     assert train_loss >= 0.0
     assert val_loss >= 0.0
@@ -63,6 +63,7 @@ def test_train_diffusion_stage_produces_val_metrics_and_artifacts():
     assert artifacts.model is model
     assert artifacts.z_mean.shape == (16,)
     assert artifacts.y_std.shape == (T_N_LEADS, 3)
+    assert 1 <= epochs_run <= 3
 
 
 @pytest.mark.torch
@@ -130,3 +131,49 @@ def test_run_diffusion_curriculum_uploads_a_checkpoint_and_registers_stage_b():
         "latent_dim": 16, "hidden_dim": 8, "n_layers": 1, "n_timesteps": 5,
         "lead_hours": list(DEFAULT_LEADS),
     }
+
+
+@pytest.mark.torch
+def test_early_stopping_halts_before_the_epoch_cap_on_a_real_overfitting_run():
+    """#166: a high-capacity model against very few real samples overfits
+    fast and predictably -- confirm patience actually stops training
+    before the full epoch budget, on a real (if synthetic-data) run."""
+    from anemoi.training.real_run_diffusion import train_diffusion_stage
+
+    train_samples = _make_samples(6, z_dim=8, seed=1)
+    val_samples = _make_samples(6, z_dim=8, seed=2)
+
+    *_rest, epochs_run = train_diffusion_stage(
+        train_samples, val_samples,
+        hidden_dim=64, n_layers=4, n_timesteps=5, epochs=500, n_ensemble_eval=2,
+        seed=5, patience=5, device="cpu",
+    )
+    assert epochs_run < 500
+
+
+@pytest.mark.torch
+def test_a_longer_epoch_budget_never_returns_a_worse_val_loss():
+    """The real point of early stopping: the returned checkpoint is the
+    best one *seen*, not whatever the epoch cap happened to land on. A
+    longer budget (same patience, same seed) explores a superset of the
+    epochs a shorter budget does, so its reported val_loss -- the real
+    minimum over epochs actually run -- must never be worse."""
+    from anemoi.training.real_run_diffusion import train_diffusion_stage
+
+    train_samples = _make_samples(6, z_dim=8, seed=1)
+    val_samples = _make_samples(6, z_dim=8, seed=2)
+    kwargs = dict(
+        hidden_dim=32, n_layers=2, n_timesteps=5, n_ensemble_eval=2, seed=5,
+        patience=1000, device="cpu",  # patience disabled -- isolate the "best over all
+    )                                 # epochs run" behaviour from the stopping rule itself
+
+    _m, _tl, short_val, _vm, _a, short_epochs = train_diffusion_stage(
+        train_samples, val_samples, epochs=10, **kwargs,
+    )
+    _m, _tl, long_val, _vm, _a, long_epochs = train_diffusion_stage(
+        train_samples, val_samples, epochs=40, **kwargs,
+    )
+
+    assert short_epochs == 10
+    assert long_epochs == 40
+    assert long_val <= short_val + 1e-6
