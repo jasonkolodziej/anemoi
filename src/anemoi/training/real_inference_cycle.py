@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from ..inference.scheduler import CyclePlan
     from ..tracking.checkpoint_store import CheckpointStore
     from ..tracking.registry import ModelRegistry
+    from .real_inference_live import FieldsFetcher
 
 #: A model with no real recorded validation error (shouldn't happen for
 #: any version registered through the real training path, but a real
@@ -51,7 +52,10 @@ class InferenceCycleError(RuntimeError):
     pass
 
 
-def _build_live_x(name: str, track: Track, current: Fix, cache_dir: Path | str):
+def _build_live_x(
+    name: str, track: Track, current: Fix, cache_dir: Path | str,
+    *, fields_fetcher: FieldsFetcher | None = None,
+):
     from .real_inference_live import (
         build_live_cnn_x,
         build_live_gnn_x,
@@ -62,15 +66,18 @@ def _build_live_x(name: str, track: Track, current: Fix, cache_dir: Path | str):
     if name == "lstm":
         return build_live_lstm_x(track, current)
     if name == "cnn":
-        return build_live_cnn_x(track, current, cache_dir)
+        return build_live_cnn_x(track, current, cache_dir, fields_fetcher=fields_fetcher)
     if name == "transformer":
-        return build_live_transformer_x(track, current, cache_dir)
+        return build_live_transformer_x(track, current, cache_dir, fields_fetcher=fields_fetcher)
     if name == "gnn":
-        return build_live_gnn_x(track, current, cache_dir)
+        return build_live_gnn_x(track, current, cache_dir, fields_fetcher=fields_fetcher)
     raise InferenceCycleError(f"no real live feature builder for {name!r}")
 
 
-def _compute_env_features(track: Track, current: Fix, cache_dir: Path | str) -> np.ndarray | None:
+def _compute_env_features(
+    track: Track, current: Fix, cache_dir: Path | str,
+    *, fields_fetcher: FieldsFetcher | None = None,
+) -> np.ndarray | None:
     """This cycle's real environment feature vector (#148's drift-detection
     live sample) -- one extra `_current_fields` call, independent of which
     Group 1 models go on to contribute, so it's available even on a cycle
@@ -82,7 +89,7 @@ def _compute_env_features(track: Track, current: Fix, cache_dir: Path | str) -> 
     from ..data.features import compute_environment_features
     from .real_inference_live import _current_fields
 
-    fields = _current_fields(track, current, cache_dir)
+    fields = (fields_fetcher or _current_fields)(track, current, cache_dir)
     if fields is None:
         return None
     try:
@@ -94,6 +101,7 @@ def _compute_env_features(track: Track, current: Fix, cache_dir: Path | str) -> 
 def _run_pinn(
     registry: ModelRegistry, checkpoint_store: CheckpointStore,
     track: Track, current: Fix, cache_dir: Path | str,
+    *, fields_fetcher: FieldsFetcher | None = None,
 ) -> np.ndarray | None:
     """PINN's own (n_leads, 3) absolute prediction -- structurally
     different from the other four: two real models to load (the
@@ -121,7 +129,9 @@ def _run_pinn(
     except InferenceLoadError:
         return None
 
-    raw = build_live_pinn_x(track, current, candidate_model, cache_dir)
+    raw = build_live_pinn_x(
+        track, current, candidate_model, cache_dir, fields_fetcher=fields_fetcher,
+    )
     if raw is None:
         return None
     env, candidate_abs = raw
@@ -294,12 +304,23 @@ def build_real_deterministic_fn(
     registry: ModelRegistry,
     checkpoint_store: CheckpointStore,
     cache_dir: Path | str,
+    *, fields_fetcher: FieldsFetcher | None = None,
 ) -> Callable[[CyclePlan, Fix], DeterministicForecast]:
     """A real `deterministic_fn` closure over ``track`` (the storm's real
     known history) -- `inference.cycle.run_cycle`'s own
     ``deterministic_fn(plan, initial_fix)`` signature has no room for a
     real `Track`, only the current `Fix`, so the storm being forecast is
     captured here instead of threaded through `run_cycle` itself.
+
+    ``fields_fetcher`` overrides every gridded-field-consuming model's
+    real field source (CNN/Transformer/GNN/PINN's own env vector; default
+    `None` means each uses its own real live/operational GDAS path,
+    `real_inference_live._current_fields`, unchanged). The one real
+    caller that passes something else is `monitoring.skew_audit`: re-
+    running this exact same path against `real_inference_live.era5t_fields`
+    instead is what makes the §4.6.3 skew audit a real re-run of the
+    deterministic stack rather than a separate parallel implementation of
+    it that could quietly drift out of sync with what operationally runs.
 
     Raises `InferenceCycleError` if no real model could contribute at
     all (no registered version in staging/production, no cached field,
@@ -336,11 +357,16 @@ def build_real_deterministic_fn(
         # produce the exact same "didn't contribute" outcome, and told apart
         # only by which reason each model actually got.
         reasons: dict[str, str] = {}
-        env_features = _compute_env_features(track, current, cache_dir)
+        env_features = _compute_env_features(
+            track, current, cache_dir, fields_fetcher=fields_fetcher,
+        )
 
         for name in _GROUP1_LIVE_MODELS:
             if name == "pinn":
-                abs_pred = _run_pinn(registry, checkpoint_store, track, current, cache_dir)
+                abs_pred = _run_pinn(
+                    registry, checkpoint_store, track, current, cache_dir,
+                    fields_fetcher=fields_fetcher,
+                )
                 version = registry.production("pinn") or registry.in_stage("pinn", Stage.STAGING)
                 if version is None:
                     reasons[name] = "no registered staging/production version"
@@ -355,7 +381,9 @@ def build_real_deterministic_fn(
                 if version is None:
                     reasons[name] = "no registered staging/production version"
                 else:
-                    raw = _build_live_x(name, track, current, cache_dir)
+                    raw = _build_live_x(
+                        name, track, current, cache_dir, fields_fetcher=fields_fetcher,
+                    )
                     if raw is None:
                         if _gdas_likely_unpublished(current.valid_time):
                             reasons[name] = (

@@ -209,6 +209,31 @@ def open_era5(valid_time: datetime, store: Any = None) -> Any:
     return ds.sel(time=np.datetime64(valid_time.replace(tzinfo=None)))
 
 
+def fetch_era5t_one(
+    valid_time: datetime, lat: float, lon: float, *, box_deg: float = 10.0, store: Any = None
+) -> GriddedFields:
+    """Fetch real ERA5T GriddedFields for one specific sample, on demand.
+
+    Mirrors `data.gdas_cache.fetch_one`'s "single on-demand sample, not a
+    batch" shape, but reads ARCO-ERA5's near-real-time tail instead of
+    GDAS -- confirmed live 2026-09-22 that the SAME Zarr store
+    :func:`open_era5_store` already opens for Stage A pretraining also
+    carries ERA5T (``valid_time_stop_era5t``, running ~6 days behind real
+    time). `monitoring.skew`'s audit is the one caller that legitimately
+    wants this: unlike live/operational inference (always GDAS, see
+    `data.gdas_cache.fetch_one`'s own docstring), the skew audit's entire
+    point (§4.6.3) is re-running the deterministic stack on the
+    *ERA5T-sourced* input and comparing it against the GDAS-driven
+    operational run.
+
+    ``store`` may be a Dataset from :func:`open_era5_store`, to avoid
+    reopening the Zarr store per sample when auditing many cycles in one
+    CLI run (see `monitoring.skew_audit`).
+    """
+    ds = open_era5(valid_time, store=store)
+    return era5_to_gridded_fields(ds, center_lat=lat, center_lon=lon, box_deg=box_deg)
+
+
 def era5_to_gridded_fields(
     ds: Any,
     center_lat: float,
