@@ -14,6 +14,7 @@ ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy
 ENV UV_NO_DEV=1
 ENV UV_PYTHON_DOWNLOADS=0
+ENV UV_CACHE_DIR=/tmp/uv-cache
 ENV IMAGE_REGISTRY=ghcr.io
 ENV IMAGE_NAMESPACE=jasonkolodziej
 ENV IMAGE_NAME=anemoi-train
@@ -43,7 +44,8 @@ RUN uv sync --locked --no-install-project \
     --extra torch \
     --extra tracking \
     --extra gridded \
-    --extra storage
+    --extra storage \
+    && rm -rf /tmp/uv-cache
 
 COPY src ./src
 
@@ -52,7 +54,8 @@ RUN uv sync --locked \
     --extra torch \
     --extra tracking \
     --extra gridded \
-    --extra storage
+    --extra storage \
+    && rm -rf /tmp/uv-cache
 
 # Keep the default HURDAT2 archive in-image for unattended jobs.
 RUN mkdir -p /app/data \
