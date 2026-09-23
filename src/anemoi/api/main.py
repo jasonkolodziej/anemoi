@@ -12,15 +12,20 @@ Or directly with uvicorn: ``uvicorn anemoi.api.main:app --reload``.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from .. import __version__ as anemoi_version
 from . import __api_version__
+from .docs import get_custom_redoc_html
 from .routers import meta, monitoring, registry, retraining, schedule, storms
 from .stream import router as stream_router
+
+_STATIC_DIR = Path(__file__).parent / "static"
 
 TAGS_METADATA = [
     {"name": "meta", "description": "Health, the model/god catalog, and the data source registry."},
@@ -39,6 +44,10 @@ def create_app() -> FastAPI:
         description="Many winds. One forecast. Developer interface over the Anemoi reference implementation.",
         version=__api_version__,
         openapi_tags=TAGS_METADATA,
+        # The default /redoc is unstyled (fastapi.openapi.docs.get_redoc_html
+        # has no theming hook at all) -- replaced below with a real
+        # Anemoi-branded one (#159, api.docs.get_custom_redoc_html).
+        redoc_url=None,
         # Starlette's own debug mode: an unhandled exception returns its
         # real traceback in the response body instead of a bare "Internal
         # Server Error". Off by default (never leak internals in normal
@@ -47,6 +56,11 @@ def create_app() -> FastAPI:
         # Cloudflare Containers without SSH access configured).
         debug=bool(os.environ.get("ANEMOI_API_DEBUG")),
     )
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
+
+    @app.get("/redoc", include_in_schema=False)
+    def redoc_html() -> HTMLResponse:
+        return get_custom_redoc_html(openapi_url=app.openapi_url, title=f"{app.title} - ReDoc")
 
     origins = os.environ.get("ANEMOI_API_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
     app.add_middleware(
