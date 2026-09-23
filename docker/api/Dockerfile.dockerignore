@@ -1,0 +1,14 @@
+# Applies only to docker/api/Dockerfile (a Dockerfile-specific ignore file
+# takes precedence over any context-root .dockerignore). The build context is
+# the whole repo root, but the image needs only the Python package, so
+# everything else is excluded rather than listed one directory at a time.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!src/
+
+# Exclude the project virtual environment from image builds
+.venv
+**/__pycache__

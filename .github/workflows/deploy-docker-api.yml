@@ -19,8 +19,18 @@ on:
   push:
     branches:
       - main
+    # Everything the deployed image or Worker is built from: the Worker and
+    # its config, plus the Python package the Dockerfile installs from the
+    # lockfile (`src/`, `pyproject.toml`, `uv.lock`). API code lives in src/,
+    # so watching docker/api/ alone silently skipped API fixes (#175 had to
+    # be deployed by hand). Markdown under docker/api/ changes nothing that
+    # ships.
     paths:
       - "docker/api/**"
+      - "!docker/api/**/*.md"
+      - "src/**"
+      - "pyproject.toml"
+      - "uv.lock"
   workflow_dispatch: {} # manual re-run, e.g. after adding secrets for the first time
 
 jobs:

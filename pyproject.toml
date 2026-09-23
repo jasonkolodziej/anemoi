@@ -18,6 +18,10 @@ dependencies = ["numpy>=2.4.6", "pyyaml>=6.0"]
 # (scheduling, availability, curriculum, promotion, metrics) can be installed,
 # tested and run on machines without a GPU or a torch wheel.
 torch = ["torch>=2.2"]
+# The same, from PyTorch's CPU-only index -- for docker/api's image, which
+# only ever runs inference on CPU. Plain `torch` from PyPI is the CUDA build
+# on Linux (several GB of nvidia-* packages) and stays the GPU/training path.
+torch-cpu = ["torch>=2.2"]
 # MLflow tracking. The tracking layer degrades to a local JSON store when
 # MLflow is absent (see anemoi.tracking.registry), per Scope v2.1 §10.1.
 tracking = ["mlflow>=2.12"]
@@ -37,6 +41,11 @@ api = ["fastapi>=0.115", "uvicorn[standard]>=0.32"]
 # `brew install eccodes` on macOS. See anemoi.data.real_gridded.
 gridded = [
     "xarray>=2024.1", "zarr>=2.17", "gcsfs>=2024.1", "eccodes>=2.30", "requests>=2.31",
+    # The compiled ecCodes library as a wheel. eccodes' own Linux/macOS wheel
+    # requires it, but its Windows wheels don't, and uv's lock takes one
+    # wheel's metadata for all of them, so without this it's silently
+    # dropped and the older system libeccodes0 gets used instead.
+    "eccodeslib; platform_system != 'Windows'",
     # NetCDF4 reader for data.real_sst's OISST fetch -- pure-Python-wheel
     # h5py (no compiled system library needed, unlike eccodes), confirmed
     # 2026-09-22.
@@ -65,6 +74,17 @@ cloudflare_access = "anemoi.tracking.cloudflare_access:CloudflareAccessRequestHe
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+conflicts = [[{ extra = "torch" }, { extra = "torch-cpu" }]]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", extra = "torch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/anemoi"]

@@ -54,7 +54,9 @@ first time):
 Spike findings (all confirmed, not just built-then-assumed):
 
 - CPU-only torch installs cleanly (`torch.cuda.is_available()` is `False`);
-  no GPU wheel pulled. Cloudflare Containers has no GPU instances, but
+  no GPU wheel pulled. Since the move to uv's Docker pattern this comes
+  from the lockfile: the `torch-cpu` extra, sourced from PyTorch's CPU
+  index (`pyproject.toml` `[tool.uv.sources]`). Cloudflare Containers has no GPU instances, but
   real-mode only ever does *inference* (a handful of small forward passes
   plus one diffusion `sample()` call per cycle, see #91), not training.
 - `anemoi.api.real_state`, `anemoi.training.real_inference_cycle`, and
@@ -268,7 +270,9 @@ builds and pushes the image as part of it.
 ### Automated deploy (#97)
 
 `.github/workflows/deploy-docker-api.yml` runs this exact `pnpm run
-cf:deploy` on every push to `main` that touches `docker/api/**` -- but
+cf:deploy` on every push to `main` that touches what the image or Worker
+is built from -- `docker/api/**` (except markdown), `src/**`,
+`pyproject.toml`, or `uv.lock` -- but
 it's gated behind the `cloudflare-production` GitHub Environment (a
 required reviewer, the repo owner), so a merge *queues* the deploy and
 nothing real ships until that's approved in the Actions run. Approving

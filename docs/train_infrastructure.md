@@ -147,7 +147,7 @@ the `S3_ARTIFACT_*` variables.
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh && source $HOME/.local/bin/env
 git clone https://github.com/jasonkolodziej/anemoi.git anemoi && cd anemoi
-uv sync --all-extras
+uv sync --extra all  # not --all-extras: `torch` and `torch-cpu` conflict
 sudo apt-get update -qq && sudo apt-get install -y libeccodes0 tmux
 ```
 
@@ -527,7 +527,7 @@ requirement that a promotable production set is coherent end to end --
 retraining any Group 1 model changes the signature and correctly
 invalidates the diffusion/fusion versions built from the old one.
 
-Needs `torch` and `storage` extras (`uv sync --all-extras` already covers
+Needs `torch` and `storage` extras (`uv sync --extra all` already covers
 both) and real `S3_ARTIFACT_*` credentials -- unlike the two ingest jobs,
 this one always uploads (no local-only fallback), since a multi-hour GPU
 run losing its result to a preemption is a real cost this project already
@@ -569,7 +569,7 @@ script; disk size is chosen separately per-instance when picking an offer.
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh && source $HOME/.local/bin/env
 git clone https://github.com/jasonkolodziej/anemoi.git anemoi && cd anemoi
-uv sync --all-extras
+uv sync --extra all  # not --all-extras: `torch` and `torch-cpu` conflict
 apt-get update -qq && apt-get install -y libeccodes0 tmux
 curl -o ~/hurdat2-atl.txt https://www.nhc.noaa.gov/data/hurdat/hurdat2-atl-1851-2023-042624.txt
 # .env (S3_ARTIFACT_* for CheckpointStore) still needs copying in separately --
