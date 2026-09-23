@@ -1,0 +1,39 @@
+/*
+ * Anemoi-branded /redoc chrome (#159).
+ *
+ * Redoc's own theme JS object (anemoi.api.docs.REDOC_THEME, passed to
+ * Redoc.init) covers the component itself -- sidebar, right panel, HTTP
+ * badges, typography. This file covers what that object does not: the
+ * outer <body> before redoc.standalone.js finishes loading and mounts
+ * (otherwise a white flash against this app's dark-only palette), and the
+ * scrollbar. Values mirror console/src/app.css's neutral scale exactly
+ * (Branding.md's "Console theme" table) -- not re-derived here.
+ */
+
+body {
+  margin: 0;
+  padding: 0;
+  background: #0a0e17; /* console --color-bg */
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0e17; /* console --color-bg */
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b; /* console --color-border */
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #1e293b; /* console --color-border */
+  filter: brightness(1.3); /* no fixed hex for --color-border-strong exists
+                               in Branding.md's own table (interpolated,
+                               not a named value) -- computed instead of
+                               invented */
+}
