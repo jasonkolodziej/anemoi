@@ -6,6 +6,7 @@ from anemoi.training.orchestrator import (
     Mode,
     OrchestrationError,
     RunOutcome,
+    build_derived_schedule,
     build_schedule,
     run_schedule,
     validate_schedule,
@@ -98,3 +99,21 @@ def test_fail_fast_stops_at_the_first_failure():
     schedule = build_schedule(Mode.SEQUENTIAL)
     result = run_schedule(schedule, failing_runner("lstm"), fail_fast=True)
     assert len(result.outcomes) == 1
+
+
+@pytest.mark.parametrize("mode", [Mode.SEQUENTIAL, Mode.PARALLEL])
+def test_derived_schedule_retrains_no_group1_model(mode):
+    """#149: re-syncing diffusion/fusion to the current champions must not
+    retrain Group 1 -- a fresh Group 1 version that doesn't beat its
+    incumbent is exactly what desyncs the derived models again."""
+    schedule = build_derived_schedule(mode)
+    validate_schedule(schedule)
+    assert set(schedule.task_names()) == {"latents", "diffusion", "fusion"}
+    latents = next(t for w in schedule.waves for t in w.tasks if t.name == "latents")
+    assert latents.depends_on == ()
+
+
+def test_derived_schedule_runs_end_to_end():
+    result = run_schedule(build_derived_schedule(Mode.SEQUENTIAL), ok_runner)
+    assert result.complete
+    assert set(result.succeeded) == {"latents", "diffusion", "fusion"}

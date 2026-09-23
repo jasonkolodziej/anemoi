@@ -14,6 +14,7 @@ from anemoi.tracking.registry import ModelVersion, Stage
 from anemoi.training.real_inference import (
     MODEL_NAMES,
     InferenceLoadError,
+    load_run_artifacts,
     load_standardization_stats,
     load_trained_model,
     load_trained_pinn_candidate,
@@ -205,3 +206,112 @@ def test_load_standardization_stats_round_trips_real_arrays():
 def test_load_standardization_stats_is_empty_without_any_tags():
     version = _make_version("fusion", _ARCH_PARAMS["fusion"], "s3://fake/fusion.pt")
     assert load_standardization_stats(version) == {}
+
+
+# --- load_run_artifacts: rebuild RunArtifacts from the registry (#149) -------
+
+
+def _register_like_training(name, artifacts, store, tmp_path) -> ModelVersion:
+    """Serialize ``artifacts`` with the exact tag functions
+    `real_orchestrator.RealOrchestratorRunner` uses at registration time --
+    so the round trip below tests what a real registered version carries,
+    not a hand-built approximation of it."""
+    import torch
+
+    from anemoi.tracking.experiment_tracking import (
+        arch_params_tag,
+        candidate_tags,
+        standardization_tags,
+    )
+
+    local_path = tmp_path / f"{name}-roundtrip.pt"
+    torch.save(artifacts.model.state_dict(), local_path)
+    checkpoint_uri = store.upload(local_path, f"checkpoints/{name}/B/roundtrip.pt")
+    tags = {"arch_params": arch_params_tag(artifacts)}
+    tags.update(candidate_tags(artifacts))
+    tags.update(standardization_tags(artifacts))
+    return ModelVersion(
+        name=name, version=3, stage=Stage.STAGING, run_id="roundtrip",
+        input_flavor=Flavor.GDAS_FINETUNE, metrics={}, tags=tags,
+        checkpoint_uri=checkpoint_uri,
+    )
+
+
+@pytest.mark.torch
+def test_load_run_artifacts_round_trips_a_real_training_runs_artifacts(tmp_path):
+    """CNN's stats have the real training-time keepdims shape (1, C, 1, 1)
+    -- `real_latents` multiplies them straight against batched arrays, so
+    shape must survive the registry round trip, not just values."""
+    import numpy as np
+    import torch
+
+    from anemoi.training.real_run import RunArtifacts
+
+    arch_params = _ARCH_PARAMS["cnn"]
+    build_kwargs = dict(arch_params, lead_hours=tuple(arch_params["lead_hours"]))
+    model, _spec = _real_builder("cnn")(**build_kwargs)
+    rng = np.random.default_rng(0)
+    original = RunArtifacts(
+        model=model, arch_params=arch_params,
+        x_mean=rng.normal(size=(1, 3, 1, 1)), x_std=rng.uniform(0.5, 2, size=(1, 3, 1, 1)),
+        y_mean=rng.normal(size=(2, 3)), y_std=rng.uniform(0.5, 2, size=(2, 3)),
+    )
+    store = _store()
+    version = _register_like_training("cnn", original, store, tmp_path)
+
+    loaded = load_run_artifacts("cnn", version, store)
+
+    for field_name in ("x_mean", "x_std", "y_mean", "y_std"):
+        expected, got = getattr(original, field_name), getattr(loaded, field_name)
+        assert got.shape == expected.shape, field_name
+        assert np.allclose(got, expected), field_name
+    for key, value in original.model.state_dict().items():
+        assert torch.equal(value, loaded.model.state_dict()[key]), key
+    assert loaded.candidate_model is None
+
+
+@pytest.mark.torch
+def test_load_run_artifacts_rebuilds_pinns_candidate_and_env_stats(tmp_path):
+    import numpy as np
+    import torch
+
+    from anemoi.models.lstm import build_lstm
+    from anemoi.training.real_run import RunArtifacts
+
+    store = _store()
+    candidate_params = {"input_dim": 4, "hidden_dim": 6, "lead_hours": [12, 24]}
+    candidate, _ = build_lstm(input_dim=4, hidden_dim=6, lead_hours=(12, 24))
+    cand_path = tmp_path / "cand.pt"
+    torch.save(candidate.state_dict(), cand_path)
+    cand_uri = store.upload(cand_path, "checkpoints/pinn/B/cand.pt")
+
+    arch_params = _ARCH_PARAMS["pinn"]
+    model, _ = _real_builder("pinn")(**dict(arch_params, lead_hours=(12, 24)))
+    original = RunArtifacts(
+        model=model, arch_params=arch_params, candidate_model=candidate,
+        env_mean=np.arange(5.0), env_std=np.ones(5),
+        candidate_arch_params=candidate_params, candidate_checkpoint_uri=cand_uri,
+    )
+    version = _register_like_training("pinn", original, store, tmp_path)
+
+    loaded = load_run_artifacts("pinn", version, store)
+
+    assert np.array_equal(loaded.env_mean, original.env_mean)
+    assert loaded.candidate_checkpoint_uri == cand_uri
+    for key, value in candidate.state_dict().items():
+        assert torch.equal(value, loaded.candidate_model.state_dict()[key]), key
+
+
+@pytest.mark.torch
+def test_load_run_artifacts_refuses_a_version_without_standardisation_stats(tmp_path):
+    import torch
+
+    arch_params = _ARCH_PARAMS["lstm"]
+    model, _ = _real_builder("lstm")(**dict(arch_params, lead_hours=(12, 24)))
+    store = _store()
+    path = tmp_path / "lstm.pt"
+    torch.save(model.state_dict(), path)
+    version = _make_version("lstm", arch_params, store.upload(path, "checkpoints/lstm/B/x.pt"))
+
+    with pytest.raises(InferenceLoadError, match="standardisation stats"):
+        load_run_artifacts("lstm", version, store)

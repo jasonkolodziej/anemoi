@@ -192,6 +192,34 @@ def build_schedule(mode: Mode, models: tuple[str, ...] = GROUP1_MODELS) -> Sched
     )
 
 
+def build_derived_schedule(mode: Mode) -> Schedule:
+    """Latents + diffusion + fusion only -- no Group 1 retrain (§5.7,
+    GitHub #149).
+
+    For re-syncing the derived models to Group 1 checkpoints that already
+    exist and are already the champions: the runner is pre-seeded with
+    those champions (`RealOrchestratorRunner.seed_from_champions`), so the
+    latents task has no in-schedule dependency. A full `build_schedule`
+    retrain can't do this -- it retrains Group 1 too, and any new Group 1
+    version that doesn't beat its incumbent leaves the derived models
+    trained against a non-champion set, desynced again (#149's own step 2).
+    """
+    if mode is Mode.SEQUENTIAL:
+        latents = _latent_task((), ExecutionMode.SEQUENTIAL)
+        waves = (Wave(0, (latents,)),) + tuple(
+            Wave(i + 1, (_train_task(m, ExecutionMode.SEQUENTIAL, ("latents",)),))
+            for i, m in enumerate(DERIVED_MODELS)
+        )
+        return Schedule(mode=mode, waves=waves)
+
+    latents = _latent_task((), ExecutionMode.PARALLEL_GROUP1)
+    derived = (
+        _train_task("diffusion", ExecutionMode.PARALLEL_GROUP2, ("latents",)),
+        _train_task("fusion", ExecutionMode.PARALLEL_GROUP3, ("latents",)),
+    )
+    return Schedule(mode=mode, waves=(Wave(0, (latents,)), Wave(1, derived)))
+
+
 def validate_schedule(schedule: Schedule) -> None:
     """Every dependency must appear in an earlier wave."""
     completed: set[str] = set()

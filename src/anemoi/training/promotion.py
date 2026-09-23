@@ -14,6 +14,7 @@ ourselves:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 
@@ -164,7 +165,15 @@ def evaluate_promotion(
             "operational-flavor evaluation gates promotion (§4.6.1)"
         )
 
-    if incumbent_val_metrics is None:
+    candidate_primary = val_metrics.values.get(primary_metric)
+    if candidate_primary is not None and not math.isfinite(candidate_primary):
+        # A real, previously-documented gap (wiki Training-Architecture: NaN
+        # CNN/Transformer/GNN/diffusion/fusion runs auto-staged): with no
+        # incumbent, `beats_incumbent` used to be True unconditionally, so a
+        # candidate with a NaN/inf primary metric reached staging.
+        beats_incumbent = False
+        reasons.append(f"{primary_metric}: candidate is non-finite ({candidate_primary}) [FAIL]")
+    elif incumbent_val_metrics is None:
         beats_incumbent = True
         reasons.append("no incumbent; candidate is the first registered version")
     else:

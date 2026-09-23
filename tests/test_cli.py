@@ -274,12 +274,71 @@ def test_cmd_train_schedule_passes_streaming_batch_size_and_num_workers_to_runne
         mode="sequential", hurdat2="unused.txt", models=None, seed=1, n_augment=1,
         era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
         registry_root=str(tmp_path / "registry"), streaming=True, batch_size=16,
-        num_workers=3,
+        num_workers=3, derived_from_champions=False,
     )
     assert cli.cmd_train_schedule(args) == 0
     assert captured["streaming"] is True
     assert captured["batch_size"] == 16
     assert captured["num_workers"] == 3
+
+
+def _train_schedule_args(tmp_path, **overrides) -> argparse.Namespace:
+    values = dict(
+        mode="sequential", hurdat2="unused.txt", models=None, seed=1, n_augment=1,
+        era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
+        registry_root=str(tmp_path / "registry"), streaming=False, batch_size=None,
+        num_workers=0, derived_from_champions=False,
+    )
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+def test_cmd_train_schedule_derived_from_champions_seeds_and_runs_derived_only(
+    tmp_path, monkeypatch
+):
+    """#149: the re-sync path must seed the runner from the current
+    champions and schedule only latents/diffusion/fusion -- no Group 1."""
+    seeded: list[bool] = []
+    scheduled: list = []
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            pass
+
+        def seed_from_champions(self):
+            seeded.append(True)
+            return {"lstm": 8, "cnn": 7, "transformer": 5, "gnn": 5, "pinn": 6}
+
+    class FakeResult:
+        outcomes: list = []
+        skipped: list = []
+        succeeded: list = []
+        failed: list = []
+
+    def fake_run_schedule(schedule, runner):
+        scheduled.append(schedule)
+        return FakeResult()
+
+    monkeypatch.setattr("anemoi.training.real_orchestrator.RealOrchestratorRunner", FakeRunner)
+    monkeypatch.setattr("anemoi.training.orchestrator.run_schedule", fake_run_schedule)
+    monkeypatch.setattr("anemoi.tracking.registry.ModelRegistry", lambda *a, **k: object())
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+    monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [])
+
+    assert cli.cmd_train_schedule(_train_schedule_args(tmp_path, derived_from_champions=True)) == 0
+    assert seeded == [True]
+    assert set(scheduled[0].task_names()) == {"latents", "diffusion", "fusion"}
+
+
+def test_cmd_train_schedule_derived_from_champions_refuses_models(tmp_path, monkeypatch):
+    monkeypatch.setattr("anemoi.tracking.registry.ModelRegistry", lambda *a, **k: object())
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+    monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [])
+
+    args = _train_schedule_args(tmp_path, derived_from_champions=True, models="lstm")
+    assert cli.cmd_train_schedule(args) == 1
 
 
 # --- cmd_retrain_check dispatch ----------------------------------------------

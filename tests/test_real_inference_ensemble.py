@@ -207,8 +207,15 @@ def test_build_real_ensemble_fn_produces_real_finite_members(tmp_path):
         assert np.all(np.isfinite(member.lats))
         assert np.all(np.isfinite(member.lons))
         assert np.all(np.isfinite(member.winds_kt))
-    # real members from a real stochastic sampler shouldn't be identical
-    assert not np.allclose(members[0].lats, members[1].lats)
+    # Real members from a real stochastic sampler shouldn't be identical.
+    # Exact comparison across all fields, not np.allclose on lats alone:
+    # this tiny untrained model's lat spread can be ~1e-6 deg, which
+    # allclose's rtol=1e-5 at ~17 deg calls "equal" -- a flake that surfaced
+    # whenever earlier tests shifted the global torch RNG state.
+    def _flat(m):
+        return np.concatenate([m.lats, m.lons, m.winds_kt])
+
+    assert not np.array_equal(_flat(members[0]), _flat(members[1]))
 
 
 @pytest.mark.torch
