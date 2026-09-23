@@ -27,6 +27,13 @@ class Reason(str, Enum):
     MANUAL = "manual"
     NIGHTLY_LATENT = "nightly_latent"
     CASCADE = "cascade"
+    #: A derived model's own recorded latent_signature no longer matches
+    #: the current Group 1 champion set (§5.7, GitHub #149) -- distinct
+    #: from CASCADE, which only fires alongside an upstream Group 1 job in
+    #: the *same* evaluate_all pass. This fires on its own: the desync can
+    #: exist with no Group 1 retrain happening at all (a `registry-
+    #: reconcile` re-stage is the real, repeated cause #149 documented).
+    LATENT_DESYNC = "latent_desync"
 
 
 _REASON_TO_TAG: dict[Reason, Trigger] = {
@@ -38,6 +45,7 @@ _REASON_TO_TAG: dict[Reason, Trigger] = {
     Reason.MANUAL: Trigger.MANUAL_SWEEP,
     Reason.NIGHTLY_LATENT: Trigger.NIGHTLY_LATENT,
     Reason.CASCADE: Trigger.DRIFT_DETECTED,
+    Reason.LATENT_DESYNC: Trigger.LATENT_DESYNC,
 }
 
 
@@ -128,6 +136,20 @@ def on_skew(model: str) -> list[RetrainJob]:
                                    note="Stage B re-fine-tune only (§4.6.3)")])
 
 
+def on_latent_desync(model: str) -> list[RetrainJob]:
+    """A derived model (fusion/diffusion) whose recorded `latent_signature`
+    no longer matches the current Group 1 champion set (§5.7, GitHub
+    #149) -- the caller (`ModelRegistry.desynced_derived_models`) already
+    did the real detection; this just shapes it into the same `RetrainJob`
+    contract every other trigger uses. Not cascaded further via
+    `expand_jobs`: `model` is already the derived model itself, and
+    retraining a derived model invalidates nothing else
+    (`invalidated_by` returns `()` for a non-Group-1 model)."""
+    mode = ExecutionMode.PARALLEL_GROUP2 if model == "diffusion" else ExecutionMode.PARALLEL_GROUP3
+    note = "recorded latent_signature no longer matches the current Group 1 champion set (§5.7)"
+    return [RetrainJob(model, Reason.LATENT_DESYNC, mode, note=note)]
+
+
 def on_data_volume(new_synoptic_times: int, threshold: int = 500) -> list[RetrainJob]:
     """Warm-start retrain once enough new synoptic times have accumulated (§5.5)."""
     if new_synoptic_times < threshold:
@@ -178,8 +200,16 @@ def evaluate_all(
     drifted_models: tuple[str, ...] = (),
     skewed_models: tuple[str, ...] = (),
     new_synoptic_times: int = 0,
+    desynced_models: tuple[str, ...] = (),
 ) -> list[RetrainJob]:
-    """Run every trigger and return the expanded, de-duplicated job list."""
+    """Run every trigger and return the expanded, de-duplicated job list.
+
+    ``desynced_models`` -- real output of `tracking.registry.ModelRegistry
+    .desynced_derived_models` (§5.7, GitHub #149), gathered by the caller
+    the same way ``drifted_models``/``skewed_models`` already are: this
+    module stays pure logic over values its caller supplies, not an I/O
+    consumer of the registry itself.
+    """
     today = now.date()
     jobs: list[RetrainJob] = []
     jobs += scheduled_monthly(today)
@@ -189,5 +219,7 @@ def evaluate_all(
         jobs += [RetrainJob(m, Reason.DRIFT, ExecutionMode.SEQUENTIAL)]
     for m in skewed_models:
         jobs += [RetrainJob(m, Reason.SKEW, ExecutionMode.SEQUENTIAL)]
+    for m in desynced_models:
+        jobs += on_latent_desync(m)
     jobs += nightly_latent(now, state)
     return expand_jobs(jobs)

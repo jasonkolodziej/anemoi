@@ -12,6 +12,7 @@ from anemoi.training.triggers import (
     nightly_latent,
     on_data_volume,
     on_drift,
+    on_latent_desync,
     on_skew,
     preseason,
     scheduled_monthly,
@@ -90,3 +91,45 @@ def test_evaluate_all_combines_and_deduplicates():
     names = [j.model for j in jobs]
     assert len(names) == len(set(names))
     assert "diffusion" in names
+
+
+def test_latent_desync_trigger_fires_on_its_own_with_no_group1_retrain():
+    """The real #149 gap: a desync can exist with no Group 1 retrain
+    happening at all (a `registry-reconcile` re-stage is the real,
+    documented cause) -- on_latent_desync must not depend on expand_jobs's
+    Group1-cascade machinery to fire."""
+    jobs = on_latent_desync("fusion")
+    assert len(jobs) == 1
+    assert jobs[0].model == "fusion"
+    assert jobs[0].reason is Reason.LATENT_DESYNC
+    assert jobs[0].trigger_tag is Trigger.LATENT_DESYNC
+    assert "latent_signature" in jobs[0].note
+
+
+def test_latent_desync_trigger_does_not_cascade_further():
+    """Retraining a derived model invalidates nothing else -- expand_jobs's
+    own invalidated_by("fusion") == () already guarantees this; asserted
+    here as the real, specific #149 contract."""
+    jobs = expand_jobs(on_latent_desync("diffusion"))
+    assert [j.model for j in jobs] == ["diffusion"]
+
+
+def test_evaluate_all_surfaces_a_real_latent_desync():
+    now = datetime(2026, 9, 15, 4, tzinfo=UTC)  # not the 1st/5th/preseason, off 02:00Z
+    jobs = evaluate_all(now, SeasonState(), desynced_models=("fusion",))
+    assert [j.model for j in jobs] == ["fusion"]
+    assert jobs[0].reason is Reason.LATENT_DESYNC
+
+
+def test_evaluate_all_prefers_a_real_drift_reason_over_a_generic_cascade():
+    """When the same model is both explicitly drifted and would otherwise
+    only get a generic CASCADE placeholder, the specific real reason must
+    win -- expand_jobs's own seen-first dedup already guarantees this;
+    asserted here as the real #149-adjacent contract (LATENT_DESYNC is
+    exactly this kind of specific reason)."""
+    now = datetime(2026, 9, 15, 4, tzinfo=UTC)
+    jobs = evaluate_all(now, SeasonState(), drifted_models=("lstm",), desynced_models=("fusion",))
+    fusion_jobs = [j for j in jobs if j.model == "fusion"]
+    assert len(fusion_jobs) == 1
+    assert fusion_jobs[0].reason is Reason.LATENT_DESYNC
+    assert fusion_jobs[0].cascaded is False

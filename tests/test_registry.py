@@ -137,6 +137,77 @@ def test_invalidation_map_covers_group1_only():
     assert invalidated_by("diffusion") == ()
 
 
+def _stage_all(reg, versions, stage=Stage.STAGING):
+    for name, version in versions.items():
+        reg.transition(name, version, stage)
+
+
+def test_desynced_derived_models_is_empty_for_a_coherent_set(tmp_path):
+    reg = ModelRegistry(tmp_path)
+    versions = full_set(reg)
+    _stage_all(reg, versions)
+    assert reg.desynced_derived_models() == ()
+
+
+def test_desynced_derived_models_detects_a_real_champion_change(tmp_path):
+    """The real #149 scenario: a Group 1 champion changes -- via a fresh
+    retrain-and-promote, or (the second, previously-unnoticed real cause)
+    via `registry-reconcile` re-staging an already-registered version --
+    with no `pin_set` call involved at all, so nothing previously
+    detected the resulting desync."""
+    reg = ModelRegistry(tmp_path)
+    versions = full_set(reg)
+    _stage_all(reg, versions)
+    assert reg.desynced_derived_models() == ()
+
+    new_lstm = reg.register(
+        "lstm", run_id="lstm-v2", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS,
+    )
+    reg.transition("lstm", new_lstm.version, Stage.STAGING)
+
+    assert set(reg.desynced_derived_models()) == {"diffusion", "fusion"}
+
+
+def test_desynced_derived_models_is_empty_without_a_full_champion_set(tmp_path):
+    """No current signature can be computed at all yet -- an honest empty
+    answer, not an error, the same "not enough real state" contract every
+    other real check in this codebase already uses."""
+    reg = ModelRegistry(tmp_path)
+    versions = register_group1(reg)
+    _stage_all(reg, {"lstm": versions["lstm"]})  # only one of five staged
+    assert reg.desynced_derived_models() == ()
+
+
+def test_desynced_derived_models_is_empty_when_no_derived_model_has_a_champion(tmp_path):
+    reg = ModelRegistry(tmp_path)
+    versions = register_group1(reg)
+    _stage_all(reg, versions)  # all five Group 1 models staged
+    # diffusion/fusion never registered at all -- nothing to compare.
+    assert reg.desynced_derived_models() == ()
+
+
+def test_desynced_derived_models_only_looks_at_the_champion_version(tmp_path):
+    """An archived/superseded derived-model version's stale signature must
+    not matter -- only what `champion()` would actually serve does."""
+    reg = ModelRegistry(tmp_path)
+    versions = full_set(reg)
+    _stage_all(reg, versions)
+
+    # A fresh Group 1 retrain, and a fresh derived-model version trained
+    # against it -- the champion set is coherent again.
+    new_lstm = reg.register("lstm", run_id="lstm-v2", input_flavor=Flavor.GDAS_FINETUNE,
+                            metrics=METRICS)
+    reg.transition("lstm", new_lstm.version, Stage.STAGING)
+    new_versions = dict(versions, lstm=new_lstm.version)
+    new_signature = latent_signature({m: new_versions[m] for m in GROUP1_MODELS})
+    for name in ("diffusion", "fusion"):
+        v = reg.register(name, run_id=f"run-{name}-2", input_flavor=Flavor.GDAS_FINETUNE,
+                         metrics=METRICS, latent_signature=new_signature)
+        reg.transition(name, v.version, Stage.STAGING)
+
+    assert reg.desynced_derived_models() == ()
+
+
 def test_promoting_a_new_staging_version_archives_the_incumbent(tmp_path):
     """Real bug: `transition`'s own docstring always promised this for any
     stage, but only Stage.PRODUCTION ever did it -- two versions could

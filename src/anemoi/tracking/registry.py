@@ -398,6 +398,44 @@ class ModelRegistry:
             return None
         return max(self._pins.values(), key=lambda p: p["pinned_at"])
 
+    def desynced_derived_models(self) -> tuple[str, ...]:
+        """Which derived models (fusion/diffusion) are desynced from the
+        *current* Group 1 champion set right now (§5.7, GitHub #149) --
+        real, live drift between two independently-evolving pieces of
+        registry state, not a training-time concept.
+
+        `pin_set` already refuses to pin a derived model whose recorded
+        `latent_signature` doesn't match its pinned Group 1 set -- a hard
+        gate at pin time. But `champion()` (what a real cycle actually
+        uses, via `production()` else `staging()`) is looked up
+        independently per model and never goes through `pin_set` at all,
+        so a Group 1 model's champion can change -- via a real retrain
+        that beats its incumbent, *or* via `registry-reconcile` re-staging
+        an already-registered version, the second real cause #149
+        documented living entirely outside `pin_set` -- with nothing
+        noticing or reporting it. This is that missing check, read-only:
+        it detects the desync, it does not fix it.
+
+        Returns an empty tuple (not an error) when any Group 1 model has
+        no champion yet -- there is no "current" signature to compare
+        against, the same honest-empty contract every other real check in
+        this codebase already uses for "not enough real state to say
+        anything yet."
+        """
+        champions = {name: self.champion(name) for name in GROUP1_MODELS}
+        if any(c is None for c in champions.values()):
+            return ()
+        try:
+            current_signature = latent_signature({name: c.version for name, c in champions.items()})
+        except RegistryError:
+            return ()
+        desynced = []
+        for name in DERIVED_MODELS:
+            champ = self.champion(name)
+            if champ is not None and champ.latent_signature != current_signature:
+                desynced.append(name)
+        return tuple(desynced)
+
     # ---- mlflow mirror ---------------------------------------------------
 
     def _mirror_model_version(

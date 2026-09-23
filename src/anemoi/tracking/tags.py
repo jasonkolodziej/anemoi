@@ -22,6 +22,13 @@ class Trigger(str, Enum):
     DATA_VOLUME = "data_volume"
     MANUAL_SWEEP = "manual_sweep"
     NIGHTLY_LATENT = "nightly_latent"
+    #: A derived model's (fusion/diffusion) recorded latent_signature no
+    #: longer matches the current Group 1 champion set -- §5.7, GitHub
+    #: #149. Distinct from CASCADE (queued because an upstream Group 1
+    #: retrain is *also* firing in the same evaluate_all pass): this fires
+    #: even when no Group 1 model is being retrained right now, e.g. a
+    #: `registry-reconcile` re-staging an already-registered version.
+    LATENT_DESYNC = "latent_desync"
 
 
 class ExecutionMode(str, Enum):
