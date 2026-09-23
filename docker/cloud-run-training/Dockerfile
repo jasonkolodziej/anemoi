@@ -25,6 +25,7 @@ WORKDIR /app
 
 LABEL org.opencontainers.image.title="anemoi cloud-run training" \
     org.opencontainers.image.description="Anemoi training image for Cloud Run Jobs" \
+    org.opencontainers.image.licenses="AGPL-3.0-only" \
     org.opencontainers.image.source="${REPO_URL}" \
     org.opencontainers.image.url="${REPO_URL}" \
     org.opencontainers.image.version="${VERSION}" \
