@@ -1,0 +1,33 @@
+# Builds docker/cloud-run-training/Dockerfile from the repo root and pushes it
+# to Artifact Registry. `gcloud builds submit --tag` can't do this on its own:
+# it only builds a Dockerfile at the root of the uploaded source.
+#
+#   gcloud builds submit --config docker/cloud-run-training/cloudbuild.yaml \
+#     --substitutions _IMAGE=us-central1-docker.pkg.dev/${PROJECT_ID}/anemoi/anemoi-train,_TAG=$(git rev-parse --short=12 HEAD) .
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - docker/cloud-run-training/Dockerfile
+      - --build-arg
+      - VCS_REF=$_TAG
+      - --build-arg
+      - VERSION=$_TAG
+      - -t
+      - $_IMAGE:$_TAG
+      - -t
+      - $_IMAGE:latest
+      - .
+images:
+  - $_IMAGE:$_TAG
+  - $_IMAGE:latest
+substitutions:
+  _IMAGE: us-central1-docker.pkg.dev/anemoi-training/anemoi/anemoi-train
+  _TAG: manual
+options:
+  # The CUDA torch wheels make this a large image; the default machine's
+  # disk and CPU make the build slow and can run out of space.
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 100
+timeout: 3600s
