@@ -108,7 +108,13 @@ def test_real_state_monitoring_and_retraining_routes_do_not_500(client):
 
     r = client.get("/v1/retraining/triggers")
     assert r.status_code == 200
-    assert r.json() == []
+    # Not asserted empty: pending_retrain_jobs() is real now (#149), and
+    # nightly_latent (real, time-of-day-dependent, unrelated to this
+    # fixture's own storms/registry) can legitimately fire at 02:00 UTC --
+    # exactly what real production behavior should do. Real drift/desync
+    # detection is exercised precisely, with controlled inputs, in the
+    # dedicated pending_retrain_jobs tests below.
+    assert isinstance(r.json(), list)
 
 
 def test_real_state_run_cycle_degrades_to_the_synthetic_fallback(client):
@@ -682,3 +688,77 @@ def test_skew_report_falls_back_to_the_legacy_flat_path(client):
     report = state.skew_report()
     assert report.n == 10
     assert report.alert is True
+
+
+# ---- pending_retrain_jobs / latent desync (§5.7, #149) --------------------
+
+
+def _stage_group1_and_derived(registry, *, desync=False):
+    from anemoi.data.sources import Flavor
+    from anemoi.tracking.registry import GROUP1_MODELS, Stage, latent_signature
+
+    metrics = {"track_error_48h_nm": 70.0}
+    versions = {}
+    for name in GROUP1_MODELS:
+        v = registry.register(name, run_id=f"run-{name}", input_flavor=Flavor.GDAS_FINETUNE,
+                              metrics=metrics)
+        registry.transition(name, v.version, Stage.STAGING)
+        versions[name] = v.version
+
+    sig = latent_signature(versions)
+    for name in ("diffusion", "fusion"):
+        v = registry.register(name, run_id=f"run-{name}", input_flavor=Flavor.GDAS_FINETUNE,
+                              metrics=metrics, latent_signature=sig)
+        registry.transition(name, v.version, Stage.STAGING)
+
+    if desync:
+        # A real #149 scenario: lstm's champion changes (a fresh retrain,
+        # or a registry-reconcile re-stage -- indistinguishable from the
+        # registry's own point of view) with no pin_set/derived retrain
+        # involved at all.
+        new_lstm = registry.register("lstm", run_id="lstm-v2", input_flavor=Flavor.GDAS_FINETUNE,
+                                     metrics=metrics)
+        registry.transition("lstm", new_lstm.version, Stage.STAGING)
+
+
+def test_pending_retrain_jobs_is_empty_for_a_coherent_registry(client):
+    """Not asserted as an unconditionally empty list: pending_retrain_jobs()
+    calls evaluate_all with real wall-clock time, so calendar/nightly
+    triggers unrelated to this test's own registry state can legitimately
+    fire depending on when the suite happens to run (see the sibling fix
+    in test_real_state_monitoring_and_retraining_routes_do_not_500). What
+    this test actually asserts: a coherent Group 1/derived champion set
+    produces no LATENT_DESYNC job."""
+    from anemoi.training.triggers import Reason
+
+    state = _get_real_state(client)
+    _stage_group1_and_derived(state.registry)
+    jobs = state.pending_retrain_jobs()
+    assert not any(j.reason is Reason.LATENT_DESYNC for j in jobs)
+
+
+def test_pending_retrain_jobs_detects_a_real_latent_desync(client):
+    from anemoi.training.triggers import Reason
+
+    state = _get_real_state(client)
+    _stage_group1_and_derived(state.registry, desync=True)
+
+    jobs = state.pending_retrain_jobs()
+    desynced = {j.model: j for j in jobs if j.reason is Reason.LATENT_DESYNC}
+    assert set(desynced) == {"diffusion", "fusion"}
+    assert all("latent_signature" in j.note for j in desynced.values())
+
+
+def test_pending_retrain_jobs_route_serves_a_real_latent_desync(client):
+    """End-to-end through the real HTTP route, not just the RealState
+    method directly -- confirms the new Reason/Trigger enum values
+    (LATENT_DESYNC) round-trip cleanly through RetrainJobOut."""
+    state = _get_real_state(client)
+    _stage_group1_and_derived(state.registry, desync=True)
+
+    r = client.get("/v1/retraining/triggers")
+    assert r.status_code == 200
+    body = r.json()
+    desynced = [j for j in body if j["reason"] == "latent_desync"]
+    assert {j["model"] for j in desynced} == {"diffusion", "fusion"}
+    assert all(j["trigger_tag"] == "latent_desync" for j in desynced)

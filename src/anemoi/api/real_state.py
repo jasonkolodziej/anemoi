@@ -32,8 +32,12 @@ import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from ..training.triggers import RetrainJob
 
 from ..data.availability import LatencyOracle
 from ..data.besttrack import Fix, Track, TrackQuality
@@ -41,7 +45,7 @@ from ..inference.cycle import CycleError, CycleOutput, DeterministicForecast, ru
 from ..inference.scheduler import plan_cycle
 from ..monitoring.drift import DriftError, DriftReport, ReferenceDistribution, detect_feature_drift
 from ..monitoring.skew import SkewMonitor, SkewReport, SkewSample
-from ..tracking.registry import ModelRegistry
+from ..tracking.registry import ALL_MODELS, ModelRegistry
 
 #: How recently a storm's latest real fix must be to count as "active" --
 #: still used for archive storms (HURDAT2 has no live signal to be exact
@@ -607,11 +611,50 @@ class RealState:
             )
         return report
 
-    def pending_retrain_jobs(self) -> list:
-        # Empty, not fabricated: real drift/skew detection (above) has
-        # nothing to trigger on yet, so "no pending triggers" is the
-        # honest answer, not a stand-in for "not implemented."
-        return []
+    def pending_retrain_jobs(self) -> list[RetrainJob]:
+        """Real retraining triggers (§5.5), now genuinely detecting two
+        real signals instead of always returning empty:
+
+        - **Per-model drift** (#148's drift half): `drift_report(model)
+          .alert` for every real model that has contributed to at least
+          one real cycle this process's lifetime.
+        - **Champion/latent desync** (§5.7, GitHub #149):
+          `ModelRegistry.desynced_derived_models` -- real, live drift
+          between fusion/diffusion's recorded `latent_signature` and the
+          *current* Group 1 champion set, the exact "recovery path is
+          structurally weak" gap #149 documented: nothing previously
+          noticed or surfaced a desync caused by `registry-reconcile`
+          re-staging an already-registered version (as opposed to a fresh
+          retrain, which the existing CASCADE path already covers).
+
+        Real skew is deliberately **not** mapped to a specific model here
+        -- the same restraint `cli.cmd_retrain_check`'s own docstring
+        already explains: a real skew alert is system-wide (one paired
+        ERA5T-vs-operational comparison of the whole deterministic stack),
+        not per-model, and nothing in this codebase's scope says which
+        model(s) it should retrigger. A real skew alert is still visible
+        directly via `skew_report()`/`GET /v1/monitoring/skew`; guessing a
+        mapping here would be exactly the kind of fabrication this
+        module's monitoring section already refuses to do elsewhere.
+
+        This surfaces a real desync -- it does not auto-dispatch a
+        retrain. `cli.cmd_retrain_check` only ever auto-dispatches
+        calendar/data-volume triggers today (its own docstring: "a real
+        dispatcher for [drift/skew/cascade] is separate, scoped future
+        work"); `LATENT_DESYNC` gets the identical treatment for
+        consistency, not a lesser one -- auto-launching unattended GPU
+        retraining specifically for this trigger remains real, separate
+        future work (Decision Log).
+        """
+        from ..training.triggers import SeasonState, evaluate_all
+
+        drifted = tuple(m for m in ALL_MODELS if self.drift_report(m).alert)
+        desynced = self.registry.desynced_derived_models()
+        active_storms = tuple(s.storm_id for s in self.list_storms() if s.active)
+        return evaluate_all(
+            datetime.now(UTC), SeasonState(active_storms=active_storms),
+            drifted_models=drifted, desynced_models=desynced,
+        )
 
 
 _REAL_STATE: RealState | None = None

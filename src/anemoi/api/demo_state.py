@@ -245,9 +245,18 @@ class DemoState:
     def pending_retrain_jobs(self):
         drifted = tuple(m for m in GROUP1_MODELS + DERIVED_MODELS if self.drift_report(m).alert)
         skewed = (("gnn",) if self.skew_report().alert else ())
+        # Real method (tracking.registry.ModelRegistry.desynced_derived_models,
+        # §5.7, GitHub #149), not synthetic -- always empty here by
+        # construction (`_seed_registry` registers fusion/diffusion with
+        # exactly the signature their seeded Group 1 versions compute to),
+        # wired for the same "same public surface as RealState" reason
+        # every other method on this class already is, not because a demo
+        # desync is a real scenario.
+        desynced = self.registry.desynced_derived_models()
         state = SeasonState(active_storms=tuple(self.storms))
         return evaluate_all(
-            datetime.now(UTC), state, drifted_models=drifted, skewed_models=skewed
+            datetime.now(UTC), state,
+            drifted_models=drifted, skewed_models=skewed, desynced_models=desynced,
         )
 
 
