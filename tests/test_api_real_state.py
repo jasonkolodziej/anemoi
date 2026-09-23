@@ -104,7 +104,7 @@ def test_real_state_monitoring_and_retraining_routes_do_not_500(client):
     body = r.json()
     assert body["n"] == 0
     assert body["alert"] is False
-    assert "not yet available" in body["reasons"][0]
+    assert "no real ERA5T-vs-operational skew samples yet" in body["reasons"][0]
 
     r = client.get("/v1/retraining/triggers")
     assert r.status_code == 200
@@ -467,12 +467,14 @@ def _make_deterministic_forecast(env_features=None, contributors=None):
 
 class _FakeCycleOutput:
     """A minimal stand-in for CycleOutput -- `_record_drift_sample` only
-    ever reads `.deterministic.env_features`/`.deterministic.contributors`
-    (see its own implementation), so a full CyclePlan/ForecastProducts
-    isn't needed to exercise it honestly."""
+    ever reads `.deterministic.env_features`/`.deterministic.contributors`,
+    and `_record_skew_sample` additionally reads `.label` (see each's own
+    implementation), so a full CyclePlan/ForecastProducts isn't needed to
+    exercise either one honestly."""
 
-    def __init__(self, deterministic):
+    def __init__(self, deterministic, label="20260901_00Z"):
         self.deterministic = deterministic
+        self.label = label
 
 
 def test_drift_report_is_honest_zero_when_no_reference_has_been_fit(client):
@@ -565,3 +567,83 @@ def test_env_features_none_is_not_recorded_as_a_sample(client):
     # The model still counts as having contributed, even without a real
     # gridded field this specific cycle.
     assert "lstm" in state._models_ever_contributed
+
+
+# ---- skew (#148, the remaining half) -------------------------------------
+
+
+def _make_storm_state(storm_id="AL012026"):
+    from anemoi.api.real_state import RealStormState
+    from anemoi.data.besttrack import Fix, Track, TrackQuality
+
+    fixes = tuple(
+        Fix(
+            storm_id=storm_id, valid_time=datetime(2026, 9, 1, tzinfo=UTC), lat=20.0, lon=-60.0,
+            max_wind_kt=50.0, min_pressure_mb=990.0, quality=TrackQuality.FINAL,
+        )
+        for _ in (0,)
+    )
+    return RealStormState(storm_id, Track(storm_id=storm_id, fixes=fixes, name="Test"))
+
+
+def test_skew_report_is_honest_zero_with_no_samples(client):
+    state = _get_real_state(client)
+    report = state.skew_report()
+    assert report.n == 0
+    assert report.alert is False
+    assert "no real ERA5T-vs-operational skew samples yet" in report.reasons[0]
+
+
+def test_record_skew_sample_is_a_noop_for_the_synthetic_fallback(client):
+    """No real model contributed -- nothing real to persist, the same
+    signal `_record_drift_sample`'s sibling test already relies on."""
+    state = _get_real_state(client)
+    storm = _make_storm_state()
+    forecast = _make_deterministic_forecast(contributors={})
+    state._record_skew_sample(storm, storm.track.fixes[0], _FakeCycleOutput(forecast))
+    assert not (Path(state.registry.root) / "skew" / "operational").exists()
+
+
+def test_record_skew_sample_persists_locally_without_a_configured_checkpoint_store(client):
+    """This test's env has no real S3_ARTIFACT_* credentials (see the
+    `client` fixture) -- `_record_skew_sample` must still write the local
+    replay-inputs file (best-effort durable push aside), the same
+    local-write-always-succeeds contract `monitoring.skew_audit
+    .record_operational_cycle`'s own docstring establishes."""
+    state = _get_real_state(client)
+    storm = _make_storm_state()
+    fix = storm.track.fixes[0]
+    forecast = _make_deterministic_forecast(contributors={"lstm": 1.0})
+    state._record_skew_sample(storm, fix, _FakeCycleOutput(forecast))
+
+    local_path = Path(state.registry.root) / "skew" / "operational" / storm.storm_id / "20260901_00Z.json"
+    assert local_path.exists()
+
+
+def test_skew_report_alerts_on_real_skew_once_enough_samples_are_persisted(client):
+    from datetime import timedelta
+
+    from anemoi.monitoring.skew import SkewSample
+    from anemoi.monitoring.skew_audit import save_skew_samples
+
+    state = _get_real_state(client)
+    # A synoptic (00/06/12/18Z) anchor close to real wall-clock "now" --
+    # `SkewSample.__post_init__` requires an exact synoptic time, and
+    # `skew_report` itself windows against the real `datetime.now(UTC)`.
+    anchor = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    anchor = anchor.replace(hour=(anchor.hour // 6) * 6)
+    samples = [
+        SkewSample(
+            target_time=anchor - timedelta(hours=6 * (i + 1)), lead_hours=48,
+            operational_lat=20.0, operational_lon=-60.0, operational_wind_kt=90.0,
+            era5t_lat=22.0, era5t_lon=-63.0, era5t_wind_kt=60.0,  # large, real deltas
+        )
+        for i in range(10)
+    ]
+    save_skew_samples(samples, Path(state.registry.root) / "skew_samples.json")
+    state._skew_samples = None  # force a reload from the file just written
+
+    report = state.skew_report()
+    assert report.n == 10
+    assert report.alert is True
+    assert report.mean_abs_intensity_delta_kt == pytest.approx(30.0)

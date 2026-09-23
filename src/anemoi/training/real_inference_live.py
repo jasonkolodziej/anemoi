@@ -23,6 +23,7 @@ treat ``None`` as "this model can't contribute to this cycle," the same
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -33,6 +34,15 @@ if TYPE_CHECKING:
     from ..data.besttrack import Fix, Track
     from ..data.features import GriddedFields
     from .real_run_gnn import MeshTopology
+
+#: A `(track, current, cache_dir) -> GriddedFields | None` field source --
+#: every `build_live_*_x` builder below takes one as an optional override
+#: (default `_current_fields`, the real live/operational GDAS path).
+#: `monitoring.skew_audit` is the one real caller that passes a different
+#: one (`era5t_fields`, below): the skew audit's entire point (§4.6.3) is
+#: re-running the exact same live-inference path on an ERA5T-sourced field
+#: instead of a GDAS one, not a separate parallel implementation of it.
+FieldsFetcher = Callable[["Track", "Fix", "Path | str"], "GriddedFields | None"]
 
 
 def gdas_likely_unpublished(valid_time: datetime, now: datetime | None = None) -> bool:
@@ -105,6 +115,30 @@ def _current_fields(track: Track, current: Fix, cache_dir: Path | str) -> Gridde
     return fields
 
 
+def era5t_fields(track: Track, current: Fix, cache_dir: Path | str) -> GriddedFields | None:
+    """The current fix's `GriddedFields`, sourced from ERA5T instead of
+    GDAS -- same `FieldsFetcher` signature as `_current_fields` (``cache_dir``
+    is accepted but unused; the skew audit runs infrequently enough offline
+    that per-sample Zarr reads need no on-disk cache the way the hot live
+    GDAS path does) so it's a drop-in override for any `build_live_*_x`
+    builder. `None` under the same "this model can't contribute" contract
+    every other fetch here already has: too old for ERA5T's own real
+    availability window is the caller's job to check (`monitoring.skew
+    .audit_due`) before ever calling this, not this function's; a `None`
+    here means the real Zarr read itself failed (network, or ERA5T's
+    ``valid_time_stop_era5t`` hasn't actually reached this hour yet despite
+    `audit_due` saying it should have -- real-world latency has variance
+    around the typical figure, same reasoning as `gdas_likely_unpublished`'s
+    own docstring)."""
+    from ..data.real_gridded import fetch_era5t_one
+
+    del cache_dir
+    try:
+        return fetch_era5t_one(current.valid_time, current.lat, current.lon)
+    except Exception:  # noqa: BLE001 - no real field available must degrade, never crash
+        return None
+
+
 def build_live_lstm_x(track: Track, current: Fix) -> np.ndarray | None:
     """LSTM's real input: the storm-relative sequence over its most
     recent real fixes, no gridded fields needed at all."""
@@ -117,10 +151,13 @@ def build_live_lstm_x(track: Track, current: Fix) -> np.ndarray | None:
     return storm_relative_sequence(window)
 
 
-def build_live_cnn_x(track: Track, current: Fix, cache_dir: Path | str) -> np.ndarray | None:
+def build_live_cnn_x(
+    track: Track, current: Fix, cache_dir: Path | str,
+    *, fields_fetcher: FieldsFetcher | None = None,
+) -> np.ndarray | None:
     from .real_run_cnn import _sanitized_channel_stack
 
-    fields = _current_fields(track, current, cache_dir)
+    fields = (fields_fetcher or _current_fields)(track, current, cache_dir)
     if fields is None:
         return None
     return _sanitized_channel_stack(fields)
@@ -128,10 +165,11 @@ def build_live_cnn_x(track: Track, current: Fix, cache_dir: Path | str) -> np.nd
 
 def build_live_transformer_x(
     track: Track, current: Fix, cache_dir: Path | str,
+    *, fields_fetcher: FieldsFetcher | None = None,
 ) -> np.ndarray | None:
     from .real_run_transformer import GRID_SIZE, _sanitized_channel_stack
 
-    fields = _current_fields(track, current, cache_dir)
+    fields = (fields_fetcher or _current_fields)(track, current, cache_dir)
     if fields is None:
         return None
     stack = _sanitized_channel_stack(fields)
@@ -143,6 +181,7 @@ def build_live_transformer_x(
 
 def build_live_pinn_x(
     track: Track, current: Fix, candidate_model, cache_dir: Path | str,
+    *, fields_fetcher: FieldsFetcher | None = None,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """PINN's real input: the environment-feature vector plus its
     candidate-generator LSTM's own forecast, converted to absolute (lat,
@@ -170,7 +209,7 @@ def build_live_pinn_x(
     from .capacity_ablation import SEQUENCE_LENGTH
     from .real_run import displacement_to_latlon
 
-    fields = _current_fields(track, current, cache_dir)
+    fields = (fields_fetcher or _current_fields)(track, current, cache_dir)
     if fields is None:
         return None
     try:
@@ -199,6 +238,7 @@ def build_live_pinn_x(
 
 def build_live_gnn_x(
     track: Track, current: Fix, cache_dir: Path | str, stride: int | None = None,
+    *, fields_fetcher: FieldsFetcher | None = None,
 ) -> tuple[np.ndarray, MeshTopology] | None:
     """GNN needs its mesh topology alongside the node features (`models
     .gnn.build_gnn`'s ``forward`` takes ``edge_index``/``edge_attr``
@@ -209,7 +249,7 @@ def build_live_gnn_x(
     """
     from .real_run_gnn import GNN_STRIDE, _node_features, build_mesh_topology
 
-    fields = _current_fields(track, current, cache_dir)
+    fields = (fields_fetcher or _current_fields)(track, current, cache_dir)
     if fields is None:
         return None
     topo = build_mesh_topology(fields.shape, stride or GNN_STRIDE)

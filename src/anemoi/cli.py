@@ -830,6 +830,51 @@ def cmd_drift_reference_fit(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_skew_audit(args: argparse.Namespace) -> int:
+    """Real ERA5T-vs-operational skew audit (#148, the skew half).
+
+    Finds every real operational cycle `api.real_state.RealState.run_cycle`
+    has durably recorded (`monitoring.skew_audit.record_operational_cycle`)
+    that's old enough for ERA5T to have caught up with (§4.6.3's 5-day
+    `monitoring.skew.AUDIT_DELAY`) and not yet audited, replays it through
+    the real deterministic stack pointed at ERA5T instead of GDAS, and
+    persists the resulting real `monitoring.skew.SkewSample`s so
+    `RealState.skew_report` has something real to report on.
+
+    Unlike `drift-reference-fit`, durable storage here is required, not
+    optional: the whole point is discovering real operational records a
+    *live API process* wrote, almost certainly on a different machine and
+    quite possibly already cold-started away by the time this runs --
+    there is no local-only equivalent of that discovery.
+
+    Takes no ``--gdas-cache-dir`` (unlike `drift-reference-fit`): the
+    replay is pointed at ERA5T end to end (`real_inference_live
+    .era5t_fields` overrides every gridded-field fetch), so it never reads
+    the operational GDAS cache at all -- ``cache_dir`` is threaded through
+    `build_real_deterministic_fn` only because that's its real shared
+    signature with the live/operational path, and is otherwise unused here.
+    """
+    from .monitoring.skew_audit import audit_run
+    from .tracking.checkpoint_store import CheckpointStore, CheckpointStoreError, S3Config
+    from .tracking.registry import ModelRegistry
+
+    try:
+        store = CheckpointStore(S3Config.from_env())
+    except CheckpointStoreError as exc:
+        print(f"skew-audit needs real S3_ARTIFACT_* durable storage credentials: {exc}")
+        return 1
+
+    registry = ModelRegistry(args.registry_root, checkpoint_store=store)
+    cache_dir = Path(args.registry_root) / "skew_cache"
+    summary = audit_run(registry, store, cache_dir, args.registry_root)
+    print(
+        f"skew-audit: {summary['n_records']} real operational record(s) known, "
+        f"{summary['n_due']} due, {summary['n_audited']} audited this run, "
+        f"{summary['n_samples_added']} real skew sample(s) added"
+    )
+    return 0
+
+
 def cmd_splits(args: argparse.Namespace) -> int:
     tracks = generate_archive(args.start, args.end, seed=args.seed)
     assignment = assign_splits(tracks)
@@ -903,6 +948,16 @@ def main(argv: list[str] | None = None) -> int:
         default=str(Path.home() / ".anemoi" / "registry"),
     )
     p.set_defaults(func=cmd_drift_reference_fit)
+
+    p = sub.add_parser(
+        "skew-audit",
+        help="replay durably-recorded real operational cycles against ERA5T (#148)",
+    )
+    p.add_argument(
+        "--registry-root", dest="registry_root",
+        default=str(Path.home() / ".anemoi" / "registry"),
+    )
+    p.set_defaults(func=cmd_skew_audit)
 
     p = sub.add_parser("ablation", help="run the #9 capacity-vs-sample-size ablation")
     p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")

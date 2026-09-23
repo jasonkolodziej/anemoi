@@ -40,7 +40,7 @@ from ..data.besttrack import Fix, Track, TrackQuality
 from ..inference.cycle import CycleError, CycleOutput, DeterministicForecast, run_cycle
 from ..inference.scheduler import plan_cycle
 from ..monitoring.drift import DriftError, DriftReport, ReferenceDistribution, detect_feature_drift
-from ..monitoring.skew import SkewReport
+from ..monitoring.skew import SkewMonitor, SkewReport, SkewSample
 from ..tracking.registry import ModelRegistry
 
 #: How recently a storm's latest real fix must be to count as "active" --
@@ -61,6 +61,13 @@ _LIVE_STORMS_TTL = timedelta(minutes=30)
 #: training run (hours apart) or a rare manual promotion, so this is
 #: deliberately less aggressive than `_LIVE_STORMS_TTL`.
 _REGISTRY_TTL = timedelta(minutes=15)
+
+#: How long the real skew-sample corpus (#148) stays valid before a
+#: process re-pulls it from durable storage -- new real samples land at
+#: most as often as `anemoi skew-audit` is run (an offline, infrequent
+#: batch job, not a per-cycle thing), so this is deliberately less
+#: aggressive than `_REGISTRY_TTL`.
+_SKEW_SAMPLES_TTL = timedelta(hours=6)
 
 #: Real forecast lead times every real deterministic_fn/ensemble_fn this
 #: module builds shares -- matches models.base.DEFAULT_LEADS.
@@ -207,6 +214,15 @@ class RealState:
         #: mid-process the way registrations/promotions do).
         self._drift_reference: ReferenceDistribution | None = None
         self._drift_reference_load_attempted = False
+
+        #: Real skew-audit state (#148's remaining half). Unlike the drift
+        #: reference (fit rarely, offline, loaded once per process), new
+        #: real `SkewSample`s land continuously as `anemoi skew-audit` runs
+        #: -- likely on a schedule, likely from a different machine -- so
+        #: this is refreshed on a TTL rather than loaded once at cold
+        #: start; see `_get_skew_samples`.
+        self._skew_samples: list[SkewSample] | None = None
+        self._skew_samples_fetched_at: datetime | None = None
 
     @property
     def _checkpoint_store(self):
@@ -382,6 +398,7 @@ class RealState:
         with self._lock:
             storm.cycles[output.label] = output
             self._record_drift_sample(output)
+            self._record_skew_sample(storm, fix, output)
         return output
 
     def _record_drift_sample(self, output: CycleOutput) -> None:
@@ -395,6 +412,26 @@ class RealState:
             if len(self._live_env_features) > self._live_env_features_max:
                 self._live_env_features = self._live_env_features[-self._live_env_features_max:]
         self._models_ever_contributed.update(output.deterministic.contributors)
+
+    def _record_skew_sample(self, storm: RealStormState, fix: Fix, output: CycleOutput) -> None:
+        """Best-effort durable persistence of this cycle's real replay
+        inputs (#148's skew half) -- `monitoring.skew_audit
+        .record_operational_cycle`'s own docstring covers why this must
+        never fail the cycle it's attached to, and why it no-ops (not an
+        exception) for a cycle no real model contributed to."""
+        from ..monitoring.skew_audit import record_operational_cycle
+
+        try:
+            store = self._checkpoint_store
+        except Exception:  # noqa: BLE001 - see _get_drift_reference: local-only must still work
+            store = None
+        try:
+            record_operational_cycle(
+                storm.storm_id, storm.track, fix, output,
+                local_root=self.registry.root, checkpoint_store=store,
+            )
+        except Exception:  # noqa: BLE001 - best-effort, never fail a cycle over this
+            pass
 
     def get_cycle(self, storm_id: str, cycle: str) -> CycleOutput:
         storm = self.get_storm(storm_id)
@@ -430,17 +467,21 @@ class RealState:
     # fewer than `detect_feature_drift`'s own minimum sample count has
     # been collected.
     #
-    # Skew remains unimplemented -- needs a real paired ERA5T-vs-
-    # operational dataset built from re-running the deterministic stack
-    # against ERA5T inputs for a cycle old enough to audit, not just an
-    # ERA5T fetch (which `data.real_gridded.open_era5` already provides;
-    # confirmed live 2026-09-22 that ARCO-ERA5's same store carries ERA5T
-    # up to `valid_time_stop_era5t`, ~6 days behind real time). A real,
-    # separate piece of future work.
-    #
-    # So skew's report stays honest zero/empty, not synthetic and not a
-    # crash -- `n=0` reads unambiguously as "nothing has been compared
-    # yet," and its `reasons` says so explicitly.
+    # Skew is now real too (#148, 2026-09-22): `_record_skew_sample`
+    # (called from `run_cycle`, mirroring `_record_drift_sample`) durably
+    # persists each real cycle's replay inputs via `monitoring.skew_audit
+    # .record_operational_cycle`; the offline `anemoi skew-audit` CLI
+    # (`monitoring.skew_audit.audit_run`) finds every such record old
+    # enough for ERA5T to have caught up with and replays it through the
+    # same `training.real_inference_cycle.build_real_deterministic_fn`
+    # path, just pointed at ERA5T instead of GDAS
+    # (`training.real_inference_live.era5t_fields`); `skew_report` below
+    # loads whatever real `SkewSample`s that's produced so far and feeds
+    # them to the real, unchanged `monitoring.skew.SkewMonitor`. Still
+    # degrades honestly, not by fabricating: an empty corpus, or fewer
+    # than `SkewMonitor`'s own 8-sample minimum in the rolling 14-day
+    # window, reads as `n=0` with an explicit `reasons` entry, not a
+    # crash and not a synthetic estimate.
 
     def _get_drift_reference(self) -> ReferenceDistribution | None:
         """Lazy, at-most-once-per-process load of the real Stage B
@@ -485,18 +526,61 @@ class RealState:
             # empty report with the real count, not a fabricated one.
             return DriftReport(features=(), n_live=live.shape[0])
 
+    def _get_skew_samples(self) -> list[SkewSample]:
+        """Real skew corpus (#148), lazily loaded and TTL-refreshed from
+        durable storage -- see `_SKEW_SAMPLES_TTL`'s own docstring for why
+        this differs from the drift reference's load-once-per-process
+        pattern."""
+        now = datetime.now(UTC)
+        if (
+            self._skew_samples is not None
+            and self._skew_samples_fetched_at is not None
+            and now - self._skew_samples_fetched_at < _SKEW_SAMPLES_TTL
+        ):
+            return self._skew_samples
+        from ..monitoring.skew_audit import load_skew_samples
+
+        try:
+            store = self._checkpoint_store
+        except Exception:  # noqa: BLE001 - see _get_drift_reference: local-only must still work
+            store = None
+        try:
+            path = Path(self.registry.root) / "skew_samples.json"
+            self._skew_samples = load_skew_samples(path, store)
+        except Exception:  # noqa: BLE001 - a missing/broken corpus must never crash a cycle
+            self._skew_samples = self._skew_samples or []
+        self._skew_samples_fetched_at = now
+        return self._skew_samples
+
     def skew_report(self, *, lead_hours: int = 48) -> SkewReport:
         now = datetime.now(UTC)
-        return SkewReport(
-            lead_hours=lead_hours, n=0, window_start=now, window_end=now,
-            mean_track_delta_nm=0.0, mean_abs_intensity_delta_kt=0.0, intensity_bias_kt=0.0,
-            alert=False,
-            reasons=(
-                "real ERA5T-vs-operational skew audit not yet available for "
-                "real-ingested storms (needs a real paired ERA5T dataset, not "
-                "yet built)",
-            ),
-        )
+        samples = self._get_skew_samples()
+        if not samples:
+            return SkewReport(
+                lead_hours=lead_hours, n=0, window_start=now, window_end=now,
+                mean_track_delta_nm=0.0, mean_abs_intensity_delta_kt=0.0, intensity_bias_kt=0.0,
+                alert=False,
+                reasons=(
+                    "no real ERA5T-vs-operational skew samples yet (anemoi "
+                    "skew-audit hasn't found any real operational cycles old "
+                    "enough to audit)",
+                ),
+            )
+        monitor = SkewMonitor()
+        for sample in samples:
+            monitor.record(sample)
+        report = monitor.report(now, lead_hours=lead_hours)
+        if report is None:
+            return SkewReport(
+                lead_hours=lead_hours, n=0, window_start=now, window_end=now,
+                mean_track_delta_nm=0.0, mean_abs_intensity_delta_kt=0.0, intensity_bias_kt=0.0,
+                alert=False,
+                reasons=(
+                    f"fewer than {monitor.min_samples} real skew samples in the "
+                    f"rolling {monitor.window.days}-day window yet",
+                ),
+            )
+        return report
 
     def pending_retrain_jobs(self) -> list:
         # Empty, not fabricated: real drift/skew detection (above) has
