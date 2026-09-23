@@ -11,12 +11,33 @@
 
   interface Props extends Omit<PrimitiveSvgAttributes, "width" | "height"> {
     size?: number;
-    spinning?: boolean;
+    spinning?:
+      | boolean
+      | "spin"
+      | "teeter"
+      | "teeter-spin"
+      | "inference-spin"
+      | "storm-marker-pulse";
   }
 
-  let { size = 28, spinning = false, class: className, ...restProps }: Props = $props();
+  let {
+    size = 28,
+    spinning = false,
+    class: className,
+    ...restProps
+  }: Props = $props();
 
   const height = $derived((size * NATIVE_HEIGHT) / NATIVE_WIDTH);
+
+  const motionClass = $derived.by(() => {
+    if (spinning === false) return "";
+    if (spinning === "teeter-spin") return "hurricane-motion-teeter-spin-base";
+    if (spinning === "teeter") return "hurricane-motion-teeter";
+    if (spinning === "spin") return "hurricane-motion-spin";
+    if (spinning === "storm-marker-pulse")
+      return "hurricane-motion-storm-marker-pulse";
+    return "hurricane-motion-inference-spin";
+  });
 </script>
 
 <svg
@@ -26,7 +47,7 @@
   role="img"
   aria-label="Anemoi"
   fill="currentColor"
-  class={cn(spinning ? 'motion-safe:animate-[spin_40s_linear_infinite]' : '', className)}
+  class={cn(motionClass, className)}
   {...restProps}
   id="hurricane-icon"
 >
