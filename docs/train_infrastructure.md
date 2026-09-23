@@ -38,7 +38,7 @@ can use.
 | Setting | Value |
 |---|---|
 | Name | `anemoi-train-1` |
-| Zone | `us-central1-b` (moved from `us-central1-a` 2026-09-17 -- see "GPU capacity" below; co-location with ARCO-ERA5 is a **region**-level benefit, so any `us-central1` zone is equally close) |
+| Zone | `us-central1-c` (moved `us-central1-a` → `-b` 2026-09-17, then `-b` → `-c` 2026-09-23, both for L4 stockouts -- see "GPU capacity" below; co-location with ARCO-ERA5 is a **region**-level benefit, so any `us-central1` zone is equally close) |
 | Machine type | `g2-standard-4` (4 vCPU / 16GB, pairs with 1× L4) |
 | GPU | 1× NVIDIA L4 |
 | Image | `pytorch-2-9-cu129-ubuntu-2204-nvidia-580` (project `deeplearning-platform-release`) -- PyTorch + CUDA preinstalled, no manual driver setup |
@@ -51,7 +51,7 @@ Create with:
 ```bash
 gcloud compute instances create anemoi-train-1 \
   --project=anemoi-training \
-  --zone=us-central1-b \
+  --zone=us-central1-c \
   --machine-type=g2-standard-4 \
   --accelerator=type=nvidia-l4,count=1 \
   --image-family=pytorch-2-9-cu129-ubuntu-2204-nvidia-580 \
@@ -117,6 +117,18 @@ done
 gcloud compute disks delete anemoi-train-1 --zone=<losing-zone> --quiet
 ```
 
+**Second real migration, 2026-09-23 (`-b` → `-c`).** Same procedure,
+two real notes worth keeping: `gcloud compute instances move` no longer
+exists (Google removed it -- "This command has been removed"), so the
+snapshot/disk-copy/race above is now the *only* path, not a fallback; and
+the flapping happened again within seconds -- the stockout error named
+`us-central1-a` as available, `-a` then stocked out on the actual create,
+and `-c` succeeded. Instance names are unique per *zone*, so the new VM was
+created and verified (GPU, repo, `.env`, both caches) *before* the old,
+stopped `-b` instance was deleted -- no window where neither existed.
+Snapshots `anemoi-train-1-migrate-20260916` and `-20260923` are kept as
+rollback points.
+
 Deleting a *running instance* is treated as an irreversible action by this
 project's usual tooling guardrails (even with `--keep-disks=all` preserving
 the data) and needs a human to run that specific step directly -- disk
@@ -151,7 +163,7 @@ Copy `.env` over from a local machine rather than retyping R2 credentials
 (goes through the encrypted SSH tunnel, never printed):
 
 ```bash
-gcloud compute scp .env anemoi-train-1:~/anemoi/.env --project=anemoi-training --zone=us-central1-b
+gcloud compute scp .env anemoi-train-1:~/anemoi/.env --project=anemoi-training --zone=us-central1-c
 ```
 
 Verified on the real VM (2026-09-16): `uv run pytest` -- 405 passed, 4
@@ -414,6 +426,17 @@ slurm/run_local.sh slurm/train_schedule.sbatch sequential
 tmux attach -t train-schedule-<id>
 ```
 
+**Re-syncing a desynced diffusion/fusion (§5.7, GitHub #149).** When
+`GET /v1/retraining/triggers` reports `latent_desync`, don't run the full
+schedule -- it retrains Group 1 too, and any new Group 1 version that
+doesn't beat its incumbent leaves the derived models trained against a
+non-champion set, desynced again. Retrain only the derived models, against
+the current champions:
+
+```bash
+DERIVED_FROM_CHAMPIONS=1 slurm/run_local.sh slurm/train_schedule.sbatch sequential
+```
+
 `run_schedule`'s own dependency semantics (§10.1: one model's failure only
 skips *its* dependents) still apply -- if a Group 1 model's real training
 fails (e.g. an empty val split, see above), the `latents` task depending
@@ -421,7 +444,7 @@ on it is skipped, and `diffusion`/`fusion` depending on `latents` are
 skipped in turn, while every model that *can* train still does.
 
 ```text
-GCP VM anemoi-train-1 (1x NVIDIA L4, ~23GB VRAM, us-central1-b)
+GCP VM anemoi-train-1 (1x NVIDIA L4, ~23GB VRAM, us-central1-c)
 tmux session: train-schedule-<id>
   └─ uv run anemoi train-schedule --streaming --num-workers N   (one process, one GPU)
         │
