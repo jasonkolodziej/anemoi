@@ -900,7 +900,7 @@ def cmd_spread_backtest(args: argparse.Namespace) -> int:
     try:
         report = run_spread_backtest(
             parse_hurdat2_file(args.hurdat2), registry, store, args.gdas_cache_dir,
-            n_members=args.members, seed=args.seed,
+            n_members=args.members, seed=args.seed, diffusion_version=args.diffusion_version,
         )
     except SpreadBacktestError as exc:
         print(f"spread-backtest: {exc}")
@@ -996,6 +996,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--seed", type=int, default=20260806,
                    help="must match training's seed to reproduce its val windows")
     p.add_argument("--out", default=None, help="also write the full report as JSON")
+    p.add_argument(
+        "--diffusion-version", dest="diffusion_version", type=int, default=None,
+        help="measure this registered diffusion version instead of the current champion "
+             "-- e.g. a real candidate not yet staged (#166)",
+    )
     p.add_argument(
         "--registry-root", dest="registry_root",
         default=str(Path.home() / ".anemoi" / "registry"),

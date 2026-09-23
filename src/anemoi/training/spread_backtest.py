@@ -190,13 +190,24 @@ def run_spread_backtest(
     seed: int = 20260806,
     sample_seed: int = 0,
     min_cases: int = 10,
+    diffusion_version: int | None = None,
     device=None,
 ) -> SpreadBacktestReport:
-    """Run the real backtest end to end. See the module docstring."""
+    """Run the real backtest end to end. See the module docstring.
+
+    ``diffusion_version``, when given, measures that specific registered
+    version instead of the current champion -- a real candidate not yet
+    staged, so it can be measured against real calibration *before* a
+    promotion decision, the same "measure before promoting" reasoning
+    `evaluate_promotion` already applies to the point-verification metric
+    (which doesn't see calibration at all -- a higher-capacity-trained
+    candidate can look better on `track_error_48h_nm` while being *more*
+    underdispersed, or vice versa, exactly the real case #166 found).
+    """
     import torch
 
     from ..models.base import DEFAULT_LEADS
-    from ..tracking.registry import GROUP1_MODELS, latent_signature
+    from ..tracking.registry import GROUP1_MODELS, RegistryError, latent_signature
     from .real_inference import load_run_artifacts, load_standardization_stats, load_trained_model
     from .real_latents import CONTEXT_FEATURE_NAMES, extract_joint_latents
     from .real_run import displacement_to_latlon
@@ -207,7 +218,13 @@ def run_spread_backtest(
         raise SpreadBacktestError(f"no staging/production champion for: {missing}")
     group1_versions = {m: v.version for m, v in champions.items()}
 
-    diffusion = registry.champion("diffusion")
+    if diffusion_version is not None:
+        try:
+            diffusion = registry.get("diffusion", diffusion_version)
+        except RegistryError as exc:
+            raise SpreadBacktestError(str(exc)) from exc
+    else:
+        diffusion = registry.champion("diffusion")
     if diffusion is None:
         raise SpreadBacktestError("no staging/production diffusion version")
     expected = latent_signature(group1_versions)
