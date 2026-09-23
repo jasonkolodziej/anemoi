@@ -740,6 +740,25 @@ def test_cmd_registry_pull_hydrates_from_durable_storage(tmp_path, monkeypatch, 
     assert (tmp_path / "registry" / "registry.json").exists()
 
 
+def test_cmd_registry_pull_reports_missing_credentials_cleanly(tmp_path, monkeypatch, capsys):
+    """Real gap found running this as a Cloud Run job (#22 migration):
+    unset S3_ARTIFACT_* env vars raised CheckpointStoreError uncaught, a
+    Python traceback in the job's stderr logs rather than a clear
+    one-line config error -- the same shape `cmd_skew_audit` already
+    handles for the identical failure mode."""
+    for env in (
+        "S3_ARTIFACT_API_ENDPOINT", "S3_ARTIFACT_BUCKET",
+        "S3_ARTIFACT_ACCESS_KEYID", "S3_ARTIFACT_SECRET_ACCESS_KEY",
+    ):
+        monkeypatch.delenv(env, raising=False)
+
+    args = argparse.Namespace(registry_root=str(tmp_path / "registry"))
+    assert cli.cmd_registry_pull(args) == 1
+
+    out = capsys.readouterr().out
+    assert "registry-pull needs real S3_ARTIFACT_* durable storage credentials" in out
+
+
 # --- cmd_drift_reference_fit -------------------------------------------------
 
 

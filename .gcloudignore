@@ -1,0 +1,14 @@
+# What `gcloud builds submit` uploads: only the files
+# docker/cloud-run-training/Dockerfile is built from. Without this, gcloud
+# falls back to the root .gitignore alone and uploads every nested
+# node_modules (~55k files).
+/*
+!/pyproject.toml
+!/uv.lock
+!/README.md
+!/LICENSE
+!/src/
+!/docker/
+/docker/*
+!/docker/cloud-run-training/
+**/__pycache__/

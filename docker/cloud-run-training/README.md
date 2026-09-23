@@ -9,7 +9,9 @@ It runs training directly through the CLI (`anemoi train-schedule`) and does not
 ## What is in this folder
 
 - `Dockerfile`: builds a training image with `torch`, `gridded`, `storage`, and `tracking` extras.
-- `entrypoint.sh`: translates environment variables into `anemoi train-schedule` CLI arguments.
+- `entrypoint.sh`: translates environment variables into `anemoi train-schedule` CLI arguments, or runs any other `anemoi` subcommand passed as job arguments (see "One-off commands").
+- `cloudbuild.yaml`: builds the image with Cloud Build and pushes it to Artifact Registry.
+- `workflows.train-schedule.yaml`: runs the per-model jobs in order (see "Workflow orchestration").
 
 ## Why Cloud Run Job (not service)
 
@@ -17,7 +19,7 @@ Training is batch work that runs to completion and exits. Cloud Run Jobs are the
 
 ## Important runtime constraint
 
-GPU-backed Cloud Run Job tasks currently have a maximum task timeout of 1 hour.
+GPU-backed Cloud Run Job tasks have a maximum task timeout of 1 hour (CPU-only tasks: up to 168 hours).
 If your real run exceeds 1 hour, use one of these patterns:
 
 1. Run CPU-only jobs with longer timeout.
@@ -26,26 +28,49 @@ If your real run exceeds 1 hour, use one of these patterns:
 ## Prerequisites
 
 1. A Google Cloud project with billing enabled.
-2. Cloud Run API enabled.
-3. Artifact Registry repository for container images.
-4. Secrets configured for checkpoint/object storage credentials:
+2. APIs enabled: Cloud Run, Artifact Registry, Cloud Build, Secret Manager, and (for orchestration) Workflows:
+
+   ```bash
+   gcloud services enable run.googleapis.com artifactregistry.googleapis.com \
+     cloudbuild.googleapis.com secretmanager.googleapis.com workflows.googleapis.com
+   ```
+
+3. An Artifact Registry Docker repository for the image (`gcloud artifacts repositories create anemoi --repository-format docker --location us-central1`).
+4. Secrets in Secret Manager for checkpoint/object storage credentials:
    - `S3_ARTIFACT_API_ENDPOINT`
    - `S3_ARTIFACT_BUCKET`
    - `S3_ARTIFACT_ACCESS_KEYID`
    - `S3_ARTIFACT_SECRET_ACCESS_KEY`
-5. Optional but recommended: a Cloud Storage bucket mounted at `/cache` for reusable cache and registry state between runs.
+5. Optional, for MLflow tracking parity with the VM: `MLFLOW_TRACKING_URI` as an env var, plus `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` as secrets (the MLflow server sits behind Cloudflare Access). Without them tracking degrades to the local JSON store; the registry itself is still mirrored to R2.
+6. The job's service account (the default compute service account unless you set `--service-account`) needs `roles/secretmanager.secretAccessor` on those secrets and `roles/storage.objectUser` on the cache bucket.
+7. Optional but recommended: a Cloud Storage bucket mounted at `/cache` for the ERA5/GDAS caches between runs.
+8. For "Workflow orchestration" below: a dedicated service account for the workflow itself, since the default compute service account's `roles/editor` does **not** include `run.jobs.run` (confirmed live -- the workflow failed with `IAM permission denied` under it):
+
+   ```bash
+   gcloud iam service-accounts create anemoi-workflows \
+     --display-name "Anemoi training orchestrator (Workflows)"
+   gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+     --member serviceAccount:anemoi-workflows@${PROJECT_ID}.iam.gserviceaccount.com \
+     --role roles/run.invoker
+   gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+     --member serviceAccount:anemoi-workflows@${PROJECT_ID}.iam.gserviceaccount.com \
+     --role roles/run.viewer
+   ```
 
 ## Build and push image
 
-Run from repository root:
+Run from repository root. `gcloud builds submit --tag` alone won't work here: it only builds a Dockerfile at the root of the uploaded source, and this one lives in `docker/cloud-run-training/`.
 
 ```bash
 gcloud builds submit \
-  --tag us-central1-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/anemoi-train:latest \
+  --config docker/cloud-run-training/cloudbuild.yaml \
+  --substitutions _IMAGE=us-central1-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/anemoi-train,_TAG=$(git rev-parse --short=12 HEAD) \
   .
 ```
 
 ## Build and push image to GHCR
+
+Cloud Run can pull GHCR images directly only if the package is **public**. GitHub creates packages as private by default, and a private one needs an [Artifact Registry remote repository](https://cloud.google.com/artifact-registry/docs/repositories/remote-repo) holding GitHub credentials. The Artifact Registry build above avoids both.
 
 Use repository-root context so `COPY pyproject.toml README.md LICENSE ./` resolves correctly.
 
@@ -91,9 +116,37 @@ If `docker login ghcr.io` returns HTTP 403:
 4. Re-run login from a shell where `GHCR_PAT` is actually set (`echo ${GHCR_PAT}` should be non-empty).
 5. If SSO is enforced in your org, authorize the PAT for that org.
 
+### Troubleshooting Build
+
+> [!TIP]
+> When error is related to host storage exhaustion, you likely need to free local image/layer storage once.
+
+**Docker backend:**
+
+```bash
+docker system df
+docker image prune -a -f
+docker container prune -f
+docker volume prune -f
+docker builder prune -a -f
+docker system prune -a -f
+```
+
+**Podman backend:**
+
+```bash
+podman system df
+podman image prune -a -f
+podman container prune -f
+podman volume prune -f
+podman system prune -a -f
+```
+
 ## Create a Cloud Run Job (CPU baseline)
 
 This profile avoids the 1-hour GPU task cap and is the easiest migration path.
+
+This is the real job run in `anemoi-training` (2026-09-23): a CPU-only job with the cache bucket mounted at `/cache` and the full secret set, including MLflow (item 5 above) -- omit the last three `--set-secrets` entries if you skipped MLflow.
 
 ```bash
 gcloud run jobs create anemoi-train-schedule \
@@ -105,11 +158,15 @@ gcloud run jobs create anemoi-train-schedule \
   --task-timeout 86400s \
   --cpu 8 \
   --memory 32Gi \
-  --set-env-vars MODE=sequential,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5,GDAS_CACHE_DIR=/cache/gdas,REGISTRY_ROOT=/cache/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
-  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest
+  --add-volume name=cache,type=cloud-storage,bucket=${CACHE_BUCKET} \
+  --add-volume-mount volume=cache,mount-path=/cache \
+  --set-env-vars MODE=sequential,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
+  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest,CF_ACCESS_CLIENT_ID=CF_ACCESS_CLIENT_ID:latest,CF_ACCESS_CLIENT_SECRET=CF_ACCESS_CLIENT_SECRET:latest,MLFLOW_TRACKING_URI=MLFLOW_TRACKING_URI:latest
 ```
 
-If you want persistent local cache paths between runs, mount Cloud Storage to `/cache`:
+`REGISTRY_ROOT` can stay on local disk (`/tmp`, not `/cache`): `entrypoint.sh` runs `anemoi registry-pull` first, and the registry is mirrored to R2, so it doesn't need the cache bucket -- and a `/cache`-mounted GCS FUSE volume is slower for the many small registry writes than local disk.
+
+To add the cache mount to a job created without it:
 
 ```bash
 gcloud run jobs update anemoi-train-schedule \
@@ -124,10 +181,12 @@ To reuse the data from an existing VM boot snapshot, copy it into the Cloud Stor
 
 ### 1) Create a disk from your snapshot
 
+The training VM's disk is snapshotted on each zone migration (`gcloud compute snapshots list`; the latest is `anemoi-train-1-migrate-20260923`). Snapshots are global, so any zone works; the helper VM needs no GPU.
+
 ```bash
 gcloud compute disks create anemoi-train-from-snap \
   --project ${PROJECT_ID} \
-  --zone us-central1-b \
+  --zone us-central1-c \
   --source-snapshot ${SNAPSHOT_NAME} \
   --type pd-balanced \
   --size 100GB
@@ -138,7 +197,7 @@ gcloud compute disks create anemoi-train-from-snap \
 ```bash
 gcloud compute instances attach-disk ${HELPER_VM} \
   --project ${PROJECT_ID} \
-  --zone us-central1-b \
+  --zone us-central1-c \
   --disk anemoi-train-from-snap
 ```
 
@@ -159,15 +218,18 @@ sudo mount /dev/sdb1 /mnt/anemoi-snap
 # Run on the helper VM.
 gsutil -m rsync -r /mnt/anemoi-snap/home/${VM_USER}/era5_cache gs://${CACHE_BUCKET}/era5_cache
 gsutil -m rsync -r /mnt/anemoi-snap/home/${VM_USER}/gdas_cache gs://${CACHE_BUCKET}/gdas_cache
-gsutil -m rsync -r /mnt/anemoi-snap/home/${VM_USER}/.anemoi/registry gs://${CACHE_BUCKET}/registry
 ```
 
+The registry isn't copied: it's mirrored to R2 and pulled at job start. On the training VM `VM_USER` is `jasonkolodziej`.
+
 ### 5) Point job env vars to mounted cache paths
+
+These match the job commands in this README; only needed if you created a job with other paths.
 
 ```bash
 gcloud run jobs update anemoi-train-schedule \
   --region us-central1 \
-  --set-env-vars ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache,REGISTRY_ROOT=/cache/registry
+  --update-env-vars ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache
 ```
 
 ### 6) Clean up helper resources
@@ -179,34 +241,40 @@ sudo umount /mnt/anemoi-snap
 # Then from your workstation.
 gcloud compute instances detach-disk ${HELPER_VM} \
   --project ${PROJECT_ID} \
-  --zone us-central1-b \
+  --zone us-central1-c \
   --disk anemoi-train-from-snap
 
 gcloud compute disks delete anemoi-train-from-snap \
   --project ${PROJECT_ID} \
-  --zone us-central1-b
+  --zone us-central1-c
 ```
 
 This preserves your expensive pre-fetched caches while keeping Cloud Run stateless at the compute layer.
 
 ## Optional GPU update
 
-For L4, Cloud Run requires at least 4 CPU and 16 GiB memory.
+For L4, Cloud Run requires at least 4 CPU and 16 GiB memory, and GPU jobs must set `--no-gpu-zonal-redundancy`.
 Remember task timeout is limited to 3600s for GPU tasks.
+Cloud Run's GPU driver is 580.x (CUDA 13.0), which matches the CUDA build of torch the image installs from `uv.lock`.
 
 ```bash
 gcloud run jobs update anemoi-train-schedule \
   --region us-central1 \
   --gpu 1 \
   --gpu-type nvidia-l4 \
+  --no-gpu-zonal-redundancy \
   --cpu 4 \
   --memory 16Gi \
   --task-timeout 3600s
 ```
 
-## Recommended multi-job GPU split plan
+## Recommended multi-job GPU split plan -- not yet validated, CPU baseline is what's actually running
 
 Source Plan: PLAN.md §5 and #22 execution stream.
+
+**As of 2026-09-23, `anemoi-train-schedule` (the CPU baseline above) is the real job in use, and no per-model GPU jobs have been created.** The CPU job's `86400s` timeout has real headroom against the 1-hour GPU cap, so there's been no need to split it yet. This section is the plan for if/when a full CPU run turns out too slow -- it hasn't been benchmarked, and the "important limitation" below (some models may not fit in an hour even split out) was already a known risk when it was written, not resolved since.
+
+Before creating any of these jobs, measure real per-model wall-clock time from an `anemoi-train-schedule` execution's logs (each model's stage boundaries are logged) -- that's the actual evidence for whether the split even clears the 1-hour cap, not the assumption below.
 
 If you want to use Cloud Run GPU jobs, split the schedule into independent executions.
 Each execution should run a narrow unit of work and write checkpoints to object storage.
@@ -244,10 +312,16 @@ gcloud run jobs create anemoi-train-lstm \
   --task-timeout 3600s \
   --gpu 1 \
   --gpu-type nvidia-l4 \
+  --no-gpu-zonal-redundancy \
   --cpu 4 \
   --memory 16Gi \
-  --set-env-vars MODE=sequential,MODELS=lstm,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5,GDAS_CACHE_DIR=/cache/gdas,REGISTRY_ROOT=/cache/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
-  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest
+  --add-volume name=cache,type=cloud-storage,bucket=${CACHE_BUCKET} \
+  --add-volume-mount volume=cache,mount-path=/cache \
+  --set-env-vars MODE=sequential,MODELS=lstm,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
+  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest,CF_ACCESS_CLIENT_ID=CF_ACCESS_CLIENT_ID:latest,CF_ACCESS_CLIENT_SECRET=CF_ACCESS_CLIENT_SECRET:latest,MLFLOW_TRACKING_URI=MLFLOW_TRACKING_URI:latest
+
+# Repeat for cnn, transformer, gnn, pinn -- same flags, MODELS=<name> and
+# the job name changed.
 ```
 
 Create derived-only job:
@@ -262,10 +336,13 @@ gcloud run jobs create anemoi-train-derived \
   --task-timeout 3600s \
   --gpu 1 \
   --gpu-type nvidia-l4 \
+  --no-gpu-zonal-redundancy \
   --cpu 4 \
   --memory 16Gi \
-  --set-env-vars MODE=sequential,DERIVED_FROM_CHAMPIONS=1,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5,GDAS_CACHE_DIR=/cache/gdas,REGISTRY_ROOT=/cache/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
-  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest
+  --add-volume name=cache,type=cloud-storage,bucket=${CACHE_BUCKET} \
+  --add-volume-mount volume=cache,mount-path=/cache \
+  --set-env-vars MODE=sequential,DERIVED_FROM_CHAMPIONS=1,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
+  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest,CF_ACCESS_CLIENT_ID=CF_ACCESS_CLIENT_ID:latest,CF_ACCESS_CLIENT_SECRET=CF_ACCESS_CLIENT_SECRET:latest,MLFLOW_TRACKING_URI=MLFLOW_TRACKING_URI:latest
 ```
 
 Execute in order:
@@ -279,26 +356,28 @@ gcloud run jobs execute anemoi-train-pinn --region us-central1
 gcloud run jobs execute anemoi-train-derived --region us-central1
 ```
 
-For automation, run this order from Cloud Workflows or CI/CD, and gate each step on successful completion.
+For automation, run this order from Cloud Workflows or CI/CD, and gate each step on successful completion -- see "Workflow orchestration" below, which does exactly this (once the GPU split above is actually in use; today it orchestrates whatever job names you give it, GPU-split or not).
 
 ## Workflow orchestration (included)
 
 This folder includes `workflows.train-schedule.yaml`, a Cloud Workflows definition that:
 
-1. Runs the six Cloud Run jobs in order.
-2. Waits for each Run API operation to finish.
-3. Waits for each execution to reach a terminal state.
-4. Stops immediately on first failed/cancelled execution.
+1. Runs a list of Cloud Run jobs in order (default: the six `anemoi-train-*` GPU-split jobs above, unvalidated per that section -- pass your own `jobs` list, e.g. `["anemoi-train-schedule"]`, to orchestrate what's actually running).
+2. Each `jobs.run` call blocks until that job's execution reaches a terminal state (Workflows' connectors do this for any long-running-operation call automatically) and returns the `Execution`.
+3. Stops immediately if an execution has any failed or cancelled task, or if the API call itself fails -- either way the job step raises, and an uncaught raise ends the workflow with `state: FAILED`.
+
+**Needs its own service account.** The default compute service account (`roles/editor`) does **not** include `run.jobs.run` -- confirmed live: `IAM permission denied for service account ...-compute@developer.gserviceaccount.com`. See prerequisite 8 above to create `anemoi-workflows` and grant it `roles/run.invoker` + `roles/run.viewer`.
 
 Deploy the workflow:
 
 ```bash
 gcloud workflows deploy anemoi-train-orchestrator \
   --location us-central1 \
-  --source docker/cloud-run-training/workflows.train-schedule.yaml
+  --source docker/cloud-run-training/workflows.train-schedule.yaml \
+  --service-account anemoi-workflows@${PROJECT_ID}.iam.gserviceaccount.com
 ```
 
-Execute with defaults (uses the six `anemoi-train-*` jobs listed above):
+Execute with defaults (the six GPU-split jobs -- only meaningful once those jobs exist):
 
 ```bash
 gcloud workflows run anemoi-train-orchestrator \
@@ -306,7 +385,7 @@ gcloud workflows run anemoi-train-orchestrator \
   --data '{"projectId":"'"${PROJECT_ID}"'","region":"us-central1"}'
 ```
 
-Execute with custom job list and polling settings:
+Execute against the real CPU-baseline job instead, or any other custom job list, with a longer per-job timeout (the connector's own default is 30 minutes, too short for training):
 
 ```bash
 gcloud workflows run anemoi-train-orchestrator \
@@ -314,20 +393,14 @@ gcloud workflows run anemoi-train-orchestrator \
   --data '{
     "projectId": "'"${PROJECT_ID}"'",
     "region": "us-central1",
-    "jobs": [
-      "anemoi-train-lstm",
-      "anemoi-train-cnn",
-      "anemoi-train-transformer",
-      "anemoi-train-gnn",
-      "anemoi-train-pinn",
-      "anemoi-train-derived"
-    ],
-    "pollSeconds": 20,
-    "maxPollCycles": 360
+    "jobs": ["anemoi-train-schedule"],
+    "timeoutSeconds": 86400
   }'
 ```
 
-`maxPollCycles * pollSeconds` is the per-job upper wait bound before the workflow aborts.
+`timeoutSeconds` is the `jobs.run` connector's own wait limit per job (`connector_params.timeout`), not a client-side poll loop.
+
+**Verified live** (2026-09-23) with two disposable smoke-test jobs standing in for real training jobs -- one that always exits 0, one that always exits 2 -- run as `["ok", "fail", "ok"]`: the first job's execution completed and was recorded, the second's failure surfaced as the workflow's own error (`Task ... failed with exit code: 2`, `state: FAILED`), and the third job's execution list confirms it never ran. Stop-on-first-failure is real, not just intended by the YAML.
 
 ## Execute the job
 
@@ -335,11 +408,25 @@ gcloud workflows run anemoi-train-orchestrator \
 gcloud run jobs execute anemoi-train-schedule --region us-central1
 ```
 
+## One-off commands
+
+Pass arguments to run any `anemoi` subcommand with the same image, secrets, and cache mount instead of `train-schedule`. For example, fitting the drift reference the API's drift monitoring needs (CPU-only, reads the GDAS cache, uploads to R2):
+
+```bash
+gcloud run jobs execute anemoi-train-schedule --region us-central1 \
+  --task-timeout 1800s \
+  --args=drift-reference-fit,--gdas-cache-dir,/cache/gdas_cache,--registry-root,/tmp/registry
+```
+
+`--task-timeout` here overrides the job's default (`86400s` above) for this one execution only -- useful for a short one-off command you don't want to wait a day for if it hangs. Run live 2026-09-23: fit from 1,794 real cached GDAS samples, ~4 minutes of container run time (most of an ~8-minute wall-clock execution was pulling the image), confirmed via `anemoi.api.real_state`'s drift report going from `n_live: 0` to real samples after.
+
+Add `--wait` to block until the execution finishes in your shell -- useful for a quick check, but it sometimes keeps polling briefly after the dashboard already shows the execution complete; the Cloud Console execution page or `gcloud run jobs executions describe <name>` is the source of truth, not the command returning.
+
 ## Common env knobs
 
 - `MODE=sequential|parallel`
 - `MODELS=lstm,cnn,transformer,gnn,pinn`
-- `STREAMING=1` enables streaming DataLoader path
+- `STREAMING=1` enables the streaming DataLoader path. It defaults to on in this entrypoint but off in the VM's `slurm/train_schedule.sbatch`, so set it explicitly when comparing runs across the two.
 - `NUM_WORKERS=0..N` DataLoader workers
 - `BATCH_SIZE=<int>` optional explicit batch size
 - `DERIVED_FROM_CHAMPIONS=1` retrains only `latents/diffusion/fusion`

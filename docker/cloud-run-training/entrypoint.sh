@@ -26,6 +26,13 @@ fi
 # exists in durable object storage (R2/S3), pull it before training.
 anemoi registry-pull --registry-root "${REGISTRY_ROOT}" || true
 
+# Arguments given to the job (`gcloud run jobs execute --args=...`) run that
+# anemoi subcommand instead of train-schedule, so the same image and caches
+# also serve one-off jobs like drift-reference-fit or spread-backtest.
+if [ "$#" -gt 0 ]; then
+  exec anemoi "$@"
+fi
+
 ARGS=(
   train-schedule
   --mode "${MODE}"

@@ -1,7 +1,12 @@
+# Declared before the first FROM and pulled in as a named stage: not every
+# builder expands a build argument inside `COPY --from=` (Cloud Build's
+# docker step doesn't), but all of them expand one in `FROM`.
+ARG UV_TOOLS_IMAGE=ghcr.io/astral-sh/uv:0.8.22
+FROM ${UV_TOOLS_IMAGE} AS uv
+
 FROM python:3.12-slim
 
-ARG UV_TOOLS_IMAGE=ghcr.io/astral-sh/uv:0.8.22
-COPY --from=${UV_TOOLS_IMAGE} /uv /uvx /bin/
+COPY --from=uv /uv /uvx /bin/
 
 ARG BUILD_DATE=unknown
 ARG VCS_REF=unknown
