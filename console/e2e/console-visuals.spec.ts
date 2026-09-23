@@ -35,12 +35,25 @@ test('tapping a wind rose forecast point opens a real tooltip with its lead hour
 	// ARIA `tooltip` role in the installed version --
 	// `data-slot="tooltip-content"` (this app's own shadcn wrapper) is
 	// the real, stable hook.
+	// Capped at exactly the grid's own real cell count (not an arbitrary
+	// small constant, which silently made this test fail against the
+	// map's real ~630x380 canvas -- most of a ~3800-cell grid was cut
+	// off before ever reaching the actual dot) -- this still turns an
+	// open-ended worst case into a bounded, one-pass-of-the-canvas
+	// worst case (Copilot review on PR #180).
+	const MAX_ATTEMPTS = Math.ceil(box.width / 8) * Math.ceil(box.height / 8);
 	const tooltip = page.locator('[data-slot="tooltip-content"]');
 	let opened = false;
-	for (let px = 8; px < box.width - 8 && !opened; px += 8) {
-		for (let py = 8; py < box.height - 8 && !opened; py += 8) {
+	let attempts = 0;
+	outer: for (let px = 8; px < box.width - 8; px += 8) {
+		for (let py = 8; py < box.height - 8; py += 8) {
+			if (attempts >= MAX_ATTEMPTS) break outer;
+			attempts++;
 			await page.mouse.click(box.x + px, box.y + py);
-			if (await tooltip.isVisible().catch(() => false)) opened = true;
+			if (await tooltip.isVisible().catch(() => false)) {
+				opened = true;
+				break outer;
+			}
 		}
 	}
 	expect(opened).toBe(true);

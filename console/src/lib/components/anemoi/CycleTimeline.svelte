@@ -51,6 +51,7 @@
 		{#each plan.stages as stage (stage.stage)}
 			<Tooltip.Root>
 				<Tooltip.Trigger
+					aria-label={`${stageLabel[stage.stage] ?? stage.stage}: ${formatUtc(stage.start)} to ${formatUtc(stage.end_target)}`}
 					class="absolute top-0 h-full border-0 border-r border-bg/60 bg-action/25 p-0"
 					style={`left: ${pct(stage.start)}%; width: ${pct(stage.end_target) - pct(stage.start)}%;`}
 				></Tooltip.Trigger>
@@ -64,6 +65,7 @@
 			</Tooltip.Root>
 			<Tooltip.Root>
 				<Tooltip.Trigger
+					aria-label={`${stageLabel[stage.stage] ?? stage.stage} max budget: through ${formatUtc(stage.end_max)}`}
 					class="absolute top-0 h-full border-0 bg-[repeating-linear-gradient(45deg,color-mix(in_oklab,var(--color-action)_18%,transparent),color-mix(in_oklab,var(--color-action)_18%,transparent)_3px,transparent_3px,transparent_6px)] p-0"
 					style={`left: ${pct(stage.end_target)}%; width: ${pct(stage.end_max) - pct(stage.end_target)}%;`}
 				></Tooltip.Trigger>

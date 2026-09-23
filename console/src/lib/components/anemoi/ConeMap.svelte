@@ -485,7 +485,13 @@
           "line-color": colors.fusion,
           "line-width": 1,
           "line-opacity": 0.4,
-          "line-dasharray": coneHull?.properties.basis === "climatology" ? [2, 2] : [1, 0],
+          // A zero-length gap (`[1, 0]`) fails MapLibre's own style
+          // validation (dasharray values must be > 0) -- omitting the
+          // property entirely is how you get a solid line, not a
+          // zero-gap dasharray (Copilot review on PR #180).
+          ...(coneHull?.properties.basis === "climatology"
+            ? { "line-dasharray": [2, 2] }
+            : {}),
         }}
       />
     </GeoJSONSource>
@@ -684,6 +690,7 @@
   <Tooltip.Root bind:open={tooltipOpen}>
     <Tooltip.Trigger
       tabindex={-1}
+      aria-hidden="true"
       class="pointer-events-none absolute h-0 w-0 border-0 bg-transparent p-0"
       style={tooltipAnchor
         ? `left:${tooltipAnchor.x}px; top:${tooltipAnchor.y}px`
