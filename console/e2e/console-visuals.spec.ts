@@ -113,3 +113,22 @@ test('monitoring page charts each model\'s real per-feature drift, not just the 
 	await expect(page.locator('svg.lc-layout-svg').first()).toBeVisible({ timeout: 5_000 });
 	expect(pageErrors).toEqual([]);
 });
+
+test('monitoring page shows real served-product calibration by lead (#166)', async ({ page }) => {
+	const pageErrors: string[] = [];
+	page.on('pageerror', (err) => pageErrors.push(err.message));
+
+	await page.goto('/monitoring');
+	await expect(page.getByText('Calibration — served product containment by lead')).toBeVisible();
+
+	// Demo state returns a real synthetic-but-plausible curve on every
+	// call (mirrors drift/skew) -- a real <svg> line chart, not the
+	// "no real cycles audited yet" empty state a real deployment starts at.
+	await expect(page.locator('svg.lc-layout-svg').first()).toBeVisible({ timeout: 5_000 });
+	await expect(page.getByText('No real cycles have been audited yet')).toHaveCount(0);
+
+	// Both series' own real nominal-rate reference lines should be labeled.
+	await expect(page.getByText(/cone nominal \d+%/)).toBeVisible();
+	await expect(page.getByText(/intensity nominal \d+%/)).toBeVisible();
+	expect(pageErrors).toEqual([]);
+});
