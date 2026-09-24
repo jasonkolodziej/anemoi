@@ -9,4 +9,12 @@
       "name": "anemoi.wiki",
     },
   ],
+  "settings": {
+    "chat.tools.terminal.autoApprove": {
+      "git add": true,
+      "git commit": true,
+      "git push": true,
+      "gh": true,
+    },
+  },
 }
