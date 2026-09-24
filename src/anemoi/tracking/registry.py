@@ -267,7 +267,18 @@ class ModelRegistry:
         versions.append(version)
         self._save()
         if checkpoint_uri is not None:
-            self._mirror_model_version(name, checkpoint_uri, mlflow_run_id, tags)
+            # After `_save()`, not before (Copilot review on #183, real
+            # regression caught: mirroring first means a real MLflow
+            # network *hang* -- not just an exception, which the mirror's
+            # own try/except already handles -- would block this version
+            # from ever being persisted locally or durably, exactly what
+            # "tracking must never fail a training run" exists to
+            # prevent). A successful mirror records the real MLflow
+            # version number onto `version.tags`, so save again to
+            # persist that -- a second write is cheap; losing the local/
+            # durable record to an MLflow outage is not.
+            self._mirror_model_version(name, checkpoint_uri, mlflow_run_id, tags, version)
+            self._save()
         return version
 
     def get(self, name: str, version: int) -> ModelVersion:
@@ -329,13 +340,22 @@ class ModelRegistry:
         one version claiming to be *the* staging candidate.
         """
         target = self.get(name, version)
+        incumbent = None
         if stage in (Stage.PRODUCTION, Stage.STAGING):
             incumbent = self.in_stage(name, stage)
             if incumbent is not None and incumbent.version != version:
                 incumbent.stage = Stage.ARCHIVED
+            else:
+                incumbent = None
         target.stage = stage
         self._save()
-        self._mirror_stage_transition(name, version, stage)
+        self._mirror_stage_transition(name, target, stage)
+        # The incumbent's own real transition to Archived was never
+        # mirrored before this fix -- `target` was the only version this
+        # method ever told MLflow about, even though archiving the
+        # incumbent is a real, equally-true stage change.
+        if incumbent is not None:
+            self._mirror_stage_transition(name, incumbent, Stage.ARCHIVED)
         return target
 
     def rollback(self, name: str) -> ModelVersion:
@@ -438,12 +458,17 @@ class ModelRegistry:
 
     # ---- mlflow mirror ---------------------------------------------------
 
+    #: Tag key `_mirror_model_version` records the real MLflow-assigned
+    #: version number under, once `create_model_version` actually succeeds.
+    _MLFLOW_VERSION_TAG = "mlflow_version"
+
     def _mirror_model_version(
         self,
         name: str,
         checkpoint_uri: str,
         mlflow_run_id: str | None,
         tags: dict[str, str] | None,
+        version: ModelVersion,
     ) -> None:
         """Best-effort mirror of a new version to MLflow's real Model
         Registry API; failures degrade to local-only (§10.1).
@@ -452,6 +477,16 @@ class ModelRegistry:
         already exist (``create_registered_model`` first -- a plain lookup
         get-or-create, not idempotent on its own) and a real ``source``
         artifact URI as its second argument, not a local version number.
+
+        MLflow assigns its own independent version counter per model
+        name -- it does not, and cannot, match this registry's own
+        ``version`` field, which increments per *this* registry's history
+        (local registrations that never reach MLflow, or don't reach it in
+        the same order, are enough to desync the two). The real number
+        MLflow just assigned is recorded on ``version.tags`` so a later
+        stage transition (`_mirror_stage_transition`) can address the
+        right object instead of guessing -- see that method's docstring
+        for the real, found consequence of not doing this.
         """
         if self._mlflow is None:
             return
@@ -460,9 +495,10 @@ class ModelRegistry:
                 self._mlflow.get_registered_model(name)
             except Exception:  # noqa: BLE001 - "doesn't exist yet" is the common case
                 self._mlflow.create_registered_model(name)
-            self._mlflow.create_model_version(
+            created = self._mlflow.create_model_version(
                 name, checkpoint_uri, run_id=mlflow_run_id, tags=dict(tags or {}),
             )
+            version.tags[self._MLFLOW_VERSION_TAG] = created.version
         except Exception:  # noqa: BLE001 - tracking must never fail a training run
             self._mlflow = None
 
@@ -476,14 +512,35 @@ class ModelRegistry:
         Stage.ARCHIVED: "Archived",
     }
 
-    def _mirror_stage_transition(self, name: str, version: int, stage: Stage) -> None:
+    def _mirror_stage_transition(self, name: str, version: ModelVersion, stage: Stage) -> None:
         """Best-effort mirror of a stage transition; failures degrade to
-        local-only (§10.1)."""
+        local-only (§10.1).
+
+        Real bug found and fixed here: this used to pass *this registry's*
+        own version number straight to MLflow's
+        ``transition_model_version_stage`` -- but as `_mirror_model_version`
+        documents, MLflow's own version numbers don't match this
+        registry's. Confirmed live (2026-09-23): MLflow's real ``diffusion``
+        model version 6 is the same checkpoint as this registry's version
+        8 (matched by checkpoint timestamp) -- so promoting version 8 here
+        called ``transition_model_version_stage("diffusion", "8", ...)``
+        against a version MLflow never had, silently 404ing, caught by the
+        broad except below, and leaving MLflow's own dashboard showing
+        every version at ``stage=None`` regardless of what this registry
+        (the real source of truth for serving) actually said. Reads the
+        real MLflow version back from ``tags`` instead of assuming; a
+        version that was never successfully mirrored (its own
+        `_mirror_model_version` call failed, or it predates this fix) has
+        no tag to read, so this is a no-op for it rather than a guess.
+        """
         if self._mlflow is None:
+            return
+        mlflow_version = version.tags.get(self._MLFLOW_VERSION_TAG)
+        if mlflow_version is None:
             return
         try:
             self._mlflow.transition_model_version_stage(
-                name, str(version), self._MLFLOW_STAGE_NAMES[stage],
+                name, mlflow_version, self._MLFLOW_STAGE_NAMES[stage],
             )
         except Exception:  # noqa: BLE001 - tracking must never fail a training run
             self._mlflow = None
