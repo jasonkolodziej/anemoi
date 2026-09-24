@@ -320,6 +320,14 @@ def test_mlflow_mirror_is_skipped_without_a_checkpoint_uri(tmp_path):
     assert reg.mlflow_available
 
 
+class _FakeMlflowModelVersion:
+    """Minimal stand-in for the real `create_model_version` return value --
+    only `.version` (a string) is used anywhere in this codebase."""
+
+    def __init__(self, version: str) -> None:
+        self.version = version
+
+
 def test_mlflow_mirror_registers_model_then_version_with_a_real_source_uri(tmp_path):
     calls: list[tuple] = []
 
@@ -333,9 +341,10 @@ def test_mlflow_mirror_registers_model_then_version_with_a_real_source_uri(tmp_p
 
         def create_model_version(self, name, source, run_id=None, tags=None):
             calls.append(("create_model_version", name, source, run_id, tags))
+            return _FakeMlflowModelVersion("1")
 
     reg = ModelRegistry(tmp_path, mlflow_client=RecordingClient())
-    reg.register(
+    v = reg.register(
         "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS,
         tags={"model_type": "lstm"}, checkpoint_uri="s3://fake/lstm.pt",
         mlflow_run_id="real-mlflow-run-id",
@@ -348,6 +357,10 @@ def test_mlflow_mirror_registers_model_then_version_with_a_real_source_uri(tmp_p
          {"model_type": "lstm"}),
     ]
     assert reg.mlflow_available
+    # The real MLflow-assigned version number, recorded so a later stage
+    # transition can address the right MLflow object -- see
+    # `test_mlflow_transition_mirror_uses_the_real_mlflow_version_number`.
+    assert v.tags["mlflow_version"] == "1"
 
 
 def test_mlflow_mirror_skips_create_registered_model_if_it_already_exists(tmp_path):
@@ -363,6 +376,7 @@ def test_mlflow_mirror_skips_create_registered_model_if_it_already_exists(tmp_pa
 
         def create_model_version(self, name, source, run_id=None, tags=None):
             calls.append("create_model_version")
+            return _FakeMlflowModelVersion("1")
 
     reg = ModelRegistry(tmp_path, mlflow_client=RecordingClient())
     reg.register(
@@ -372,7 +386,60 @@ def test_mlflow_mirror_skips_create_registered_model_if_it_already_exists(tmp_pa
     assert calls == ["get_registered_model", "create_model_version"]
 
 
-def test_mlflow_transition_mirror_uses_real_titlecase_stage_names(tmp_path):
+def _mlflow_client_that_registers_and_transitions(calls: list[tuple], *, next_mlflow_version="1"):
+    """A fake MLflow client covering both the `_mirror_model_version` and
+    `_mirror_stage_transition` real API surfaces, so a test can exercise a
+    real register()-then-transition() sequence the way production does."""
+
+    class Client:
+        def get_registered_model(self, name):
+            raise RuntimeError("does not exist yet")
+
+        def create_registered_model(self, name):
+            pass
+
+        def create_model_version(self, name, source, run_id=None, tags=None):
+            calls.append(("create_model_version", name, source))
+            return _FakeMlflowModelVersion(next_mlflow_version)
+
+        def transition_model_version_stage(self, name, version, stage):
+            calls.append(("transition_model_version_stage", name, version, stage))
+
+    return Client()
+
+
+def test_mlflow_transition_mirror_uses_the_real_mlflow_version_number(tmp_path):
+    """Real bug, found and fixed live (2026-09-23, GitHub #166's MLflow-
+    sync check): MLflow assigns its own version counter per model name,
+    independent of this registry's own `version` field -- confirmed live
+    against real production data, where registry version 8 was MLflow's
+    own version 6. The old code passed `str(registry_version)` straight to
+    `transition_model_version_stage`, silently 404ing (caught by the same
+    broad except every mirror call uses) whenever the two diverged --
+    which they do here on purpose (registry version 1, MLflow version
+    '47') to prove the mirror reads the real MLflow number back from
+    `tags` instead of assuming the two match."""
+    calls: list[tuple] = []
+    client = _mlflow_client_that_registers_and_transitions(calls, next_mlflow_version="47")
+    reg = ModelRegistry(tmp_path, mlflow_client=client)
+
+    v = reg.register(
+        "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS,
+        checkpoint_uri="s3://fake/lstm.pt",
+    )
+    assert v.version == 1  # this registry's own numbering -- deliberately != MLflow's "47"
+    calls.clear()
+
+    reg.transition("lstm", v.version, Stage.PRODUCTION)
+
+    assert calls == [("transition_model_version_stage", "lstm", "47", "Production")]
+
+
+def test_mlflow_transition_mirror_is_skipped_for_a_version_that_was_never_mirrored(tmp_path):
+    """A version registered without a `checkpoint_uri` (or whose own
+    `_mirror_model_version` call failed) has no real MLflow version to
+    address -- the fix must not fall back to guessing the registry's own
+    version number, which is exactly the bug this replaced."""
     calls: list[tuple] = []
 
     class RecordingClient:
@@ -383,7 +450,45 @@ def test_mlflow_transition_mirror_uses_real_titlecase_stage_names(tmp_path):
     v = reg.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS)
     reg.transition("lstm", v.version, Stage.PRODUCTION)
 
-    assert calls == [("lstm", str(v.version), "Production")]
+    assert calls == []
+
+
+def test_mlflow_transition_also_mirrors_the_archived_incumbent(tmp_path):
+    """Real gap found alongside the version-number bug: promoting a new
+    staging candidate archives the incumbent locally, but the incumbent's
+    own real stage change was never mirrored to MLflow at all -- only the
+    newly-promoted version's transition was."""
+    calls: list[tuple] = []
+    next_version = iter(["1", "2"])
+
+    class Client:
+        def get_registered_model(self, name):
+            raise RuntimeError("does not exist yet")
+
+        def create_registered_model(self, name):
+            pass
+
+        def create_model_version(self, name, source, run_id=None, tags=None):
+            return _FakeMlflowModelVersion(next(next_version))
+
+        def transition_model_version_stage(self, name, version, stage):
+            calls.append(("transition_model_version_stage", name, version, stage))
+
+    reg = ModelRegistry(tmp_path, mlflow_client=Client())
+    v1 = reg.register(
+        "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS,
+        checkpoint_uri="s3://fake/lstm-1.pt",
+    )
+    reg.transition("lstm", v1.version, Stage.STAGING)
+    v2 = reg.register(
+        "lstm", run_id="b", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS,
+        checkpoint_uri="s3://fake/lstm-2.pt",
+    )
+    calls.clear()
+    reg.transition("lstm", v2.version, Stage.STAGING)
+
+    assert ("transition_model_version_stage", "lstm", "2", "Staging") in calls
+    assert ("transition_model_version_stage", "lstm", "1", "Archived") in calls
 
 
 def test_checkpoint_store_push_mirrors_registry_json_after_every_save(tmp_path):
