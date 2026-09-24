@@ -9,6 +9,7 @@ from ..branding import FUSION_COLOR, GODS, STRUCTURAL_COLORS, WindGod
 from ..data.sources import DataSource
 from ..inference.cycle import CycleOutput
 from ..inference.scheduler import CyclePlan
+from ..monitoring.calibration_audit import LeadProductCalibration
 from ..monitoring.drift import DriftReport
 from ..monitoring.skew import SkewReport
 from ..tracking.registry import ModelVersion
@@ -174,6 +175,19 @@ def skew_report_out(report: SkewReport) -> s.SkewReportOut:
         intensity_bias_kt=round(report.intensity_bias_kt, 2),
         alert=report.alert,
         reasons=list(report.reasons),
+    )
+
+
+def calibration_out(report: LeadProductCalibration) -> s.LeadCalibrationOut:
+    return s.LeadCalibrationOut(
+        lead_hours=report.lead_hours,
+        quantity=report.quantity,
+        n_cases=report.n_cases,
+        containment_rate=(
+            round(report.containment_rate, 3) if report.containment_rate is not None else None
+        ),
+        nominal_rate=report.nominal_rate,
+        verdict=report.verdict,
     )
 
 

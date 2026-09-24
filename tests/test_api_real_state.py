@@ -911,3 +911,116 @@ def test_list_cycle_labels_ignores_keys_that_are_not_cycle_results():
         "AL012026": {"20260901_18Z", "20260902_00Z"},
         "AL022026": {"20260903_06Z"},
     }
+
+
+# ---- calibration monitor (#166's live-monitoring follow-up) ----------------
+
+
+def test_calibration_report_is_honest_empty_with_no_samples(client):
+    state = _get_real_state(client)
+    assert state.calibration_report() == []
+
+
+def test_calibration_report_reflects_persisted_samples(client):
+    from anemoi.monitoring.calibration_audit import CalibrationSample, save_calibration_samples
+
+    state = _get_real_state(client)
+    samples = [
+        CalibrationSample(
+            storm_id="AL012026", label=f"c{i}", lead_hours=12,
+            cone_basis="ensemble", cone_hit=(i < 4), intensity_hit=True,
+            audited_at=datetime.now(UTC),
+        )
+        for i in range(5)
+    ]
+    save_calibration_samples(samples, Path(state.registry.root) / "calibration" / "calibration_samples.json")
+    state._calibration_samples = None  # force a reload from the file just written
+
+    reports = state.calibration_report()
+    cone = next(r for r in reports if r.quantity == "cone")
+    assert cone.n_cases == 5
+    assert cone.containment_rate == pytest.approx(0.8)
+
+
+def test_audit_calibration_due_persists_and_is_idempotent_across_a_restart():
+    """Real end-to-end integration: a real stored cycle result + a real
+    storm with a real subsequent fix, audited via `_audit_calibration_due`
+    (the same hook `_refresh_live_storms` calls), surviving a simulated
+    container restart the same way #175's own cycle-persistence tests
+    verify -- a fresh `RealState` against the same durable store picks up
+    the calibration corpus another process already wrote."""
+    import tempfile
+    from datetime import timedelta
+
+    from anemoi.api.cycle_store import save_cycle_result
+    from anemoi.api.real_state import RealStormState
+    from anemoi.api.schemas import (
+        ConeSegmentOut, CyclePayload, CycleProducts, CycleResult, IntensityPercentiles,
+    )
+    from anemoi.data.besttrack import Fix, Track, TrackQuality
+
+    target = datetime(2026, 9, 1, tzinfo=UTC)
+    result = CycleResult(
+        storm_id="AL012026",
+        payload=CyclePayload(
+            cycle="20260901_00Z", issued_at=target, advisory_deadline=target + timedelta(hours=3),
+            nwp_cycle_lag_hours=6, vitals="observed", ensemble_size=20,
+            rapid_intensification=False, ri_probability=0.0,
+            cone=[ConeSegmentOut(lead_hours=12, lat=20.05, lon=-60.05, radius_nm=50.0, basis="ensemble")],
+            flags=[],
+        ),
+        products=CycleProducts(
+            deterministic_track=[], contributors={"lstm": 1.0}, per_model_tracks={},
+            missing_model_reasons={},
+            intensity_pdf=[IntensityPercentiles(lead_hours=12, p10=50.0, p25=55.0, p50=60.0, p75=65.0, p90=70.0)],
+            landfall_probability=None, notes=[], degraded=False,
+        ),
+        on_time=True,
+    )
+
+    s3 = _MemoryS3Client()
+    store = _memory_store(s3)
+    save_cycle_result(store, result)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        hurdat2_file = tmp_path / "h.txt"
+        hurdat2_file.write_text(_HURDAT2_FIXTURE)
+        state = _fresh_real_state(tmp_path, hurdat2_file, store, "first")
+
+        truth = Fix(
+            storm_id="AL012026", valid_time=target + timedelta(hours=12), lat=20.0, lon=-60.0,
+            max_wind_kt=62.0, min_pressure_mb=985.0, quality=TrackQuality.WORKING,
+        )
+        storm = RealStormState(
+            "AL012026", Track(storm_id="AL012026", fixes=(truth,), name="Test"),
+        )
+        storm.cycles.add_stored({"20260901_00Z"})
+        state._live_storms = {"AL012026": storm}
+        state._live_storms_fetched_at = datetime.now(UTC)
+
+        state._audit_calibration_due()
+        reports = state.calibration_report()
+        cone = next(r for r in reports if r.quantity == "cone")
+        assert cone.n_cases == 1
+        assert cone.containment_rate == 1.0  # inside the real 50nm radius
+
+        # A second call must not double-count the same already-audited lead.
+        state._audit_calibration_due()
+        state._calibration_samples = None
+        reports_again = state.calibration_report()
+        cone_again = next(r for r in reports_again if r.quantity == "cone")
+        assert cone_again.n_cases == 1
+
+        # Simulated restart: a fresh RealState against the same durable
+        # store must see the same real corpus another process wrote.
+        state2 = _fresh_real_state(tmp_path, hurdat2_file, store, "second")
+        reports_restarted = state2.calibration_report()
+        cone_restarted = next(r for r in reports_restarted if r.quantity == "cone")
+        assert cone_restarted.n_cases == 1
+
+
+def test_monitoring_calibration_route_does_not_500(client):
+    r = client.get("/v1/monitoring/calibration")
+    assert r.status_code == 200
+    assert r.json() == []

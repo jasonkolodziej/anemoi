@@ -1,22 +1,23 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { getDriftAll, getSkew } from '$lib/api/endpoints';
+	import { getDriftAll, getSkew, getCalibration } from '$lib/api/endpoints';
 	import { ApiError } from '$lib/api/client';
-	import type { DriftReportOut, SkewReportOut } from '$lib/api/types';
+	import type { DriftReportOut, SkewReportOut, LeadCalibrationOut } from '$lib/api/types';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
 	import { colorFor } from '$lib/branding';
-	import { BarChart } from 'layerchart';
+	import { AnnotationLine, Area, AreaChart, BarChart } from 'layerchart';
 	import * as Chart from '$lib/components/ui/chart';
 	import type { ChartConfig } from '$lib/components/ui/chart';
 
 	let drift = $state<DriftReportOut[] | null>(null);
 	let skew = $state<SkewReportOut | null>(null);
+	let calibration = $state<LeadCalibrationOut[] | null>(null);
 	let error = $state<string | null>(null);
 
 	onMount(async () => {
 		try {
-			[drift, skew] = await Promise.all([getDriftAll(), getSkew()]);
+			[drift, skew, calibration] = await Promise.all([getDriftAll(), getSkew(), getCalibration()]);
 		} catch (e) {
 			error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
 		}
@@ -34,6 +35,45 @@
 	// with only one real point on it.
 	const shiftConfig: ChartConfig = {
 		shift: { label: 'standardized shift (σ)', color: 'var(--color-fusion)' }
+	};
+
+	// Real per-(lead, product) served-cone/intensity-band containment
+	// (#166's live-monitoring follow-up) -- pivoted from the API's flat
+	// {lead_hours, quantity, containment_rate} rows into one row per real
+	// lead hour with both series, so a single chart can share one x-axis.
+	// `containment_rate: null` (too few real audited samples, see
+	// monitoring.calibration_audit.MIN_CASES) stays null here too -- never
+	// coerced to 0, which would read as "always misses."
+	const calibrationByLead = $derived.by(() => {
+		if (!calibration) return [];
+		const rows = new Map<
+			number,
+			{ lead_hours: number; cone: number | null; intensity: number | null }
+		>();
+		for (const entry of calibration) {
+			const row = rows.get(entry.lead_hours) ?? {
+				lead_hours: entry.lead_hours,
+				cone: null,
+				intensity: null
+			};
+			row[entry.quantity] = entry.containment_rate;
+			rows.set(entry.lead_hours, row);
+		}
+		return [...rows.values()].sort((a, b) => a.lead_hours - b.lead_hours);
+	});
+	const coneNominal = $derived(
+		calibration?.find((c) => c.quantity === 'cone')?.nominal_rate ?? null
+	);
+	const intensityNominal = $derived(
+		calibration?.find((c) => c.quantity === 'intensity')?.nominal_rate ?? null
+	);
+	const hasCalibrationData = $derived(
+		calibration !== null && calibration.some((c) => c.containment_rate !== null)
+	);
+
+	const calibrationConfig: ChartConfig = {
+		cone: { label: 'cone containment', color: 'var(--color-fusion)' },
+		intensity: { label: 'intensity band containment', color: 'var(--color-action)' }
 	};
 </script>
 
@@ -62,6 +102,95 @@
 				</CardContent>
 			</Card>
 		{/if}
+
+		<Card class="mb-6">
+			<CardHeader>
+				<CardTitle>Calibration — served product containment by lead</CardTitle>
+			</CardHeader>
+			<CardContent>
+				{#if calibration === null}
+					<p class="text-sm text-text-faint">Loading calibration…</p>
+				{:else if !hasCalibrationData}
+					<p class="text-xs text-text-faint">
+						No real cycles have been audited yet -- a served cycle's calibration is only known once
+						its storm's real subsequent track confirms or contradicts it.
+					</p>
+				{:else}
+					<Chart.Container config={calibrationConfig} class="h-60 w-full">
+						<AreaChart
+							data={calibrationByLead}
+							x="lead_hours"
+							yDomain={[0, 1]}
+							seriesLayout="overlap"
+							series={[
+								{
+									key: 'cone',
+									value: (d: (typeof calibrationByLead)[number]) => d.cone,
+									color: 'var(--color-fusion)',
+									props: {
+										fillOpacity: 0,
+										line: { class: 'stroke-2' },
+										defined: (d: (typeof calibrationByLead)[number]) => d.cone !== null
+									}
+								},
+								{
+									key: 'intensity',
+									value: (d: (typeof calibrationByLead)[number]) => d.intensity,
+									color: 'var(--color-action)',
+									props: {
+										fillOpacity: 0,
+										line: { class: 'stroke-2' },
+										defined: (d: (typeof calibrationByLead)[number]) => d.intensity !== null
+									}
+								}
+							]}
+							props={{
+								xAxis: {
+									format: (v: number) => `${v}h`,
+									ticks: calibrationByLead.map((d) => d.lead_hours)
+								},
+								yAxis: { format: (v: number) => `${Math.round(v * 100)}%` }
+							}}
+						>
+							{#snippet marks({ context }: { context: any })}
+								{#each context.series.visibleSeries as s (s.key)}
+									<Area seriesKey={s.key} {...s.props} />
+								{/each}
+								{#if coneNominal !== null}
+									<AnnotationLine
+										y={coneNominal}
+										label={`cone nominal ${Math.round(coneNominal * 100)}%`}
+										class="stroke-fusion/40"
+										props={{
+											line: { 'stroke-dasharray': '2 6' },
+											label: { class: 'fill-text-faint text-[9px]' }
+										}}
+									/>
+								{/if}
+								{#if intensityNominal !== null}
+									<AnnotationLine
+										y={intensityNominal}
+										label={`intensity nominal ${Math.round(intensityNominal * 100)}%`}
+										class="stroke-action/40"
+										props={{
+											line: { 'stroke-dasharray': '2 6' },
+											label: { class: 'fill-text-faint text-[9px]' }
+										}}
+									/>
+								{/if}
+							{/snippet}
+							{#snippet tooltip()}
+								<Chart.Tooltip labelKey="lead_hours" labelFormatter={(v: number) => `+${v}h`} />
+							{/snippet}
+						</AreaChart>
+					</Chart.Container>
+					<p class="mt-1 text-[11px] text-text-faint">
+						Real fraction of served cycles whose cone / intensity band actually contained the
+						truth, once known -- dashed lines are each product's own nominal rate.
+					</p>
+				{/if}
+			</CardContent>
+		</Card>
 
 		{#if drift === null}
 			<p class="text-sm text-text-faint">Loading drift reports…</p>

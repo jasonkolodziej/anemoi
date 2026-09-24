@@ -39,3 +39,14 @@ def skew(
     ~5 days after each cycle, once ERA5T is available; the demo returns a
     synthetic sample on every call."""
     return convert.skew_report_out(state.skew_report(lead_hours=lead_hours))
+
+
+@router.get("/calibration", response_model=list[schemas.LeadCalibrationOut])
+def calibration(state=Depends(state_dependency)) -> list[schemas.LeadCalibrationOut]:
+    """Real served-cone/intensity-band calibration by lead (#166's live-
+    monitoring follow-up) -- was the product this system actually served
+    right, once the real truth became known. A real deployment starts at
+    `[]` (nothing audited yet) and fills in as `RealState
+    ._audit_calibration_due` finds newly-due leads; the demo returns a
+    synthetic-but-plausible curve on every call, the same as drift/skew."""
+    return [convert.calibration_out(r) for r in state.calibration_report()]
