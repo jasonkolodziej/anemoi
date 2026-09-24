@@ -57,7 +57,7 @@
   let isBusy = $derived(Boolean(loading) || $waiterLoading || routeLoading);
 </script>
 
-<div class={cn(fullPage ? "relative" : "", klass)} {...rest}>
+<div class={cn(fullPage ? "contents" : "relative", klass)} {...rest}>
   {@render children?.()}
 
   {#if isBusy}
