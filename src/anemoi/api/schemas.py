@@ -261,8 +261,10 @@ class LeadCalibrationOut(BaseModel):
     """Real served-product calibration for one (lead, product) pair
     (#166's live-monitoring follow-up) -- was the cone/intensity band
     this system actually served right, once the real truth became
-    known. ``containment_rate`` is ``None`` (not 0.0) when ``n_cases``
-    is too low to report honestly -- see
+    known. ``containment_rate`` is ``None`` (not 0.0) only when
+    ``n_cases`` is 0 -- no real sample has resolved for this lead yet.
+    Once ``n_cases >= 1`` it is a real numeric rate even when too low
+    to trust; ``verdict`` is ``"not enough data"`` in that case -- see
     ``monitoring.calibration_audit.MIN_CASES``."""
 
     lead_hours: int

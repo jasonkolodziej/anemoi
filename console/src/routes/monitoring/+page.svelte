@@ -54,9 +54,12 @@
   // (#166's live-monitoring follow-up) -- pivoted from the API's flat
   // {lead_hours, quantity, containment_rate} rows into one row per real
   // lead hour with both series, so a single chart can share one x-axis.
-  // `containment_rate: null` (too few real audited samples, see
-  // monitoring.calibration_audit.MIN_CASES) stays null here too -- never
-  // coerced to 0, which would read as "always misses."
+  // The API's `containment_rate` is `null` only when zero real samples
+  // have resolved for that lead yet (see
+  // monitoring.calibration_audit.MIN_CASES) -- below that sample floor
+  // it's still a real numeric rate (with `verdict: "not enough data"`),
+  // which this pivot passes through as-is, never coerced to 0 (which
+  // would read as "always misses").
   const calibrationByLead = $derived.by(() => {
     if (!calibration) return [];
     const rows = new Map<

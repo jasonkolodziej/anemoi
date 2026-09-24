@@ -33,7 +33,6 @@ caller contract every other real monitoring hook in this codebase follows
 from __future__ import annotations
 
 import json
-import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta

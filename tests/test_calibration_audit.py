@@ -99,7 +99,7 @@ def test_audit_due_exactly_at_the_leads_own_real_valid_time():
 
 def test_audit_cycle_scores_a_real_cone_hit_and_a_real_intensity_hit():
     """Truth lands inside both the served cone radius and the served
-    p10-p90 band -- both real real product checks should read as hits."""
+    p10-p90 band -- both real product checks should read as hits."""
     result = _result(lead_hours=(12,))
     truth = _fix(_TARGET + timedelta(hours=12), lat=20.05, lon=-60.05, wind_kt=62.0)
     samples = audit_cycle(
