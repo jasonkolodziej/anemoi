@@ -422,6 +422,20 @@ gcloud run jobs execute anemoi-train-schedule --region us-central1 \
 
 Add `--wait` to block until the execution finishes in your shell -- useful for a quick check, but it sometimes keeps polling briefly after the dashboard already shows the execution complete; the Cloud Console execution page or `gcloud run jobs executions describe <name>` is the source of truth, not the command returning.
 
+A real diffusion regularization candidate (#166): trains a new `diffusion`/`fusion` version against the current Group 1 champions without touching Group 1 itself, then measures its real calibration -- the same one-off pattern, chained (train, note the registered version number from the job's own log output, then backtest that version):
+
+```bash
+gcloud run jobs execute anemoi-train-schedule --region us-central1 \
+  --task-timeout 1800s \
+  --args=train-schedule,--derived-from-champions,--hurdat2,/app/data/hurdat2-atl.txt,--era5-cache-dir,/cache/era5_cache,--gdas-cache-dir,/cache/gdas_cache,--registry-root,/tmp/registry,--diffusion-dropout,0.1
+
+gcloud run jobs execute anemoi-train-schedule --region us-central1 \
+  --task-timeout 1800s \
+  --args=spread-backtest,--hurdat2,/app/data/hurdat2-atl.txt,--gdas-cache-dir,/cache/gdas_cache,--registry-root,/tmp/registry,--members,20,--diffusion-version,<version from the training job's log>
+```
+
+Real runs 2026-09-23 (`DIFFUSION_DROPOUT=0.1`/`0.05`, `DIFFUSION_WEIGHT_DECAY=1e-4`, each ~9-13 minutes end to end including image pull): see "Common env knobs" below for the results and GitHub #166 for the full backtest output.
+
 ## Common env knobs
 
 - `MODE=sequential|parallel`
@@ -430,6 +444,7 @@ Add `--wait` to block until the execution finishes in your shell -- useful for a
 - `NUM_WORKERS=0..N` DataLoader workers
 - `BATCH_SIZE=<int>` optional explicit batch size
 - `DERIVED_FROM_CHAMPIONS=1` retrains only `latents/diffusion/fusion`
+- `DIFFUSION_DROPOUT=<float>` / `DIFFUSION_WEIGHT_DECAY=<float>` diffusion-only regularization (#166 follow-up to early stopping); both default to unset (0.0, unchanged behavior). Real ablation run 2026-09-23 against the same 637-window `spread-backtest` validation set used for v6/v7: `DIFFUSION_DROPOUT=0.1` alone took the 72-120h spread/skill ratio from 0.44-0.72 (severely underdispersed, diffusion v7) to 0.85-0.98 (calibrated, v8) and the served 120h cone's miss rate from 81% to 49% -- `DIFFUSION_WEIGHT_DECAY=1e-4` alone (v9) and `DIFFUSION_DROPOUT=0.05` alone (v10) each landed within noise of the v7 baseline, confirming a real threshold effect rather than a smooth one. `diffusion v8` is now staged. See GitHub #166 for the full real results.
 
 ## Notes
 
