@@ -244,7 +244,7 @@ def train_diffusion_stage(
     )
     arch_params = {
         "latent_dim": train_samples.z.shape[-1], "hidden_dim": hidden_dim, "n_layers": n_layers,
-        "n_timesteps": n_timesteps, "lead_hours": list(DEFAULT_LEADS),
+        "n_timesteps": n_timesteps, "lead_hours": list(DEFAULT_LEADS), "dropout": dropout,
     }
     artifacts = DiffusionArtifacts(
         model=model, z_mean=z_mean, z_std=z_std, y_mean=y_mean, y_std=y_std,

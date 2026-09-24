@@ -154,8 +154,29 @@ def test_run_diffusion_curriculum_uploads_a_checkpoint_and_registers_stage_b():
     assert model is not None
     assert artifacts.arch_params == {
         "latent_dim": 16, "hidden_dim": 8, "n_layers": 1, "n_timesteps": 5,
-        "lead_hours": list(DEFAULT_LEADS),
+        "lead_hours": list(DEFAULT_LEADS), "dropout": 0.0,
     }
+
+
+@pytest.mark.torch
+def test_train_diffusion_stage_records_a_real_dropout_value_in_arch_params():
+    """Copilot review on PR #181: `dropout` is a real `build_diffusion(...)`
+    kwarg (same category as `hidden_dim`/`n_layers`), so a trained
+    version's `arch_params` must record whatever value it actually used --
+    otherwise a later reader (or `load_trained_model`'s own reconstruction)
+    can't tell a dropout-regularized checkpoint from an unregularized one
+    just by inspecting its registered metadata."""
+    from anemoi.training.real_run_diffusion import train_diffusion_stage
+
+    train_samples = _make_samples(8, z_dim=16, seed=1)
+    val_samples = _make_samples(4, z_dim=16, seed=2)
+
+    *_rest, artifacts, _epochs = train_diffusion_stage(
+        train_samples, val_samples,
+        hidden_dim=8, n_layers=1, n_timesteps=5, epochs=2, n_ensemble_eval=2, seed=3,
+        patience=10, dropout=0.15, device="cpu",
+    )
+    assert artifacts.arch_params["dropout"] == 0.15
 
 
 @pytest.mark.torch
