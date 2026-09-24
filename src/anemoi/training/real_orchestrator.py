@@ -144,6 +144,7 @@ def _run_diffusion(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]
         raise OrchestrationError("diffusion: latents have not been extracted yet")
     run, val_metrics, _model, artifacts = run_diffusion_curriculum(
         r.joint_latents, r.checkpoint_store, seed=r.seed,
+        dropout=r.diffusion_dropout, weight_decay=r.diffusion_weight_decay,
     )
     r.trained_artifacts["diffusion"] = artifacts
     return run, val_metrics
@@ -210,6 +211,12 @@ class RealOrchestratorRunner:
     #: `streaming.make_dataloader`'s docstring for what this actually does
     #: and why it forces `multiprocessing_context="fork"`.
     num_workers: int = 0
+    #: Diffusion-only regularization (#166 follow-up to early stopping,
+    #: see `real_run_diffusion.train_diffusion_stage`'s own docstring).
+    #: Both default to 0.0 -- unchanged behavior for every existing real
+    #: caller -- and are ignored by every task other than "diffusion".
+    diffusion_dropout: float = 0.0
+    diffusion_weight_decay: float = 0.0
 
     curriculum_runs: dict[str, CurriculumRun] = field(default_factory=dict, init=False)
     val_metrics: dict[str, MetricSet] = field(default_factory=dict, init=False)

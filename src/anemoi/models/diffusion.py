@@ -23,6 +23,7 @@ def build_diffusion(
     hidden_dim: int = 256,
     n_layers: int = 6,
     n_timesteps: int = 200,
+    dropout: float = 0.0,
     lead_hours: tuple[int, ...] = DEFAULT_LEADS,
 ):
     """Conditional denoising model over trajectories.
@@ -31,6 +32,18 @@ def build_diffusion(
     less gracelessly at low step counts than the linear schedule -- and step
     count is a hard constraint here, since the whole ensemble must be generated
     inside the 13-minute §6.2.2 budget.
+
+    ``dropout`` (#166, default 0.0 -- unchanged behavior unless a caller opts
+    in): applied inside each residual block, after its hidden activation.
+    Real early stopping (`training.real_run_diffusion.train_diffusion_stage`)
+    already recovered most of a real overfitting-driven ensemble-calibration
+    collapse (spread/skill 0.10-0.19 -> 0.44-0.94, diffusion v7), but the
+    residual gap was concentrated at 72-120h leads (ratio 0.4-0.7, still
+    below the 0.8 "calibrated" threshold) -- the architecture itself has no
+    regularization at all (no dropout anywhere, and the optimizer used no
+    weight decay), which was next on #166's own proposed-investigation list.
+    Real Adam weight decay is the training-loop side of the same lever --
+    see `train_diffusion_stage`'s own ``weight_decay`` parameter.
 
     If that budget binds in practice, the better answer is not the scheduler's
     load-shedding path -- which drops ensemble members, trading tail resolution
@@ -76,6 +89,7 @@ def build_diffusion(
                         nn.LayerNorm(hidden_dim),
                         nn.Linear(hidden_dim, hidden_dim),
                         nn.SiLU(),
+                        nn.Dropout(dropout),
                         nn.Linear(hidden_dim, hidden_dim),
                     )
                     for _ in range(n_layers)

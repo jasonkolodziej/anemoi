@@ -309,6 +309,62 @@ def test_diffusion_registers_with_a_latent_signature_from_group1_versions(runner
     )
 
 
+def test_diffusion_forwards_dropout_and_weight_decay_to_the_real_trainer(
+    tmp_path, monkeypatch
+):
+    """#166 follow-up: `RealOrchestratorRunner.diffusion_dropout`/
+    `diffusion_weight_decay` must actually reach
+    `run_diffusion_curriculum`, not just exist on the dataclass."""
+    captured: dict = {}
+
+    def fake_run_diffusion_curriculum(*args, **kwargs):
+        captured.update(kwargs)
+        return _fake_derived_curriculum_run("diffusion")
+
+    for name, module in (
+        ("run_lstm_curriculum", "anemoi.training.real_run"),
+        ("run_cnn_curriculum", "anemoi.training.real_run_cnn"),
+        ("run_transformer_curriculum", "anemoi.training.real_run_transformer"),
+        ("run_gnn_curriculum", "anemoi.training.real_run_gnn"),
+        ("run_pinn_curriculum", "anemoi.training.real_run_pinn"),
+    ):
+        model_name = name.removeprefix("run_").removesuffix("_curriculum")
+        monkeypatch.setattr(
+            f"{module}.{name}", lambda *a, m=model_name, **k: _fake_curriculum_run(m)
+        )
+    monkeypatch.setattr(
+        "anemoi.training.real_run_diffusion.run_diffusion_curriculum",
+        fake_run_diffusion_curriculum,
+    )
+    monkeypatch.setattr(
+        "anemoi.training.real_latents.extract_joint_latents",
+        lambda *args, **kwargs: _FakeJointLatents(),
+    )
+
+    registry = ModelRegistry(tmp_path / "registry")
+    r = RealOrchestratorRunner(
+        tracks=[], checkpoint_store=None,
+        era5_cache_dir=tmp_path / "era5_cache", gdas_cache_dir=tmp_path / "gdas_cache",
+        registry=registry, diffusion_dropout=0.2, diffusion_weight_decay=1e-4,
+    )
+    for model_name in ("lstm", "cnn", "transformer", "gnn", "pinn"):
+        r(Task(
+            name=model_name, kind="train", depends_on=(), execution_mode=ExecutionMode.SEQUENTIAL,
+            gpu_memory_gb=8, hours_low=1.0, hours_high=2.0,
+        ))
+    r(Task(
+        name="latents", kind="latents", depends_on=("lstm", "cnn", "transformer", "gnn", "pinn"),
+        execution_mode=ExecutionMode.SEQUENTIAL, gpu_memory_gb=24, hours_low=1.5, hours_high=3.0,
+    ))
+    outcome = r(Task(
+        name="diffusion", kind="train", depends_on=("latents",),
+        execution_mode=ExecutionMode.SEQUENTIAL, gpu_memory_gb=48, hours_low=2.0, hours_high=4.0,
+    ))
+    assert outcome.ok
+    assert captured["dropout"] == 0.2
+    assert captured["weight_decay"] == 1e-4
+
+
 def test_unknown_train_task_reports_not_implemented_without_crashing(runner):
     """A model name outside ALL_MODELS (every real model has a runner now
     -- Group 1 plus diffusion/fusion) must still fail cleanly rather than
