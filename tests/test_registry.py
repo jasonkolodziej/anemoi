@@ -328,6 +328,58 @@ class _FakeMlflowModelVersion:
         self.version = version
 
 
+def test_register_persists_locally_and_durably_before_touching_mlflow(tmp_path):
+    """High-severity Copilot finding on #183's own first attempt at this
+    fix: an earlier version of this change called the real MLflow mirror
+    *before* `_save()`, so a real MLflow network hang (not an exception --
+    `_mirror_model_version`'s own try/except already covers that; a hang
+    is a call that never returns at all) would block a new version from
+    ever being persisted locally or durably. That's exactly what "MLflow
+    is the intended backend; when it is absent or unreachable the
+    registry degrades to a local JSON store" (this module's own opening
+    docstring) exists to prevent. Confirms the real ordering directly: by
+    the time the fake MLflow client's own `create_model_version` is
+    called, the version is already on disk and already pushed to the
+    checkpoint store, not merely in memory."""
+    calls: list[str] = []
+
+    class OrderCheckingClient:
+        def get_registered_model(self, name):
+            raise RuntimeError("does not exist yet")
+
+        def create_registered_model(self, name):
+            pass
+
+        def create_model_version(self, name, source, run_id=None, tags=None):
+            calls.append("mlflow_called")
+            # If this fires before `_save()`, the version wouldn't be on
+            # disk (`_load` re-reads a fresh registry.json, not the
+            # in-memory `reg` object) or pushed to the checkpoint store yet.
+            fresh = ModelRegistry(tmp_path)
+            assert len(fresh.versions("lstm")) == 1
+            assert push_calls, "checkpoint store must already have been pushed to"
+            return _FakeMlflowModelVersion("1")
+
+    push_calls: list[str] = []
+
+    class RecordingStore:
+        def upload(self, local_path, key):
+            push_calls.append(key)
+            return f"s3://fake/{key}"
+
+        def exists(self, key):
+            return False
+
+    reg = ModelRegistry(
+        tmp_path, mlflow_client=OrderCheckingClient(), checkpoint_store=RecordingStore(),
+    )
+    reg.register(
+        "lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE, metrics=METRICS,
+        checkpoint_uri="s3://fake/lstm.pt",
+    )
+    assert calls == ["mlflow_called"]
+
+
 def test_mlflow_mirror_registers_model_then_version_with_a_real_source_uri(tmp_path):
     calls: list[tuple] = []
 

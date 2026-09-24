@@ -265,14 +265,20 @@ class ModelRegistry:
             checkpoint_uri=checkpoint_uri,
         )
         versions.append(version)
-        if checkpoint_uri is not None:
-            # Before `_save()`, not after -- a successful mirror records
-            # the real MLflow version number onto `version.tags` (see
-            # `_mirror_model_version`'s docstring), and that has to be in
-            # the payload `_save()` persists, not lost to a version of
-            # this object that was already written.
-            self._mirror_model_version(name, checkpoint_uri, mlflow_run_id, tags, version)
         self._save()
+        if checkpoint_uri is not None:
+            # After `_save()`, not before (Copilot review on #183, real
+            # regression caught: mirroring first means a real MLflow
+            # network *hang* -- not just an exception, which the mirror's
+            # own try/except already handles -- would block this version
+            # from ever being persisted locally or durably, exactly what
+            # "tracking must never fail a training run" exists to
+            # prevent). A successful mirror records the real MLflow
+            # version number onto `version.tags`, so save again to
+            # persist that -- a second write is cheap; losing the local/
+            # durable record to an MLflow outage is not.
+            self._mirror_model_version(name, checkpoint_uri, mlflow_run_id, tags, version)
+            self._save()
         return version
 
     def get(self, name: str, version: int) -> ModelVersion:
