@@ -6,6 +6,7 @@
   import type { StormDetail, CycleResult, SkewReportOut } from "$lib/api/types";
   import { listRegistry } from "$lib/api/endpoints";
   import { pollWhileVisible } from "$lib/poll";
+  import { setWaiterLoading } from "$lib/stores/waiter";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
   import {
@@ -59,6 +60,7 @@
     // one tick while a run is genuinely in progress.
     if (running) return;
     error = null;
+    setWaiterLoading(true);
     try {
       storm = await getStorm(stormId);
       if (storm.cycles.length > 0) {
@@ -70,6 +72,8 @@
         .catch(() => {});
     } catch (e) {
       error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
+    } finally {
+      setWaiterLoading(false);
     }
   }
 

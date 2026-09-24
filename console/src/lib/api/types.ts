@@ -227,6 +227,15 @@ export interface SkewReportOut {
 	reasons: string[];
 }
 
+export interface LeadCalibrationOut {
+	lead_hours: number;
+	quantity: 'cone' | 'intensity';
+	n_cases: number;
+	containment_rate: number | null;
+	nominal_rate: number;
+	verdict: 'too narrow' | 'too wide' | 'calibrated' | 'not enough data';
+}
+
 export interface RetrainJobOut {
 	model: string;
 	reason: string;

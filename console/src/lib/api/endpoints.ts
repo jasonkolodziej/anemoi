@@ -4,6 +4,7 @@ import type {
 	CycleResult,
 	DriftReportOut,
 	HealthOut,
+	LeadCalibrationOut,
 	ModelCatalog,
 	RegistryEntry,
 	RetrainJobOut,
@@ -42,5 +43,6 @@ export const getDriftAll = () => apiFetch<DriftReportOut[]>('/v1/monitoring/drif
 export const getDrift = (model: string) => apiFetch<DriftReportOut>(`/v1/monitoring/drift/${model}`);
 export const getSkew = (leadHours = 48) =>
 	apiFetch<SkewReportOut>('/v1/monitoring/skew', { query: { lead_hours: leadHours } });
+export const getCalibration = () => apiFetch<LeadCalibrationOut[]>('/v1/monitoring/calibration');
 
 export const getRetrainTriggers = () => apiFetch<RetrainJobOut[]>('/v1/retraining/triggers');

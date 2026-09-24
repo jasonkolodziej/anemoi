@@ -27,6 +27,7 @@ from ..data.sources import Flavor
 from ..data.synthetic import generate_season
 from ..inference.cycle import CycleOutput, DeterministicForecast, climatological_ensemble, run_cycle
 from ..inference.scheduler import plan_cycle
+from ..monitoring.calibration_audit import CONE_NOMINAL_RATE, INTENSITY_NOMINAL_RATE, LeadProductCalibration
 from ..monitoring.drift import DriftReport, ReferenceDistribution, detect_feature_drift
 from ..monitoring.skew import SkewReport
 from ..tracking.registry import DERIVED_MODELS, GROUP1_MODELS, ModelRegistry, Stage, latent_signature
@@ -239,6 +240,42 @@ class DemoState:
             alert=alert,
             reasons=tuple(reasons),
         )
+
+    def calibration_report(self, *, seed: int = 11) -> list[LeadProductCalibration]:
+        """Synthetic per-(lead, product) containment rates -- a real
+        `monitoring.calibration_audit.calibrate_products` shape, seeded to
+        show a realistic mixed state (well-calibrated at short leads,
+        mildly underdispersed cone at long leads) rather than either
+        "everything is fine" or "everything alerts," same demo intent as
+        `drift_report`'s deliberate per-model shift above. Not a claim
+        about any real model's real calibration -- see #166 for that."""
+        from ..models.base import DEFAULT_LEADS
+
+        rng = np.random.default_rng(seed)
+        reports: list[LeadProductCalibration] = []
+        for lead in DEFAULT_LEADS:
+            n = 20
+            # Cone containment drifts down at longer leads -- the same
+            # real underdispersion shape #166 actually found, echoed here
+            # only as a plausible demo curve, not a re-assertion of it.
+            cone_rate = float(np.clip(CONE_NOMINAL_RATE - 0.003 * lead + rng.normal(0.0, 0.03), 0.05, 1.0))
+            intensity_rate = float(np.clip(INTENSITY_NOMINAL_RATE + rng.normal(0.0, 0.03), 0.05, 1.0))
+            for quantity, rate, nominal in (
+                ("cone", cone_rate, CONE_NOMINAL_RATE), ("intensity", intensity_rate, INTENSITY_NOMINAL_RATE),
+            ):
+                if rate < nominal - 0.15:
+                    verdict = "too narrow"
+                elif rate > nominal + 0.15:
+                    verdict = "too wide"
+                else:
+                    verdict = "calibrated"
+                reports.append(
+                    LeadProductCalibration(
+                        lead_hours=lead, quantity=quantity, n_cases=n,
+                        containment_rate=rate, nominal_rate=nominal, verdict=verdict,
+                    )
+                )
+        return reports
 
     # ---- retraining triggers ---------------------------------------------
 

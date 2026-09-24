@@ -174,6 +174,15 @@ def test_skew_report_shape(client):
     assert "mean_track_delta_nm" in r.json()
 
 
+def test_calibration_report_shape(client):
+    r = client.get("/v1/monitoring/calibration")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) > 0  # demo state's synthetic-but-plausible curve
+    assert {"cone", "intensity"} <= {entry["quantity"] for entry in body}
+    assert all(entry["n_cases"] > 0 for entry in body)
+
+
 def test_retraining_triggers_is_a_list(client):
     r = client.get("/v1/retraining/triggers")
     assert r.status_code == 200

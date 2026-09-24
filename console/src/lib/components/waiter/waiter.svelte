@@ -1,8 +1,9 @@
 <script lang="ts">
   // import { mode } from "mode-watcher";
   // import { Plane, SpinLine } from "svelte-loading-spinners";
-  import { navigating } from "$app/state";
+  import { afterNavigate, beforeNavigate } from "$app/navigation";
   import { cn, type PrimitiveDivAttributes } from "$lib/utils";
+  import { waiterLoading } from "$lib/stores/waiter";
   import type { Component } from "svelte";
 
   type IconConfig = {
@@ -16,6 +17,7 @@
     messageClass?: string;
     carriageWidth?: string;
     fullPage?: boolean;
+    loading?: boolean;
     iconComponent?: Component<Record<string, unknown>> | IconConfig;
   };
 
@@ -27,6 +29,7 @@
     message = "Please wait...",
     messageClass,
     carriageWidth = "0.08em",
+    loading = false,
     iconComponent: IconComponent,
     ...rest
   }: WaiterProps = $props();
@@ -41,40 +44,50 @@
       : { component: IconComponent, props: undefined },
   );
 
-  let isNavigating = $derived(navigating.complete !== null);
+  let routeLoading = $state(false);
+
+  beforeNavigate(() => {
+    routeLoading = true;
+  });
+
+  afterNavigate(() => {
+    routeLoading = false;
+  });
+
+  let isBusy = $derived(Boolean(loading) || $waiterLoading || routeLoading);
 </script>
 
-{#if isNavigating}
-  <div
-    class={cn(
-      fullPage
-        ? "fixed top-0 left-0 flex h-full w-full flex-1 flex-col items-center justify-center"
-        : "",
-      klass,
-    )}
-    {...rest}
-  >
-    <!-- <SpinLine
-      {size}
-      color={mode.current === "dark" ? "#fff" : "#27272a"}
-      unit="px"
-    /> -->
-    {#if iconDefinition.component}
-      <iconDefinition.component {size} {...iconDefinition.props} />
-    {/if}
-    <p
-      class={cn(
-        "text-muted-foreground text-sm waiter-terminal-text",
-        messageClass,
-      )}
-      style={`--waiter-message-ch: ${messageLength}ch; --waiter-typing-steps: ${messageLength}; --waiter-caret-width: ${carriageWidth};`}
-    >
-      {message}
-    </p>
-  </div>
-{:else}
+<div class={cn(fullPage ? "contents" : "relative", klass)} {...rest}>
   {@render children?.()}
-{/if}
+
+  {#if isBusy}
+    <div
+      class={cn(
+        fullPage
+          ? "fixed top-0 left-0 flex h-full w-full flex-col items-center justify-center"
+          : "absolute inset-0 flex items-center justify-center",
+      )}
+    >
+      <!-- <SpinLine
+        {size}
+        color={mode.current === "dark" ? "#fff" : "#27272a"}
+        unit="px"
+      /> -->
+      {#if iconDefinition.component}
+        <iconDefinition.component {size} {...iconDefinition.props} />
+      {/if}
+      <p
+        class={cn(
+          "text-muted-foreground text-sm waiter-terminal-text",
+          messageClass,
+        )}
+        style={`--waiter-message-ch: ${messageLength}ch; --waiter-typing-steps: ${messageLength}; --waiter-caret-width: ${carriageWidth};`}
+      >
+        {message}
+      </p>
+    </div>
+  {/if}
+</div>
 
 <style>
   .waiter-terminal-text {

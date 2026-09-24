@@ -43,6 +43,7 @@ from ..data.availability import LatencyOracle
 from ..data.besttrack import Fix, Track, TrackQuality
 from ..inference.cycle import CycleError, CycleOutput, DeterministicForecast, run_cycle
 from ..inference.scheduler import plan_cycle
+from ..monitoring.calibration_audit import CalibrationSample, LeadProductCalibration
 from ..monitoring.drift import DriftError, DriftReport, ReferenceDistribution, detect_feature_drift
 from ..monitoring.skew import SkewMonitor, SkewReport, SkewSample
 from ..tracking.registry import ALL_MODELS, ModelRegistry
@@ -74,6 +75,14 @@ _REGISTRY_TTL = timedelta(minutes=15)
 #: batch job, not a per-cycle thing), so this is deliberately less
 #: aggressive than `_REGISTRY_TTL`.
 _SKEW_SAMPLES_TTL = timedelta(hours=6)
+
+#: How long the real calibration-sample corpus (#166's live-monitoring
+#: follow-up) stays valid before a process re-pulls it from durable
+#: storage. New real samples land whenever `_audit_calibration_due`
+#: (piggybacked on `_refresh_live_storms`, every `_LIVE_STORMS_TTL`) finds
+#: a newly-due lead -- more often than skew's offline audit, but still far
+#: less often than every request, so this sits between the two.
+_CALIBRATION_SAMPLES_TTL = timedelta(hours=1)
 
 #: Real forecast lead times every real deterministic_fn/ensemble_fn this
 #: module builds shares -- matches models.base.DEFAULT_LEADS.
@@ -235,6 +244,13 @@ class RealState:
         self._skew_samples: list[SkewSample] | None = None
         self._skew_samples_fetched_at: datetime | None = None
 
+        #: Real calibration-audit state (#166's live-monitoring follow-up).
+        #: Mirrors the skew corpus's own lazy, TTL-refreshed load -- new
+        #: real samples land continuously (every `_audit_calibration_due`
+        #: pass that finds a newly-due lead), not once at cold start.
+        self._calibration_samples: list[CalibrationSample] | None = None
+        self._calibration_samples_fetched_at: datetime | None = None
+
     @property
     def _checkpoint_store(self):
         if self._checkpoint_store_override is not None:
@@ -271,6 +287,41 @@ class RealState:
                 for t in tracks
             }
         self._live_storms_fetched_at = now
+        self._audit_calibration_due()
+
+    def _audit_calibration_due(self) -> None:
+        """Real calibration audit pass (#166's live-monitoring follow-up),
+        piggybacked on the real live-feed refresh above rather than a
+        separate offline CLI/cron -- see `monitoring.calibration_audit`'s
+        own module docstring for why the real truth this needs (what a
+        storm actually did next) is already arriving via this exact
+        refresh, not published days later by a separate pipeline the way
+        skew's ERA5T is. Best-effort throughout: a failure here must
+        never break a live-storm refresh, the same contract
+        `_record_drift_sample`/`_record_skew_sample` already establish
+        for real monitoring hooks attached to `run_cycle`.
+
+        `_ensure_cycle_index` runs first (idempotent after its own first
+        real success) so a due cycle registered by an *earlier* container
+        lifetime -- not just one this process itself ran -- is known to
+        audit, not only whatever's accumulated in this process's own
+        `storm.cycles` so far.
+        """
+        self._ensure_cycle_index()
+        from ..monitoring.calibration_audit import audit_storm
+
+        try:
+            store = self._checkpoint_store
+        except Exception:  # noqa: BLE001 - no real store configured -- nothing to audit against
+            return
+        for storm in self._live_storms.values():
+            try:
+                audit_storm(
+                    storm.storm_id, tuple(storm.cycles), storm.track.fixes,
+                    store, self.registry.root,
+                )
+            except Exception:  # noqa: BLE001 - one storm's audit failure must not sink another's
+                continue
 
     def _new_storm_state(
         self, track: Track, previous: RealStormState | None = None,
@@ -718,6 +769,43 @@ class RealState:
                 ),
             )
         return report
+
+    def _get_calibration_samples(self) -> list[CalibrationSample]:
+        """Real calibration corpus (#166's live-monitoring follow-up),
+        lazily loaded and TTL-refreshed from durable storage -- mirrors
+        `_get_skew_samples`'s own load pattern (see
+        `_CALIBRATION_SAMPLES_TTL`'s docstring for why the TTL differs)."""
+        now = datetime.now(UTC)
+        if (
+            self._calibration_samples is not None
+            and self._calibration_samples_fetched_at is not None
+            and now - self._calibration_samples_fetched_at < _CALIBRATION_SAMPLES_TTL
+        ):
+            return self._calibration_samples
+        from ..monitoring.calibration_audit import load_calibration_samples
+
+        try:
+            store = self._checkpoint_store
+        except Exception:  # noqa: BLE001 - see _get_drift_reference: local-only must still work
+            store = None
+        try:
+            path = Path(self.registry.root) / "calibration" / "calibration_samples.json"
+            self._calibration_samples = load_calibration_samples(path, store)
+        except Exception:  # noqa: BLE001 - a missing/broken corpus must never crash a cycle
+            self._calibration_samples = self._calibration_samples or []
+        self._calibration_samples_fetched_at = now
+        return self._calibration_samples
+
+    def calibration_report(self) -> list[LeadProductCalibration]:
+        """Real, per-(lead, product) served-cone/intensity-band
+        containment rates, over every real audited sample so far. Empty
+        list (not a fabricated report) when nothing has been audited yet
+        -- `monitoring.calibration_audit.calibrate_products` on an empty
+        corpus already returns ``[]``, the same honest-empty contract
+        `drift_report`/`skew_report` use."""
+        from ..monitoring.calibration_audit import calibrate_products
+
+        return calibrate_products(self._get_calibration_samples())
 
     def pending_retrain_jobs(self) -> list[RetrainJob]:
         """Real retraining triggers (§5.5), now genuinely detecting two

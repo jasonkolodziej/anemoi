@@ -465,7 +465,26 @@
     class="h-[380px] w-full rounded-md border border-border"
     style={DARK_STYLE}
     attributionControl={false}
+    dragPan={{ maxSpeed: 0 }}
   >
+    <!-- `maxSpeed: 0` disables real drag *inertia* (momentum panning
+         after mouse-up), not dragging itself -- a real, found bug, not
+         a cosmetic choice. svelte-maplibre-gl's own MapLibre.svelte
+         keeps a two-way `center`/`zoom` binding: on every real `move`
+         event it writes the map's *committed* transform into its
+         internal `center`/`zoom`, then a separate reactive effect
+         compares that against `getTransformForUpdate()` -- the
+         *pending* transform -- and force-corrects the camera with
+         `map.jumpTo(...)` if they disagree. While inertia is still
+         settling after a drag, those two transforms can briefly
+         disagree for real, and the "correction" it applies lands
+         wherever the pending transform happened to be at that instant
+         -- a real, small, non-deterministic camera nudge, confirmed
+         live: it reproduced with zero data changes on the poll and
+         with no `fitBounds` call ever firing (traced directly via the
+         real map camera state, not inferred). Disabling inertia
+         removes the window where the two transforms can diverge. -->
+
     <!-- Moved off bottom-left (MapLibre's default) -- that's exactly
 	     where the real, clickable legend below now lives, and the two
 	     controls overlapping there was a real, found-for-real bug: the
