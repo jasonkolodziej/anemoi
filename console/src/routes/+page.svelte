@@ -7,6 +7,7 @@
 	import CycleTimeline from '$lib/components/anemoi/CycleTimeline.svelte';
 	import { cycleLabel } from '$lib/utils';
 	import { pollWhileVisible } from '$lib/poll';
+	import { setWaiterLoading } from '$lib/stores/waiter';
 
 	let storms = $state<StormSummary[] | null>(null);
 	let plans = $state<CyclePlanOut[] | null>(null);
@@ -23,6 +24,7 @@
 	// is what actually fixes day rollover -- not a timer that just re-asks
 	// for the same stale date forever.
 	async function load() {
+		setWaiterLoading(true);
 		try {
 			const today = cycleLabel(new Date()).slice(0, 8); // YYYYMMDD
 			const isoDate = `${today.slice(0, 4)}-${today.slice(4, 6)}-${today.slice(6, 8)}`;
@@ -33,6 +35,8 @@
 			error = null; // a later successful poll must clear an earlier outage banner
 		} catch (e) {
 			error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
+		} finally {
+			setWaiterLoading(false);
 		}
 	}
 

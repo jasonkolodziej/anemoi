@@ -3,6 +3,7 @@
   // import { Plane, SpinLine } from "svelte-loading-spinners";
   import { navigating } from "$app/state";
   import { cn, type PrimitiveDivAttributes } from "$lib/utils";
+  import { waiterLoading } from "$lib/stores/waiter";
   import type { Component } from "svelte";
 
   type IconConfig = {
@@ -16,6 +17,7 @@
     messageClass?: string;
     carriageWidth?: string;
     fullPage?: boolean;
+    loading?: boolean;
     iconComponent?: Component<Record<string, unknown>> | IconConfig;
   };
 
@@ -27,6 +29,7 @@
     message = "Please wait...",
     messageClass,
     carriageWidth = "0.08em",
+    loading = false,
     iconComponent: IconComponent,
     ...rest
   }: WaiterProps = $props();
@@ -41,10 +44,10 @@
       : { component: IconComponent, props: undefined },
   );
 
-  let isNavigating = $derived(navigating.complete !== null);
+  let isBusy = $derived(Boolean(loading) || $waiterLoading || navigating.complete !== null);
 </script>
 
-{#if isNavigating}
+{#if isBusy}
   <div
     class={cn(
       fullPage
