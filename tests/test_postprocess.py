@@ -11,8 +11,16 @@ from anemoi.inference.postprocess import (
     landfall_probability,
     rapid_intensification_probability,
 )
+from anemoi.inference.postprocess import RI_THRESHOLD_KT, RI_WINDOW_HOURS
+from anemoi.models.diffusion import DEFAULT_LEADS
 
-LEADS = (12, 24, 48, 72, 120)
+# The real production schedule, not a convenient subset. These tests used
+# `(12, 24, 48, 72, 120)`, whose only exact 24h windows are (24,48) and
+# (48,72) -- so the RI tests passed only via the widened-window bug #193
+# fixed: with `wind_gain=20` the detected window was 12h->48h, a 36-hour
+# gain. A fixture that does not match production is how a safety-critical
+# metric stayed wrong.
+LEADS = DEFAULT_LEADS
 
 
 def members(n=20, spread=1.2, wind_gain=0.0, seed=0):
@@ -148,3 +156,78 @@ def test_products_include_landfall_when_a_coastline_is_supplied():
 
 def test_products_omit_landfall_without_a_coastline():
     assert build_products(members()).landfall_probability is None
+
+
+def _member(lead_hours, winds, member_id=0):
+    n = len(lead_hours)
+    return EnsembleMember(
+        member_id=member_id,
+        lead_hours=tuple(lead_hours),
+        lats=np.full(n, 25.0),
+        lons=np.full(n, -70.0),
+        winds_kt=np.asarray(winds, dtype=float),
+    )
+
+
+def test_ri_window_is_exactly_24h_at_every_lead_in_the_real_schedule():
+    """#193: `searchsorted` returns the first lead at or *beyond* lead+24,
+    which is only the intended window when that lead exists. DEFAULT_LEADS
+    is unevenly spaced, so 36h landed on 72h -- a 36-hour gain scored
+    against a threshold defined per 24 hours.
+
+    Asserts the real spacing directly, so a future change to DEFAULT_LEADS
+    that reintroduces a gap fails here rather than silently widening a
+    safety-critical window again.
+    """
+    from anemoi.models.diffusion import DEFAULT_LEADS
+
+    leads = np.array(DEFAULT_LEADS, dtype=float)
+    usable = [
+        (a, b) for a in DEFAULT_LEADS for b in DEFAULT_LEADS if b - a == RI_WINDOW_HOURS
+    ]
+    assert usable == [(12, 36), (24, 48), (48, 72), (72, 96), (96, 120)]
+
+    # Every lead still participates in some window -- the fix costs a slice,
+    # not a lead.
+    starts = {a for a, _ in usable}
+    ends = {b for _, b in usable}
+    assert set(DEFAULT_LEADS) - starts - ends == set()
+
+    # And the searchsorted target is never a wider window than intended.
+    for i, lead_i in enumerate(leads):
+        j = np.searchsorted(leads, lead_i + RI_WINDOW_HOURS)
+        if j < len(leads):
+            assert leads[j] - lead_i >= RI_WINDOW_HOURS  # never narrower
+            if leads[j] - lead_i != RI_WINDOW_HOURS:
+                assert lead_i == 36, "only the 36h lead should lack an exact partner"
+
+
+def test_a_36_hour_gain_is_not_counted_as_24_hour_intensification():
+    """The real defect: a member gaining 30kt between 36h and 72h -- with no
+    qualifying 24-hour window anywhere -- used to be flagged as RI."""
+    from anemoi.models.diffusion import DEFAULT_LEADS
+
+    # 12  24  36  48  72  96 120
+    # Flat except a steady climb from 36h to 72h totalling exactly 30kt.
+    # Every real 24h window (12->36, 24->48, 48->72, 72->96, 96->120) gains
+    # less than 30.
+    winds = [60, 60, 60, 78, 90, 90, 90]
+    m = _member(DEFAULT_LEADS, winds)
+
+    # Sanity: the 36->72 gain really is >= the threshold, and no exact 24h
+    # window is.
+    idx = {l: i for i, l in enumerate(DEFAULT_LEADS)}
+    assert winds[idx[72]] - winds[idx[36]] >= RI_THRESHOLD_KT
+    for a, b in ((12, 36), (24, 48), (48, 72), (72, 96), (96, 120)):
+        assert winds[idx[b]] - winds[idx[a]] < RI_THRESHOLD_KT
+
+    assert rapid_intensification_probability([m]) == 0.0
+
+
+def test_a_real_24_hour_surge_is_still_detected():
+    """The fix must not stop catching genuine RI -- a 30kt gain across an
+    exact 24-hour window (48h -> 72h) still counts."""
+    from anemoi.models.diffusion import DEFAULT_LEADS
+
+    winds = [60, 60, 60, 60, 95, 95, 95]  # 48h -> 72h is +35kt in exactly 24h
+    assert rapid_intensification_probability([_member(DEFAULT_LEADS, winds)]) == 1.0

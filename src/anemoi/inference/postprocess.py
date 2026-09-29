@@ -227,7 +227,32 @@ def rapid_intensification_probability(
     threshold_kt: float = RI_THRESHOLD_KT,
     window_hours: int = RI_WINDOW_HOURS,
 ) -> float:
-    """Fraction of members showing a >=threshold intensity gain in any window."""
+    """Fraction of members showing a >=threshold intensity gain in any
+    ``window_hours`` window.
+
+    The window has to be *exactly* ``window_hours`` long (#193). This
+    previously took the first lead at or beyond ``lead_i + window_hours``,
+    which is only the same thing when that lead exists -- and `DEFAULT_LEADS`
+    is unevenly spaced, so at the 36 h lead it landed on 72 h and measured a
+    **36-hour** gain against a threshold defined per 24 hours. A storm got
+    50% more time to clear it, inflating the fraction and pushing cycles
+    across `build_products`' 0.3 alert cut on the most safety-critical
+    signal served, in the over-warning direction.
+
+    Rejected alternatives, both of which look cheaper and are worse:
+    interpolating a wind at ``lead_i + window_hours`` invents a value the
+    model never produced, and linear interpolation cannot represent a spike
+    so it understates exactly the peak rates this metric exists to catch;
+    scaling the threshold to the real window length (30 kt/24 h ->
+    45 kt/36 h) is a *rate* criterion, and RI is a threshold on a window --
+    45 kt over 36 h need not contain 30 kt in any 24-hour sub-window.
+
+    The cost is one unobservable slice, not a lead: with `DEFAULT_LEADS`
+    every lead still contributes to some window (12->36, 24->48, 48->72,
+    72->96, 96->120). Only a window *starting* at 36 h is dropped, and it
+    ends at 60 h where there is no prediction at all, so it was never
+    measurable.
+    """
     if not members:
         raise ValueError("empty ensemble")
     count = 0
@@ -237,7 +262,10 @@ def rapid_intensification_probability(
         gained = False
         for i, lead_i in enumerate(leads):
             j = np.searchsorted(leads, lead_i + window_hours)
-            if j < len(leads) and winds[j] - winds[i] >= threshold_kt:
+            # An exact match, not merely the next lead beyond it.
+            if j >= len(leads) or leads[j] != lead_i + window_hours:
+                continue
+            if winds[j] - winds[i] >= threshold_kt:
                 gained = True
                 break
         count += int(gained)
