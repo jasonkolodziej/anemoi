@@ -81,6 +81,15 @@ export interface CyclePayload {
 	ensemble_size: number;
 	rapid_intensification: boolean;
 	ri_probability: number;
+	/**
+	 * 95% Wilson bounds on `ri_probability`, and whether they span the 30%
+	 * alert threshold (#188). Null on cycles served before that landed --
+	 * those are still readable from durable storage, so this is "not
+	 * recorded", not "zero".
+	 */
+	ri_probability_lo: number | null;
+	ri_probability_hi: number | null;
+	ri_uncertain: boolean | null;
 	cone: ConeSegmentOut[];
 	flags: string[];
 	/** The real coastal reference point `landfall_probability` was computed

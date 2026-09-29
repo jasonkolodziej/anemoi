@@ -95,9 +95,49 @@ def test_no_rapid_intensification_for_a_steady_storm():
     assert rapid_intensification_probability(members(wind_gain=0.0)) < 0.2
 
 
+def test_wilson_interval_brackets_the_estimate_and_stays_in_the_unit_range():
+    """#188: the normal approximation is worst exactly where this is used --
+    small n, proportions near 0 or 1 -- where it returns bounds outside
+    [0, 1]. Wilson must not."""
+    from anemoi.inference.postprocess import wilson_interval
+
+    for n in (5, 20, 50, 200):
+        for k in range(n + 1):
+            lo, hi = wilson_interval(k, n)
+            assert 0.0 <= lo <= k / n <= hi <= 1.0
+
+    # Nothing observed is not the same as impossible, and all-observed is
+    # not the same as certain -- both keep a real interval at finite n.
+    assert wilson_interval(0, 20)[1] > 0.0
+    assert wilson_interval(20, 20)[0] < 1.0
+    # The interval must actually narrow as the ensemble grows.
+    width = lambda n: (lambda b: b[1] - b[0])(wilson_interval(round(0.27 * n), n))
+    assert width(20) > width(50) > width(200)
+
+
+def test_ri_uncertain_marks_an_ensemble_that_cannot_resolve_the_threshold():
+    """The real defect behind #188: at 20 members a fraction near 0.3 could
+    not distinguish "above the alert threshold" from "we cannot tell", and
+    the banner presented it as a definite answer either way."""
+    from anemoi.inference.postprocess import wilson_interval
+
+    # 6/20 = 0.30 -- sitting exactly on the threshold, and at this ensemble
+    # size the interval spans it, so the honest answer is "cannot tell".
+    lo, hi = wilson_interval(6, 20)
+    assert lo < 0.3 <= hi, "a 6/20 ensemble cannot resolve a 0.3 threshold"
+    # A large, decisive ensemble can.
+    lo2, hi2 = wilson_interval(300, 500)
+    assert lo2 > 0.3, "300/500 is unambiguously above the threshold"
+
+
 def test_products_flag_rapid_intensification_above_the_threshold():
     products = build_products(members(wind_gain=20.0))
     assert products.rapid_intensification
+    # The point estimate always sits inside its own interval.
+    assert products.ri_probability_lo <= products.ri_probability <= products.ri_probability_hi
+    assert products.ri_uncertain == (
+        products.ri_probability_lo < 0.3 <= products.ri_probability_hi
+    )
     assert products.ri_probability > 0.3
 
 

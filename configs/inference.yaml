@@ -23,7 +23,7 @@ budgets:
     fusion:        {target: 2,  max: 4}
     diffusion:     {target: 13, max: 25}
     postprocess:   {target: 5,  max: 10}
-  # Load-shedding profile: ~10 ensemble members instead of 20-50.
+  # Load-shedding profile: ~25 ensemble members instead of 50.
   reduced:
     assembly:      {target: 8,  max: 14}
     preprocess:    {target: 12, max: 18}
@@ -33,7 +33,10 @@ budgets:
     postprocess:   {target: 4,  max: 8}
 
 ensemble:
-  members: 20
+  # Mirrors inference.scheduler.DEFAULT_ENSEMBLE_MEMBERS -- kept in sync by
+  # hand, there is no loader. Raised 20 -> 50 in #188: the member count sets
+  # the precision of every SS6.1 product, not just the RI flag.
+  members: 50
   min_members_for_ensemble_cone: 10
   # Below this fraction of the climatological radius at the longest lead, the
   # cone is drawn from climatology instead.

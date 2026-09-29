@@ -294,3 +294,98 @@ def test_calibrate_products_reports_not_enough_data_below_min_cases():
 
 def test_calibrate_products_returns_nothing_for_an_empty_corpus():
     assert calibrate_products([]) == []
+
+
+def test_a_cycle_stored_before_the_ri_interval_still_loads():
+    """#188 added ri_probability_lo/hi/ri_uncertain to the *persisted* wire
+    shape, not just the response one. Every cycle served before it is still
+    in R2 without those fields (#175), including the ones this module reads
+    back to score calibration -- so they must parse, as "not recorded",
+    rather than failing and silently dropping the system's own history.
+    """
+    import json
+
+    from anemoi.api import schemas
+
+    fresh = json.loads(_result(lead_hours=(12,)).model_dump_json())
+    legacy = json.loads(json.dumps(fresh))
+    for field in ("ri_probability_lo", "ri_probability_hi", "ri_uncertain"):
+        assert field in legacy["payload"], "the new fields should be persisted going forward"
+        del legacy["payload"][field]
+
+    parsed = schemas.CycleResult.model_validate(legacy)
+    assert parsed.payload.ri_probability_lo is None
+    assert parsed.payload.ri_probability_hi is None
+    assert parsed.payload.ri_uncertain is None
+    # The rest of the cycle is unaffected -- it is still fully scoreable.
+    assert parsed.payload.cone
+    assert parsed.payload.cycle == fresh["payload"]["cycle"]
+
+
+def test_audited_samples_record_the_ensemble_they_were_served_from():
+    """#188: raising DEFAULT_ENSEMBLE_MEMBERS 20 -> 50 makes this corpus
+    heterogeneous, and the two sizes carry different finite-member
+    containment biases (-4.9 and -2.3 points against a 67% nominal). A
+    sample that doesn't record its own ensemble size can't be told apart
+    later, so a verdict aggregated across both silently mixes them."""
+    result = _result(lead_hours=(12,))
+    truth = _fix(_TARGET + timedelta(hours=12), lat=20.05, lon=-60.05, wind_kt=62.0)
+    samples = audit_cycle(
+        "AL012026", result, {truth.valid_time: truth},
+        now=_TARGET + timedelta(hours=13), already_audited=set(),
+    )
+    assert samples
+    assert all(s.ensemble_size == result.payload.ensemble_size for s in samples)
+
+
+def test_a_sample_persisted_before_ensemble_size_was_tracked_still_loads(tmp_path):
+    """The corpus is durable (R2) and predates this field, so a missing key
+    must read as genuinely unknown rather than failing the load or being
+    assumed to be either size."""
+    import json
+
+    path = tmp_path / "calibration_samples.json"
+    legacy = {
+        "storm_id": "AL012026",
+        "label": "20260901_00Z",
+        "lead_hours": 12,
+        "cone_basis": "ensemble",
+        "cone_hit": True,
+        "intensity_hit": False,
+        "audited_at": _TARGET.isoformat(),
+    }
+    path.write_text(json.dumps([legacy]))
+
+    loaded = load_calibration_samples(path)
+    assert len(loaded) == 1
+    assert loaded[0].ensemble_size is None
+    assert loaded[0].cone_hit is True
+
+
+def test_the_report_surfaces_the_ensemble_range_behind_each_rate():
+    """Reported, not stratified: splitting a corpus this small by member
+    count would yield two 'not enough data' verdicts instead of one usable
+    number. The range is what lets a reader see the mix."""
+    def sample(size, hit):
+        return CalibrationSample(
+            storm_id="AL012026", label=f"2026090{size}_00Z", lead_hours=12,
+            cone_basis="ensemble", cone_hit=hit, intensity_hit=hit,
+            audited_at=_TARGET, ensemble_size=size,
+        )
+
+    reports = calibrate_products([sample(20, True), sample(50, False)])
+    cone = next(r for r in reports if r.quantity == "cone" and r.lead_hours == 12)
+    assert cone.ensemble_size_min == 20
+    assert cone.ensemble_size_max == 50
+    assert cone.to_dict()["ensemble_size_max"] == 50
+
+    # Unknown stays unknown -- never defaulted to a number nobody recorded.
+    legacy = CalibrationSample(
+        storm_id="AL012026", label="20260901_00Z", lead_hours=12,
+        cone_basis="ensemble", cone_hit=True, intensity_hit=True, audited_at=_TARGET,
+    )
+    only_legacy = next(
+        r for r in calibrate_products([legacy]) if r.quantity == "cone"
+    )
+    assert only_legacy.ensemble_size_min is None
+    assert only_legacy.ensemble_size_max is None

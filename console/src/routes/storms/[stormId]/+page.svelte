@@ -35,7 +35,7 @@
   // (DEFAULT_ENSEMBLE_MEMBERS). `run_cycle` only ever uses a request as a
   // cap, so anything above this was accepted and then silently reduced
   // (#187); the API now refuses it outright.
-  const MAX_MEMBERS = 20;
+  const MAX_MEMBERS = 50;
 
   let storm = $state<StormDetail | null>(null);
   let cycle = $state<CycleResult | null>(null);
@@ -297,6 +297,10 @@
         <RIFlagBanner
           flagged={cycle.payload.rapid_intensification}
           probability={cycle.payload.ri_probability}
+          lo={cycle.payload.ri_probability_lo}
+          hi={cycle.payload.ri_probability_hi}
+          uncertain={cycle.payload.ri_uncertain}
+          ensembleSize={cycle.payload.ensemble_size}
         />
       </div>
 

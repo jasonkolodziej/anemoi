@@ -97,6 +97,15 @@ class ForecastProducts:
     landfall_probability: float | None
     rapid_intensification: bool
     ri_probability: float
+    #: 95% Wilson interval on ``ri_probability`` (#188). ``ri_probability``
+    #: is a fraction of a finite ensemble, not a known probability, and the
+    #: alert threshold is a hard cut at 0.3 -- without the interval there is
+    #: no way to tell "clearly above" from "we cannot resolve this".
+    ri_probability_lo: float
+    ri_probability_hi: float
+    #: True when the interval spans ``ri_alert_threshold``, i.e. the ensemble
+    #: is too small to say which side of the line this storm is on.
+    ri_uncertain: bool
     ensemble_size: int
     degraded: bool = False
     notes: tuple[str, ...] = ()
@@ -235,6 +244,24 @@ def rapid_intensification_probability(
     return count / len(members)
 
 
+def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """95% Wilson score interval for a binomial proportion.
+
+    Wilson rather than the textbook normal approximation because the normal
+    one is worst exactly where this is used: small ``n``, and proportions
+    near 0 or 1, where it happily returns bounds outside [0, 1]. Wilson stays
+    inside the unit interval and keeps usable coverage at the ensemble sizes
+    this system actually runs.
+    """
+    if n <= 0:
+        return (0.0, 1.0)
+    p = successes / n
+    denom = 1.0 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = (z / denom) * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return (max(0.0, centre - half), min(1.0, centre + half))
+
+
 def build_products(
     members: list[EnsembleMember],
     *,
@@ -245,6 +272,9 @@ def build_products(
     """Assemble the §6.1 product suite from an ensemble."""
     cone, notes = build_cone(members)
     ri_prob = rapid_intensification_probability(members)
+    # The count back out of the fraction: `rapid_intensification_probability`
+    # returns count/len, and the interval needs the integer it came from.
+    lo, hi = wilson_interval(round(ri_prob * len(members)), len(members))
     return ForecastProducts(
         cone=cone,
         intensity_pdf=intensity_pdf(members),
@@ -253,6 +283,9 @@ def build_products(
         ),
         rapid_intensification=ri_prob >= ri_alert_threshold,
         ri_probability=ri_prob,
+        ri_probability_lo=lo,
+        ri_probability_hi=hi,
+        ri_uncertain=lo < ri_alert_threshold <= hi,
         ensemble_size=len(members),
         degraded=degraded or any("climatological" in n for n in notes),
         notes=notes,
