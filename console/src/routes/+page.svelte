@@ -23,8 +23,10 @@
   // its real implementation), so re-deriving `today` fresh on every poll
   // is what actually fixes day rollover -- not a timer that just re-asks
   // for the same stale date forever.
-  async function load() {
-    setWaiterLoading(true);
+  // See the storm page's own `load` -- a background poll must refresh
+  // silently rather than raise the full-page waiter every minute (#185).
+  async function load({ background = false }: { background?: boolean } = {}) {
+    if (!background) setWaiterLoading(true);
     try {
       const today = cycleLabel(new Date()).slice(0, 8); // YYYYMMDD
       const isoDate = `${today.slice(0, 4)}-${today.slice(4, 6)}-${today.slice(6, 8)}`;
@@ -40,13 +42,13 @@
     } catch (e) {
       error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
     } finally {
-      setWaiterLoading(false);
+      if (!background) setWaiterLoading(false);
     }
   }
 
   onMount(() => {
     load();
-    return pollWhileVisible(load, 60_000);
+    return pollWhileVisible(() => load({ background: true }), 60_000);
   });
 </script>
 

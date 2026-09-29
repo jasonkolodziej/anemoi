@@ -95,6 +95,20 @@
       color: "var(--color-action)",
     },
   };
+
+  // The first lead sits exactly on the axis origin, so its centred tick
+  // label ("12h") ran underneath the y-axis's own "0%". Chart padding
+  // can't separate them -- it moves the plot and the y labels together --
+  // so the domain itself carries a small pad, derived from the real lead
+  // range rather than a magic constant.
+  const calibrationXDomain = $derived.by(() => {
+    if (calibrationByLead.length === 0) return undefined;
+    const leads = calibrationByLead.map((d) => d.lead_hours);
+    const lo = Math.min(...leads);
+    const hi = Math.max(...leads);
+    const pad = Math.max((hi - lo) * 0.04, 1);
+    return [lo - pad, hi + pad] as [number, number];
+  });
 </script>
 
 <div class="mx-auto max-w-5xl px-6 py-8">
@@ -163,7 +177,9 @@
               data={calibrationByLead}
               x="lead_hours"
               yDomain={[0, 1]}
+              xDomain={calibrationXDomain}
               seriesLayout="overlap"
+              padding={{ left: 56, right: 20, top: 8, bottom: 32 }}
               series={[
                 {
                   key: "cone",
@@ -268,11 +284,18 @@
                   class="mt-3 w-full"
                   style={`height:${Math.max(140, report.features.length * 26)}px`}
                 >
+                  <!-- 84px reserved for the y-axis left the longest real
+                       feature names clipped against the card edge
+                       ("shear_magnitude_kt" rendered as "ar_magnitude_kt",
+                       "potential_intensity_kt" as "ntial_intensity_kt").
+                       Sized against the longest name the drift monitor
+                       actually reports, and the other three sides give the
+                       bars and tick labels room off the card border. -->
                   <BarChart
                     data={report.features}
                     orientation="horizontal"
                     y="name"
-                    padding={{ left: 84 }}
+                    padding={{ left: 152, right: 16, top: 4, bottom: 24 }}
                     c={(f: (typeof report.features)[number]) =>
                       f.drifted ? "drifted" : "stable"}
                     cDomain={["stable", "drifted"]}

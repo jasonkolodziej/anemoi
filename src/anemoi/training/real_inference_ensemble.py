@@ -18,6 +18,7 @@ this raises rather than fabricating spread.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,6 +26,8 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from ..data.besttrack import Fix, Track
     from ..inference.cycle import DeterministicForecast
     from ..inference.postprocess import EnsembleMember
@@ -34,6 +37,25 @@ if TYPE_CHECKING:
 
 class InferenceEnsembleError(RuntimeError):
     pass
+
+
+def cycle_sample_seed(storm_id: str, target_time: datetime) -> int:
+    """A stable sampling seed for one real cycle (#188).
+
+    A cycle label names a fixed storm, a fixed synoptic time and a fixed
+    input fix -- nothing about it is stochastic, so asking for it twice
+    must return the same forecast. Derived rather than configured: there
+    is no operational knob here to get wrong, and two different cycles
+    still get independent noise.
+
+    `hashlib`, not the builtin `hash()`: Python salts string hashing per
+    process (PYTHONHASHSEED), so `hash()` would be stable *within* one
+    container and differ across restarts and across replicas -- which is
+    exactly the reproducibility this is supposed to provide. Truncated to
+    63 bits so the value stays a positive `torch.manual_seed` argument.
+    """
+    digest = hashlib.sha256(f"{storm_id}:{target_time.isoformat()}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") >> 1
 
 
 def _encode_group1(name: str, model, raw, stats: dict) -> np.ndarray | None:
@@ -233,7 +255,19 @@ def build_real_ensemble_fn(
         z_z = (z - stats["z_mean"]) / stats["z_std"]
         with torch.no_grad():
             z_t = torch.as_tensor(z_z[None], dtype=torch.float32)
-            samples_z = model.sample(z_t, n_members=n_members).cpu().numpy()
+            # Seeded from the cycle's own identity, not left to torch's
+            # global RNG (#188): unseeded, every re-run of one cycle was a
+            # fresh draw, and the RI flag -- a hard threshold at 0.3 on a
+            # 20-member fraction -- flipped between runs minutes apart.
+            # Every other real caller of `sample()` already passes one
+            # (`spread_backtest`, `real_run_diffusion`); this, the path
+            # actually serving forecasts, was the one that didn't.
+            generator = torch.Generator(device=z_t.device).manual_seed(
+                cycle_sample_seed(track.storm_id, deterministic.target_time)
+            )
+            samples_z = (
+                model.sample(z_t, n_members=n_members, generator=generator).cpu().numpy()
+            )
 
         samples_disp = samples_z * stats["y_std"] + stats["y_mean"]
         lead_hours = spec.lead_hours

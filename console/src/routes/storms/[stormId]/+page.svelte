@@ -22,6 +22,7 @@
   import FlagsList from "$lib/components/anemoi/FlagsList.svelte";
   import CycleDateTimePicker from "$lib/components/anemoi/CycleDateTimePicker.svelte";
   import {
+    cn,
     cycleLabel,
     floorSynoptic,
     formatLatLon,
@@ -30,12 +31,24 @@
 
   const stormId = $derived(page.params.stormId!);
 
+  // The real full ensemble `inference.scheduler` runs
+  // (DEFAULT_ENSEMBLE_MEMBERS). `run_cycle` only ever uses a request as a
+  // cap, so anything above this was accepted and then silently reduced
+  // (#187); the API now refuses it outright.
+  const MAX_MEMBERS = 20;
+
   let storm = $state<StormDetail | null>(null);
   let cycle = $state<CycleResult | null>(null);
+  // The cycle the user is deliberately looking at -- one they picked from
+  // Past cycles, or one they just ran. `null` means "follow the newest",
+  // which is the right default on first open. Without this the 60s poll
+  // pulled the view back to the newest label every tick, usually landing
+  // on a climatology-fallback cycle the user hadn't asked to see (#186).
+  let viewedLabel = $state<string | null>(null);
   let error = $state<string | null>(null);
   let running = $state(false);
   let cycleInput = $state(cycleLabel(floorSynoptic(new Date())));
-  let members = $state(20);
+  let members = $state(MAX_MEMBERS);
   let worstCase = $state(false);
   // Optional -- landfall_probability is null unless a coastal reference
   // point is supplied (postprocess.landfall_probability needs one to
@@ -52,7 +65,19 @@
   // isolates the same model on both.
   let hoveredModel = $state<string | null>(null);
 
-  async function load() {
+  const latestLabel = $derived(
+    storm && storm.cycles.length > 0
+      ? [...storm.cycles].sort().at(-1)!
+      : null,
+  );
+  const viewingOlderCycle = $derived(
+    viewedLabel !== null && latestLabel !== null && viewedLabel !== latestLabel,
+  );
+
+  // `background` is a real distinction, not a style preference: a poll the
+  // user never asked for must not raise the full-page waiter over the page
+  // they are reading, once a minute, blocking clicks while it shows (#185).
+  async function load({ background = false }: { background?: boolean } = {}) {
     // A periodic poll must not clobber a cycle the user just ran, or a
     // fetch mid-flight from the *previous* poll landing after a newer
     // one started -- real staleness (this page never refreshed after
@@ -60,20 +85,31 @@
     // one tick while a run is genuinely in progress.
     if (running) return;
     error = null;
-    setWaiterLoading(true);
+    if (!background) setWaiterLoading(true);
     try {
       storm = await getStorm(stormId);
-      if (storm.cycles.length > 0) {
-        const last = [...storm.cycles].sort().at(-1)!;
-        cycle = await getCycle(stormId, last);
-      }
+      // Refresh whichever cycle is actually being viewed. Only follow the
+      // newest label while the user hasn't pinned one (#186).
+      const label = viewedLabel ?? latestLabel;
+      if (label) cycle = await getCycle(stormId, label);
       getSkew()
         .then((r) => (skew = r))
         .catch(() => {});
     } catch (e) {
       error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
     } finally {
-      setWaiterLoading(false);
+      if (!background) setWaiterLoading(false);
+    }
+  }
+
+  async function viewCycle(label: string | null) {
+    viewedLabel = label;
+    const target = label ?? latestLabel;
+    if (!target) return;
+    try {
+      cycle = await getCycle(stormId, target);
+    } catch (e) {
+      error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
     }
   }
 
@@ -92,7 +128,7 @@
     // reload to show that. Deliberately does not touch cycleInput/
     // members/coastlineLat/coastlineLon -- a poll must never overwrite
     // an in-progress form edit.
-    return pollWhileVisible(load, 60_000);
+    return pollWhileVisible(() => load({ background: true }), 60_000);
   });
 
   async function handleRunCycle() {
@@ -101,7 +137,11 @@
     try {
       const lat = coastlineLat.trim() === "" ? null : Number(coastlineLat);
       const lon = coastlineLon.trim() === "" ? null : Number(coastlineLon);
-      cycle = await runCycle(stormId, {
+      // `max` on a number input bounds the spinner, not what can be typed
+      // or pasted -- clamp for real, so the request can't be refused by
+      // the API's own bound (#187).
+      members = Math.min(Math.max(Math.round(members), 1), MAX_MEMBERS);
+      const result = await runCycle(stormId, {
         cycle: cycleInput,
         members,
         worst_case: worstCase,
@@ -112,6 +152,13 @@
           ? { coastline_lat: lat, coastline_lon: lon }
           : {}),
       });
+      // A cycle the user deliberately ran is the one they want to see,
+      // even when a newer label already exists (#186) -- but only once it
+      // exists. Pinning before the await meant a failed run left the view
+      // pinned to a label that was never created, and every 60s poll then
+      // 404'd on it and rewrote `error` (Copilot review, #190).
+      cycle = result;
+      viewedLabel = cycleInput;
       storm = await getStorm(stormId);
     } catch (e) {
       error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
@@ -195,14 +242,19 @@
         <div>
           <label
             for="members-input"
-            class="mb-1 block text-[11px] text-text-faint">members</label
+            class="mb-1 block text-[11px] text-text-faint"
+            >members (max {MAX_MEMBERS})</label
           >
+          <!-- Capped at the real full ensemble the scheduler runs, not an
+               arbitrary UI bound: `run_cycle` only ever applies this as a
+               cap, so a larger number was accepted and then silently
+               reduced to 20 (#187). The API refuses it now too. -->
           <input
             id="members-input"
             type="number"
             bind:value={members}
             min="1"
-            max="100"
+            max={MAX_MEMBERS}
             class="font-data w-20 rounded-md border border-border-strong bg-bg px-2.5 py-1.5 text-xs text-text"
           />
         </div>
@@ -428,14 +480,35 @@
 
     {#if storm.cycles.length > 0}
       <section class="mt-8">
-        <h2 class="font-display text-sm font-semibold text-text">
-          Past cycles
-        </h2>
+        <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h2 class="font-display text-sm font-semibold text-text">
+            Past cycles
+          </h2>
+          {#if viewingOlderCycle}
+            <p class="text-[11px] text-text-muted">
+              Viewing an older cycle — background refresh won't move you.
+              <button
+                class="text-fusion underline underline-offset-2 hover:text-text"
+                onclick={() => viewCycle(null)}
+              >
+                Back to latest
+              </button>
+            </p>
+          {/if}
+        </div>
         <div class="mt-2 flex flex-wrap gap-2">
           {#each [...storm.cycles].sort().reverse() as label (label)}
             <button
-              class="font-data rounded-sm border border-border-strong px-2 py-1 text-xs text-text-muted hover:bg-surface-raised hover:text-text"
-              onclick={async () => (cycle = await getCycle(stormId, label))}
+              class={cn(
+                "font-data rounded-sm border px-2 py-1 text-xs",
+                label === (viewedLabel ?? latestLabel)
+                  ? "border-fusion bg-surface-raised text-text"
+                  : "border-border-strong text-text-muted hover:bg-surface-raised hover:text-text",
+              )}
+              aria-current={label === (viewedLabel ?? latestLabel)
+                ? "true"
+                : undefined}
+              onclick={() => viewCycle(label)}
             >
               {label}
             </button>

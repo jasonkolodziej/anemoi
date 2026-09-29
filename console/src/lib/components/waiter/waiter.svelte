@@ -61,11 +61,21 @@
   {@render children?.()}
 
   {#if isBusy}
+    <!-- The dim is what makes this read as a loading state rather than a
+         rendering glitch: before it, "Please wait..." and the spinner
+         floated over a fully-lit map with nothing behind them (#185).
+         Translucent, so the page underneath stays recognisable -- you can
+         see what is being loaded, you just can't mistake it for ready.
+         `z-50` puts it above the sticky mobile header (`z-30`); an overlay
+         that renders *under* page chrome is worse than none. Clicks are
+         blocked deliberately: while this is up the page is mid-fetch and
+         acting on it would race the response. -->
     <div
       class={cn(
+        "bg-bg/70 backdrop-blur-[2px] motion-safe:transition-opacity",
         fullPage
-          ? "fixed top-0 left-0 flex h-full w-full flex-col items-center justify-center"
-          : "absolute inset-0 flex items-center justify-center",
+          ? "fixed top-0 left-0 z-50 flex h-full w-full flex-col items-center justify-center"
+          : "absolute inset-0 z-50 flex flex-col items-center justify-center",
       )}
     >
       <!-- <SpinLine

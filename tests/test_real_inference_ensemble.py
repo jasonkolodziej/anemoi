@@ -219,6 +219,71 @@ def test_build_real_ensemble_fn_produces_real_finite_members(tmp_path):
 
 
 @pytest.mark.torch
+def test_re_running_one_cycle_returns_the_identical_real_ensemble(tmp_path):
+    """#188: the served sampler drew from torch's global RNG, so asking
+    for the same cycle twice returned two different forecasts -- enough
+    to flip the RI flag (a hard 0.3 threshold on a 20-member fraction)
+    between runs a minute apart. A cycle label names a fixed storm, a
+    fixed synoptic time and a fixed input fix; re-running it must
+    reproduce it exactly.
+
+    Deliberately perturbs the global RNG between the two calls: that is
+    the real failure mode, and a test that didn't would pass even with
+    the seeding removed again.
+    """
+    import torch
+
+    from anemoi.inference.scheduler import CyclePlan
+
+    track = make_track("AL011985", n=SEQUENCE_LENGTH + 5)
+    current = track.fixes[-1]
+    cache_current_fix(tmp_path, track, current)
+
+    registry = ModelRegistry(tmp_path / "registry")
+    store = _store()
+    _register_all_five_and_diffusion(registry, store, tmp_path)
+
+    deterministic_fn = build_real_deterministic_fn(track, registry, store, tmp_path)
+    ensemble_fn = build_real_ensemble_fn(track, registry, store, tmp_path)
+
+    plan = CyclePlan(
+        target_time=current.valid_time, cycle_start=current.valid_time,
+        stages=(), inputs=None, vitals_estimated=False,
+    )
+    deterministic = deterministic_fn(plan, current)
+
+    def _flat(members):
+        return np.concatenate(
+            [np.concatenate([m.lats, m.lons, m.winds_kt]) for m in members]
+        )
+
+    first = _flat(ensemble_fn(deterministic, 6))
+    torch.randn(97)
+    second = _flat(ensemble_fn(deterministic, 6))
+
+    assert np.array_equal(first, second)
+
+
+def test_cycle_sample_seed_is_stable_and_cycle_specific():
+    """Stable across processes (the whole point -- a container restart or
+    a second replica must reproduce the same cycle), and independent
+    between cycles so two of them don't share a noise path."""
+    from anemoi.training.real_inference_ensemble import cycle_sample_seed
+
+    t = datetime(2026, 9, 29, 0, tzinfo=UTC)
+    assert cycle_sample_seed("EP172026", t) == cycle_sample_seed("EP172026", t)
+    # A known-good literal, not a re-derivation: this pins the seed against
+    # a future refactor of the hash that would silently renumber every real
+    # cycle's ensemble.
+    assert cycle_sample_seed("EP172026", t) == 3218785750195031411
+    assert cycle_sample_seed("EP172026", t) != cycle_sample_seed("AL082026", t)
+    assert cycle_sample_seed("EP172026", t) != cycle_sample_seed(
+        "EP172026", t + timedelta(hours=6)
+    )
+    assert 0 <= cycle_sample_seed("EP172026", t) < 2**63
+
+
+@pytest.mark.torch
 def test_build_real_ensemble_fn_refuses_a_mismatched_latent_signature(tmp_path):
     """The real bug found while building the #10 backtest: diffusion had
     no equivalent of `_real_fusion_forecast`'s consistency check at all,
