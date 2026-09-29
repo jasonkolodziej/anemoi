@@ -154,6 +154,39 @@ test('a background poll leaves the cycle the user selected in place', async ({ p
 	);
 });
 
+test('a failed run does not pin the view to a cycle that was never created', async ({ page }) => {
+	// Caught by Copilot review on #190: `viewedLabel` was set before the
+	// POST was awaited, so a failed run pinned the view to a label with no
+	// cycle behind it -- and every 60s poll then 404'd on that label and
+	// overwrote `error`, once a minute, forever.
+	await page.goto('/');
+	await page.locator('a[href^="/storms/"]').first().click();
+	await page.waitForSelector('#cycle-input');
+
+	await page.route('**/v1/storms/*/cycles', (route) =>
+		route.request().method() === 'POST'
+			? route.fulfill({ status: 500, body: '{"detail":"boom"}' })
+			: route.continue(),
+	);
+	await page.locator('#cycle-input').fill('20260806_18Z');
+	await page.getByRole('button', { name: /Run cycle/i }).click();
+	await expect(page.getByRole('button', { name: 'Running…' })).toBeHidden();
+
+	// The run failed, so nothing is pinned -- the poll follows the newest
+	// real cycle instead of chasing a label that does not exist.
+	await expect(page.getByText(/Viewing an older cycle/)).toBeHidden();
+
+	let notFound = 0;
+	page.on('response', (r) => {
+		if (r.status() === 404 && r.url().includes('/cycles/')) notFound++;
+	});
+	await page.clock.install({ time: new Date() });
+	await page.clock.fastForward('02:01');
+	await page.waitForTimeout(500);
+
+	expect(notFound).toBe(0);
+});
+
 test('a hidden tab stops polling, and refreshes as soon as it is visible again', async ({ page }) => {
 	// Every request wakes the billed API container and restarts its 5-minute
 	// sleep timer, so a forgotten background tab polling every minute would

@@ -141,10 +141,7 @@
       // or pasted -- clamp for real, so the request can't be refused by
       // the API's own bound (#187).
       members = Math.min(Math.max(Math.round(members), 1), MAX_MEMBERS);
-      // A cycle the user deliberately ran is the one they want to see,
-      // even when a newer label already exists (#186).
-      viewedLabel = cycleInput;
-      cycle = await runCycle(stormId, {
+      const result = await runCycle(stormId, {
         cycle: cycleInput,
         members,
         worst_case: worstCase,
@@ -155,6 +152,13 @@
           ? { coastline_lat: lat, coastline_lon: lon }
           : {}),
       });
+      // A cycle the user deliberately ran is the one they want to see,
+      // even when a newer label already exists (#186) -- but only once it
+      // exists. Pinning before the await meant a failed run left the view
+      // pinned to a label that was never created, and every 60s poll then
+      // 404'd on it and rewrote `error` (Copilot review, #190).
+      cycle = result;
+      viewedLabel = cycleInput;
       storm = await getStorm(stormId);
     } catch (e) {
       error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
