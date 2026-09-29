@@ -188,6 +188,8 @@ def calibration_out(report: LeadProductCalibration) -> s.LeadCalibrationOut:
         ),
         nominal_rate=report.nominal_rate,
         verdict=report.verdict,
+        ensemble_size_min=report.ensemble_size_min,
+        ensemble_size_max=report.ensemble_size_max,
     )
 
 

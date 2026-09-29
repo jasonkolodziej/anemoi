@@ -101,6 +101,16 @@ class CalibrationSample:
     cone_hit: bool | None
     intensity_hit: bool | None
     audited_at: datetime
+    #: Members the audited cycle actually ran (#188). The cone radius is a
+    #: percentile of member distance around the ensemble *mean*, so the
+    #: measurement itself carries a finite-member bias: a perfectly
+    #: calibrated ensemble scores ~62% containment at 20 members against a
+    #: 67% nominal, ~65% at 50. Raising `DEFAULT_ENSEMBLE_MEMBERS` 20 -> 50
+    #: therefore makes this corpus heterogeneous, and a verdict aggregated
+    #: blindly across both would mix two different biases. ``None`` on
+    #: samples recorded before this was tracked -- genuinely unknown, not
+    #: assumed to be either.
+    ensemble_size: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +124,16 @@ class LeadProductCalibration:
     containment_rate: float | None
     nominal_rate: float
     verdict: str  # "too narrow" / "too wide" / "calibrated" / "not enough data"
+    #: Smallest and largest ensemble the aggregated samples were served
+    #: from, or ``None`` when no sample recorded it. Reported rather than
+    #: stratified on deliberately: splitting a corpus this small by member
+    #: count would produce two "not enough data" verdicts instead of one
+    #: usable number. Surfacing the range lets a reader see the mix -- a
+    #: rate spanning 20- and 50-member cycles carries two different
+    #: finite-member biases (-4.9 and -2.3 points), so a verdict near the
+    #: margin means less than it appears to.
+    ensemble_size_min: int | None = None
+    ensemble_size_max: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -123,6 +143,8 @@ class LeadProductCalibration:
             "containment_rate": self.containment_rate,
             "nominal_rate": self.nominal_rate,
             "verdict": self.verdict,
+            "ensemble_size_min": self.ensemble_size_min,
+            "ensemble_size_max": self.ensemble_size_max,
         }
 
 
@@ -135,6 +157,7 @@ def _sample_to_dict(s: CalibrationSample) -> dict[str, Any]:
         "cone_hit": s.cone_hit,
         "intensity_hit": s.intensity_hit,
         "audited_at": s.audited_at.isoformat(),
+        "ensemble_size": s.ensemble_size,
     }
 
 
@@ -147,6 +170,9 @@ def _sample_from_dict(d: dict[str, Any]) -> CalibrationSample:
         cone_hit=d["cone_hit"],
         intensity_hit=d["intensity_hit"],
         audited_at=datetime.fromisoformat(d["audited_at"]),
+        # .get: samples persisted before this was tracked have no such key,
+        # and the corpus is durable (R2) -- it must keep loading.
+        ensemble_size=d.get("ensemble_size"),
     )
 
 
@@ -289,6 +315,7 @@ def audit_cycle(
                 cone_hit=cone_hit,
                 intensity_hit=intensity_hit,
                 audited_at=now,
+                ensemble_size=result.payload.ensemble_size,
             )
         )
     return samples
@@ -356,12 +383,18 @@ def calibrate_products(samples: list[CalibrationSample]) -> list[LeadProductCali
     reporting math `api.real_state.RealState.calibration_report` calls
     against whatever real corpus is currently loaded."""
     by_lead: dict[int, dict[str, list[bool]]] = {}
+    # Tracked per (lead, quantity), not globally: a sample only contributes
+    # to the quantity it actually scored, so the member range reported
+    # alongside a rate must be the range of the cycles behind *that* rate.
+    sizes: dict[tuple[int, str], list[int]] = {}
     for s in samples:
         bucket = by_lead.setdefault(s.lead_hours, {"cone": [], "intensity": []})
-        if s.cone_hit is not None:
-            bucket["cone"].append(s.cone_hit)
-        if s.intensity_hit is not None:
-            bucket["intensity"].append(s.intensity_hit)
+        for quantity, hit in (("cone", s.cone_hit), ("intensity", s.intensity_hit)):
+            if hit is None:
+                continue
+            bucket[quantity].append(hit)
+            if s.ensemble_size is not None:
+                sizes.setdefault((s.lead_hours, quantity), []).append(s.ensemble_size)
 
     reports: list[LeadProductCalibration] = []
     for lead in sorted(by_lead):
@@ -369,6 +402,7 @@ def calibrate_products(samples: list[CalibrationSample]) -> list[LeadProductCali
             hits = by_lead[lead][quantity]
             n = len(hits)
             rate = float(sum(hits)) / n if n else None
+            seen = sizes.get((lead, quantity), [])
             reports.append(
                 LeadProductCalibration(
                     lead_hours=lead,
@@ -377,6 +411,8 @@ def calibrate_products(samples: list[CalibrationSample]) -> list[LeadProductCali
                     containment_rate=rate,
                     nominal_rate=nominal,
                     verdict=_verdict(rate, nominal, n),
+                    ensemble_size_min=min(seen) if seen else None,
+                    ensemble_size_max=max(seen) if seen else None,
                 )
             )
     return reports

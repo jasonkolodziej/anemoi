@@ -300,6 +300,12 @@ class LeadCalibrationOut(BaseModel):
     n_cases: int
     containment_rate: float | None
     nominal_rate: float
+    #: Ensemble-size range behind this rate (#188). Raising the default
+    #: 20 -> 50 makes the corpus heterogeneous, and the two carry different
+    #: finite-member containment biases, so a rate aggregated across both
+    #: means less near the verdict margin than one from a single size.
+    ensemble_size_min: int | None = None
+    ensemble_size_max: int | None = None
     verdict: str = Field(
         description="'too narrow', 'too wide', 'calibrated', or 'not enough data'"
     )
