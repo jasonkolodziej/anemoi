@@ -13,6 +13,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..inference.scheduler import DEFAULT_ENSEMBLE_MEMBERS
+
 
 class WindGodOut(BaseModel):
     slug: str
@@ -192,7 +194,19 @@ class RunCycleRequest(BaseModel):
     lat: float | None = Field(default=None, description="Override fix latitude")
     lon: float | None = Field(default=None, description="Override fix longitude")
     wind_kt: float | None = Field(default=None, description="Override fix max wind (kt)")
-    members: int = Field(default=20, ge=1, le=100)
+    members: int = Field(
+        default=DEFAULT_ENSEMBLE_MEMBERS,
+        ge=1,
+        le=DEFAULT_ENSEMBLE_MEMBERS,
+        description=(
+            "Ensemble members to request, at most the full ensemble the "
+            f"scheduler runs ({DEFAULT_ENSEMBLE_MEMBERS}). `run_cycle` only ever "
+            "applies this as a cap, never as a way to ask for more, so a larger "
+            "number used to be accepted here and then silently reduced (#187) -- "
+            "it is refused instead. Under load shedding the served count can "
+            "still be lower than this; that case is flagged on the cycle itself."
+        ),
+    )
     worst_case: bool = False
     coastline_lat: float | None = None
     coastline_lon: float | None = None

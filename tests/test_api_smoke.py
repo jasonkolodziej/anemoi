@@ -98,6 +98,38 @@ def test_unknown_storm_is_404(client):
     assert r.status_code == 404
 
 
+def test_more_members_than_the_ensemble_runs_is_refused_not_silently_capped(client):
+    """#187: `members` advertised `le=100`, and `run_cycle` then applied it
+    as a cap (`min(plan.requested_ensemble_members, requested)`), so asking
+    for 30 returned a 20-member cycle with nothing saying so -- the console
+    still showing 30 in the form beside `ensemble: 20 members`.
+
+    Refused rather than flagged: `build_products(degraded=bool(flags))`
+    means any flag marks the whole cycle degraded, and a normal full
+    ensemble is not a degraded cycle just because someone asked for more
+    than exists.
+    """
+    from anemoi.inference.scheduler import DEFAULT_ENSEMBLE_MEMBERS
+
+    storm_id = client.get("/v1/storms").json()[0]["storm_id"]
+
+    r = client.post(
+        f"/v1/storms/{storm_id}/cycles",
+        json={"cycle": "20260806_06Z", "members": DEFAULT_ENSEMBLE_MEMBERS + 10},
+    )
+    assert r.status_code == 422
+
+    # The real full ensemble is still accepted, and so is asking for fewer
+    # (a genuine caller-side reduction, which run_cycle honours exactly).
+    for n in (DEFAULT_ENSEMBLE_MEMBERS, 5):
+        r = client.post(
+            f"/v1/storms/{storm_id}/cycles",
+            json={"cycle": "20260806_06Z", "members": n},
+        )
+        assert r.status_code == 201
+        assert r.json()["payload"]["ensemble_size"] == n
+
+
 def test_run_cycle_matches_dissemination_shape(client):
     r = client.get("/v1/storms")
     storm_id = r.json()[0]["storm_id"]
