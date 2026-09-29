@@ -294,3 +294,29 @@ def test_calibrate_products_reports_not_enough_data_below_min_cases():
 
 def test_calibrate_products_returns_nothing_for_an_empty_corpus():
     assert calibrate_products([]) == []
+
+
+def test_a_cycle_stored_before_the_ri_interval_still_loads():
+    """#188 added ri_probability_lo/hi/ri_uncertain to the *persisted* wire
+    shape, not just the response one. Every cycle served before it is still
+    in R2 without those fields (#175), including the ones this module reads
+    back to score calibration -- so they must parse, as "not recorded",
+    rather than failing and silently dropping the system's own history.
+    """
+    import json
+
+    from anemoi.api import schemas
+
+    fresh = json.loads(_result(lead_hours=(12,)).model_dump_json())
+    legacy = json.loads(json.dumps(fresh))
+    for field in ("ri_probability_lo", "ri_probability_hi", "ri_uncertain"):
+        assert field in legacy["payload"], "the new fields should be persisted going forward"
+        del legacy["payload"][field]
+
+    parsed = schemas.CycleResult.model_validate(legacy)
+    assert parsed.payload.ri_probability_lo is None
+    assert parsed.payload.ri_probability_hi is None
+    assert parsed.payload.ri_uncertain is None
+    # The rest of the cycle is unaffected -- it is still fully scoreable.
+    assert parsed.payload.cone
+    assert parsed.payload.cycle == fresh["payload"]["cycle"]

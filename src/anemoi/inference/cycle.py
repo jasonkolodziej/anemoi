@@ -115,6 +115,9 @@ class CycleOutput:
             "ensemble_size": self.products.ensemble_size,
             "rapid_intensification": self.products.rapid_intensification,
             "ri_probability": round(self.products.ri_probability, 3),
+            "ri_probability_lo": round(self.products.ri_probability_lo, 3),
+            "ri_probability_hi": round(self.products.ri_probability_hi, 3),
+            "ri_uncertain": self.products.ri_uncertain,
             "cone": [
                 {
                     "lead_hours": c.lead_hours,

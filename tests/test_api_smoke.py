@@ -142,8 +142,16 @@ def test_run_cycle_matches_dissemination_shape(client):
     assert set(payload) == {
         "cycle", "issued_at", "advisory_deadline", "nwp_cycle_lag_hours",
         "vitals", "ensemble_size", "rapid_intensification", "ri_probability",
+        "ri_probability_lo", "ri_probability_hi", "ri_uncertain",
         "cone", "flags", "coastline_lat", "coastline_lon",
     }
+    # The RI point estimate must sit inside its own interval, and the
+    # "can't tell" flag must agree with where the interval falls relative
+    # to the 0.3 alert threshold (#188).
+    assert payload["ri_probability_lo"] <= payload["ri_probability"] <= payload["ri_probability_hi"]
+    assert payload["ri_uncertain"] == (
+        payload["ri_probability_lo"] < 0.3 <= payload["ri_probability_hi"]
+    )
     # No coastline was requested -- both must be null, not silently
     # defaulted to something that would render a fake landfall marker.
     assert payload["coastline_lat"] is None

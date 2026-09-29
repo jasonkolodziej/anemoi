@@ -97,6 +97,20 @@ class CyclePayload(BaseModel):
     ensemble_size: int
     rapid_intensification: bool
     ri_probability: float
+    #: 95% Wilson bounds on `ri_probability`, and whether they straddle the
+    #: 0.3 alert threshold (#188). `ri_probability` is a fraction of a finite
+    #: ensemble, so a bare point estimate cannot distinguish "clearly above
+    #: the threshold" from "too few members to tell".
+    #:
+    #: Optional because this is a *persisted* wire shape, not just a response
+    #: one: `api.cycle_store` writes `CycleResult` JSON to R2 (#175), so every
+    #: cycle served before #188 is still sitting there without these fields --
+    #: including the ones `monitoring.calibration_audit` reads back. `None`
+    #: means "this cycle predates the interval", which is true, rather than
+    #: failing to parse its own history.
+    ri_probability_lo: float | None = None
+    ri_probability_hi: float | None = None
+    ri_uncertain: bool | None = None
     cone: list[ConeSegmentOut]
     flags: list[str]
     #: The real coastal reference point `landfall_probability` was computed

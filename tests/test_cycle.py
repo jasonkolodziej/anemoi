@@ -18,7 +18,11 @@ from anemoi.inference.cycle import (
     run_cycle,
 )
 from anemoi.inference.postprocess import EnsembleMember
-from anemoi.inference.scheduler import plan_cycle
+from anemoi.inference.scheduler import (
+    DEFAULT_ENSEMBLE_MEMBERS,
+    REDUCED_ENSEMBLE_MEMBERS,
+    plan_cycle,
+)
 
 T = datetime(2026, 8, 6, 6, tzinfo=UTC)
 LEADS = (12, 24, 36, 48, 72, 96, 120)
@@ -48,7 +52,7 @@ def deterministic_fn(plan, fix):
     )
 
 
-def good_ensemble(det, n_members=20):
+def good_ensemble(det, n_members=DEFAULT_ENSEMBLE_MEMBERS):
     """A credibly-dispersed ensemble: spread grows with lead time."""
     rng = np.random.default_rng(0)
     growth = 1.0 + np.arange(len(LEADS), dtype=float)
@@ -68,7 +72,7 @@ def test_nominal_cycle_produces_products_before_the_advisory():
     plan = plan_cycle(T, LatencyOracle())
     out = run_cycle(plan, make_fix(), deterministic_fn, good_ensemble)
     assert out.on_time
-    assert out.products.ensemble_size == 20
+    assert out.products.ensemble_size == DEFAULT_ENSEMBLE_MEMBERS
     assert not out.flags
 
 
@@ -90,7 +94,7 @@ def test_diffusion_crash_falls_back_to_a_climatological_ensemble():
 
     plan = plan_cycle(T, LatencyOracle())
     out = run_cycle(plan, make_fix(), deterministic_fn, crashing)
-    assert out.products.ensemble_size == 20
+    assert out.products.ensemble_size == DEFAULT_ENSEMBLE_MEMBERS
     assert any(f.startswith("spread_fallback") for f in out.flags)
     assert out.degraded
 
@@ -108,11 +112,11 @@ def test_load_shed_plan_requests_the_reduced_member_count():
     oracle.set_arrival("besttrack_working", T, T + timedelta(hours=3))
     plan = plan_cycle(T, oracle)
     assert plan.load_shed
-    assert plan.requested_ensemble_members == 10
+    assert plan.requested_ensemble_members == REDUCED_ENSEMBLE_MEMBERS
 
     out = run_cycle(plan, make_fix(TrackQuality.ESTIMATED), deterministic_fn, good_ensemble)
-    assert out.products.ensemble_size == 10
-    assert "load_shed:members=10" in out.flags
+    assert out.products.ensemble_size == REDUCED_ENSEMBLE_MEMBERS
+    assert f"load_shed:members={REDUCED_ENSEMBLE_MEMBERS}" in out.flags
     assert out.degraded
 
 
@@ -127,20 +131,20 @@ def test_load_shed_also_reduces_the_climatological_fallback():
     plan = plan_cycle(T, oracle)
 
     out = run_cycle(plan, make_fix(TrackQuality.ESTIMATED), deterministic_fn, crashing)
-    assert out.products.ensemble_size == 10
+    assert out.products.ensemble_size == REDUCED_ENSEMBLE_MEMBERS
     assert any(f.startswith("spread_fallback") for f in out.flags)
 
 
 def test_nominal_plan_does_not_flag_load_shed():
     plan = plan_cycle(T, LatencyOracle())
     out = run_cycle(plan, make_fix(), deterministic_fn, good_ensemble)
-    assert plan.requested_ensemble_members == 20
+    assert plan.requested_ensemble_members == DEFAULT_ENSEMBLE_MEMBERS
     assert not any(f.startswith("load_shed") for f in out.flags)
 
 
 def test_caller_requested_members_is_honored_on_the_happy_path():
     plan = plan_cycle(T, LatencyOracle())
-    assert plan.requested_ensemble_members == 20
+    assert plan.requested_ensemble_members == DEFAULT_ENSEMBLE_MEMBERS
     out = run_cycle(plan, make_fix(), deterministic_fn, good_ensemble, requested_members=10)
     assert out.products.ensemble_size == 10
 
@@ -161,7 +165,7 @@ def test_caller_requested_members_is_honored_by_the_climatological_fallback():
         raise RuntimeError("CUDA out of memory")
 
     plan = plan_cycle(T, LatencyOracle())
-    assert plan.requested_ensemble_members == 20
+    assert plan.requested_ensemble_members == DEFAULT_ENSEMBLE_MEMBERS
     out = run_cycle(plan, make_fix(), deterministic_fn, crashing, requested_members=10)
     assert out.products.ensemble_size == 10
     assert any(f.startswith("spread_fallback") for f in out.flags)
@@ -175,13 +179,13 @@ def test_caller_requested_members_never_exceeds_the_scheduler_cap():
     oracle.set_arrival("besttrack_working", T, T + timedelta(hours=3))
     plan = plan_cycle(T, oracle)
     assert plan.load_shed
-    assert plan.requested_ensemble_members == 10
+    assert plan.requested_ensemble_members == REDUCED_ENSEMBLE_MEMBERS
 
     out = run_cycle(
         plan, make_fix(TrackQuality.ESTIMATED), deterministic_fn, good_ensemble,
-        requested_members=50,
+        requested_members=DEFAULT_ENSEMBLE_MEMBERS,
     )
-    assert out.products.ensemble_size == 10
+    assert out.products.ensemble_size == REDUCED_ENSEMBLE_MEMBERS
 
 
 def test_stale_nwp_is_flagged_on_the_payload():

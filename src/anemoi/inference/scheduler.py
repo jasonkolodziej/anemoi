@@ -73,10 +73,36 @@ REDUCED_BUDGETS: tuple[StageBudget, ...] = (
 
 
 #: Ensemble member counts by profile (configs/inference.yaml: ensemble.members /
-#: ensemble.min_members_for_ensemble_cone). The reduced count matches the
-#: REDUCED_BUDGETS docstring above: "a 10-member ensemble instead of 20-50."
-DEFAULT_ENSEMBLE_MEMBERS = 20
-REDUCED_ENSEMBLE_MEMBERS = 10
+#: ensemble.min_members_for_ensemble_cone).
+#:
+#: 50, not 20 (#188). Every §6.1 product is a quantile or a fraction estimated
+#: from these draws -- the cone radius is the 67th percentile of member
+#: distance, the intensity band is p10/p90, landfall and RI are member
+#: fractions -- so the member count sets the precision of all four, and the
+#: smallest probability expressible at all is 1/n. At 20 the served numbers
+#: carried real sampling noise: a true 62 nm cone radius reads 48-76 nm, a
+#: true 109 kt p90 reads 99-116 kt (crossing a Saffir-Simpson boundary), and
+#: no probability below 5% can be represented.
+#:
+#: It also biased `monitoring.calibration_audit`: a *perfectly* calibrated
+#: ensemble measures 62.1% containment at n=20 against a 67% nominal, because
+#: the cone is centred on the ensemble mean (itself off by ~sigma/sqrt(n))
+#: and its radius is a 20-sample percentile. That -4.9 point error is a third
+#: of `_VERDICT_MARGIN`, and it leans "too narrow" -- the same direction #166
+#: has been chasing. At 50 it falls to -2.3.
+#:
+#: Affordable because `TrajectoryDenoiser.sample` carries members as a batch
+#: dimension: one forward pass per denoising step regardless of count.
+#: Measured at production architecture, 20 -> 50 costs 0.06s -> 0.09s, and
+#: even at 16x the model size it is under 2s against the 13-minute §6.2.2
+#: diffusion budget. The budget is spent on Group 1 forward passes and input
+#: fetches, not on ensemble size. `Inference-Cycle`'s own stage table already
+#: contemplated "20 members; 50 relaxed".
+DEFAULT_ENSEMBLE_MEMBERS = 50
+#: Scaled with the default to preserve the 2:1 shed ratio the original design
+#: chose (#8). Note this lever buys far less wall time than it appears to --
+#: see the batching note above -- which is worth revisiting on its own.
+REDUCED_ENSEMBLE_MEMBERS = 25
 
 
 def total_budget(budgets=DEFAULT_BUDGETS, *, worst_case: bool = False) -> timedelta:
