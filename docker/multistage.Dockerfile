@@ -162,7 +162,15 @@ ENV HURDAT2_PATH=/app/data/hurdat2.txt
 # also talk to this API.
 ENV ANEMOI_API_CORS_ORIGINS="https://anemoi.systems,https://anemoi-console.jasonkolodziej.workers.dev,http://localhost:5173,http://127.0.0.1:5173"
 
-COPY --from=api-builder --chown=app:app /app/.venv /app/.venv
+# .venv deliberately stays root-owned (no --chown): `app` never needs to
+# write into it at runtime -- UV_COMPILE_BYTECODE=1 already compiled .pyc at
+# build time, PYTHONDONTWRITEBYTECODE=1 stops any later attempt -- so owning
+# it to `app` would only hand a compromised process write access to its own
+# installed dependency tree for no functional benefit. The original
+# docker/api/Dockerfile kept this property too (root ran the whole build;
+# `USER nonroot` only applied at the very end, after .venv already existed).
+# world-readable/executable by default, so `app` can still import from it.
+COPY --from=api-builder /app/.venv /app/.venv
 COPY --from=api-builder --chown=app:app /app/src /app/src
 COPY --from=api-builder --chown=app:app /app/data /app/data
 
