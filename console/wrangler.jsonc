@@ -1,14 +1,11 @@
 {
-	// Cloudflare deployment for the console SPA (issue #96). Pure static
-	// assets, no Worker script needed at all -- `main` is deliberately
-	// omitted. `console/vite.config.ts` already builds via
-	// `@sveltejs/adapter-static` with `fallback: 'index.html'` (the dynamic
-	// `/storms/[stormId]` route can't be prerendered per storm, so it needs
-	// a client-side-routed fallback) -- `not_found_handling:
-	// "single-page-application"` below is that same fallback's Cloudflare-
-	// side counterpart: without it, navigating directly to
-	// `/storms/AL172023` (not via client-side nav) would 404 at the edge
-	// before SvelteKit's own router ever got a chance to run.
+	// Cloudflare deployment for the console (issue #96, promoted off pure
+	// static assets by #171). `main` now points at the Worker
+	// `@sveltejs/adapter-cloudflare` emits -- #171 gives the console real
+	// login (session cookies, D1-backed), API-key issuance, and a
+	// same-origin proxy to anemoi-api-real, none of which a static-assets-
+	// only deployment can run (`+page.server.ts`/`+server.ts` need a server
+	// runtime). See console/vite.config.ts for the adapter switch.
 	//
 	// New projects get Workers-with-static-assets over the older, separate
 	// Cloudflare Pages product per Cloudflare's own current guidance --
@@ -17,6 +14,7 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "anemoi-console",
 	"compatibility_date": "2026-09-21",
+	"main": ".svelte-kit/cloudflare/_worker.js",
 
 	// anemoi.systems is the console's real domain. `workers_dev` defaults to
 	// *disabled* the moment `routes` is present at all -- set explicitly so
@@ -25,7 +23,32 @@
 	"workers_dev": true,
 
 	"assets": {
-		"directory": "./build",
-		"not_found_handling": "single-page-application",
+		"directory": ".svelte-kit/cloudflare",
+		"binding": "ASSETS",
 	},
+
+	// Shared with docker/api/wrangler.jsonc -- both Workers bind the same
+	// database so anemoi-api-real can verify a console-issued API key
+	// without a second copy of the user/key data. Create with
+	// `wrangler d1 create anemoi_auth`; apply console/schemas/*.sql.
+	"d1_databases": [
+		{
+			"binding": "AUTH_DB",
+			"database_name": "anemoi_auth",
+			"database_id": "92bff5ef-6d73-4188-a75a-c763bac6a0e6",
+		},
+	],
+
+	// better-auth's magicLink/emailOTP plugins send through this (see
+	// src/lib/server/email.ts). Requires Email Routing enabled on
+	// anemoi.systems in the dashboard before it can send anything real;
+	// falls back to a console.warn in local dev when unbound.
+	"send_email": [{ "name": "SEND_EMAIL" }],
+
+	// Console -> anemoi-api-real, in-process (no CORS, no public hop).
+	// Used by the console Worker's own API routes once a session is
+	// resolved, to attach the user's real API key server-side -- the
+	// browser never sees it. See docker/api/wrangler.jsonc for the other
+	// side of this binding.
+	"services": [{ "binding": "ANEMOI_API", "service": "anemoi-api-real" }],
 }

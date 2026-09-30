@@ -2,7 +2,14 @@
 
 A SvelteKit 5 + TypeScript + shadcn-svelte console for [Anemoi](https://github.com/jasonkolodziej/anemoi) — active storms, cone/track visualization, model contribution weights, intensity forecasts, the model registry, drift/skew monitoring, and retraining triggers. Talks to `anemoi.api` (see the wiki's [API](https://github.com/jasonkolodziej/anemoi/wiki/API) page, `docs/api.md` in the anemoi repo, or `anemoi-api-patch.zip` alongside this project).
 
-Client-rendered SPA end to end (`routes/+layout.ts` sets `ssr = false`) — there's no server runtime to deploy, `npm run build` emits static files for any host.
+Most of the dashboard is still client-rendered (`routes/+layout.ts` sets
+`ssr = false`), but this is no longer a pure static-assets deployment:
+#171 gave it a real Worker (`@sveltejs/adapter-cloudflare`, not
+`adapter-static`) for login (`better-auth`, D1-backed sessions, passkeys,
+magic link, GitHub/Google OAuth), API-key issuance, and a same-origin
+`/api/*` proxy to `anemoi-api-real` that attaches the caller's identity
+server-side so a raw API key never reaches the browser. See "Deploying"
+below for the D1 setup and secrets this now needs.
 
 ## Design system
 
@@ -14,53 +21,80 @@ Type: Inter Variable (display/headings) / Geist Variable (UI, self-hosted via `@
 
 ```sh
 pnpm install
-cp .env.example .env   # PUBLIC_ANEMOI_API_URL, defaults to http://127.0.0.1:8000
+cp .env.example .env   # only needed if anemoi.api runs somewhere other
+                        # than http://127.0.0.1:8000, see the comment inside
 pnpm dev                # http://localhost:5173
 ```
 
-Needs `anemoi.api` running (`uv run python -m anemoi.api --reload` from the anemoi repo, demo mode by default) — the dashboard shows a connection error with instructions if it can't reach it.
+Needs `anemoi.api` running (`uv run python -m anemoi.api --reload` from
+the anemoi repo, demo mode by default) -- `pnpm dev` (plain `vite dev`,
+no Cloudflare bindings) proxies `/api/*` straight to it
+(`routes/api/[...path]/+server.ts`'s fallback path). `hooks.server.ts`
+treats every request as anonymous when `AUTH_DB` isn't bound, so this
+works with zero Cloudflare setup -- only the "Run cycle" action needs a
+login, which won't work in this mode. To exercise login/API keys
+locally, copy `.dev.vars.example` to `.dev.vars` and use `wrangler dev`
+instead (see "Deploying" below for what each var is).
 
 ```sh
-pnpm build     # static output in build/
+pnpm build     # emits .svelte-kit/cloudflare (adapter-cloudflare)
 pnpm preview   # serve the production build locally
 pnpm check     # svelte-check, 0 errors as of this scaffold
 ```
 
 ## Deploying
 
-Issue #96. Pure static assets on Cloudflare Workers (no separate Worker
-script -- `wrangler.jsonc`'s `assets` block is the whole config), same
-tooling as `docker/api`'s deployment (#91).
+Issue #96, promoted off pure static assets by #171. Cloudflare Workers
+(`@sveltejs/adapter-cloudflare`), same tooling as `docker/api`'s
+deployment (#91).
 
-`PUBLIC_ANEMOI_API_URL` is read via `$env/dynamic/public`, but for this
-static-assets-only deployment that's effectively **build-time**
-configuration, not true per-request runtime config -- confirmed directly
-against a real build: `adapter-static` emits `build/_app/env.js` as a real
-`export const env = {...}` literal with whatever was in the environment
-when `vite build` ran already baked in, fetched via a lazy `import()` at
-page load but fixed at build time regardless. Deploying against a
-different API target means rebuilding with a different
-`PUBLIC_ANEMOI_API_URL`, not just redeploying:
+`PUBLIC_ANEMOI_API_URL` is unused now that reads go through this Worker's
+own `/api/*` proxy (`routes/api/[...path]/+server.ts`) to `anemoi-api-real`
+via a service binding, not a direct cross-origin fetch -- no CORS
+allow-listing needed either, since traffic never leaves Cloudflare's
+network between the two Workers.
+
+### D1 database
+
+One database, shared with `docker/api` (its own `AUTH_DB` binding reads
+from it; only this Worker writes):
 
 ```sh
-PUBLIC_ANEMOI_API_URL=https://anemoi-api-real.jasonkolodziej.workers.dev pnpm run cf:deploy
+pnpm exec wrangler d1 create anemoi_auth
+# put the printed database_id into wrangler.jsonc's d1_databases AND
+# ../docker/api/wrangler.jsonc's d1_databases -- both must match exactly
+pnpm exec wrangler d1 execute anemoi_auth --remote --file=./schemas/better-auth.sql
+pnpm exec wrangler d1 execute anemoi_auth --remote --file=./schemas/anemoi.sql
 ```
 
-A `.env` here with the same `PUBLIC_ANEMOI_API_URL` line (see
-`.env.example`) makes this the default for every `pnpm run cf:deploy`
-too, so a plain `pnpm run cf:deploy` doesn't silently fall back to the
-`127.0.0.1:8000` dev default and ship a console that can't reach
-anything -- found the hard way, three real deploys in, once against
-`.env`'s absence.
+### Secrets
+
+```sh
+pnpm exec wrangler secret put BETTER_AUTH_SECRET     # openssl rand -base64 32
+pnpm exec wrangler secret put GITHUB_CLIENT_ID
+pnpm exec wrangler secret put GITHUB_CLIENT_SECRET
+pnpm exec wrangler secret put GOOGLE_CLIENT_ID
+pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET
+pnpm exec wrangler secret put ADMIN_USER_IDS         # comma-separated user ids; set after your first sign-up
+pnpm exec wrangler secret put INTERNAL_PROXY_SECRET  # same value as docker/api's -- see docker/api/README.md
+```
+
+GitHub/Google OAuth apps need registering against this console's own
+domain (`anemoi.systems`) -- credentials from any other app (including a
+prior project's) won't validate the callback URL. `Email Routing` must
+also be enabled on `anemoi.systems` in the dashboard before magic
+link/OTP email (`src/lib/server/email.ts`, the `SEND_EMAIL` binding) sends
+anything real; without it, both fall back to a `console.warn` with the
+link/code, which still works for local testing.
+
+Then deploy:
+
+```sh
+pnpm run cf:deploy
+```
 
 Live at `https://anemoi.systems` (custom domain, `console/wrangler.jsonc`'s
-`routes`) and `https://anemoi-console.jasonkolodziej.workers.dev`, both
-pointed at the real-mode API. The real API's `ANEMOI_API_CORS_ORIGINS`
-(`docker/multistage.Dockerfile`'s `api` target) has to explicitly allow-list *both* of this
-console's origins -- main.py's own default only covers local dev
-(`localhost:5173`/`127.0.0.1:5173`), which a browser hitting the deployed
-API from either deployed console origin doesn't match; found the hard
-way via a real `Disallowed CORS origin` response, not assumed.
+`routes`) and `https://anemoi-console.jasonkolodziej.workers.dev`.
 
 ## Docs (`/docs`)
 

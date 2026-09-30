@@ -133,6 +133,7 @@ celerybeat.pid
 
 # Environments
 .env
+.dev.vars
 .venv
 env/
 venv/

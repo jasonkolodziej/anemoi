@@ -5,14 +5,19 @@
  * deployment -- Cloudflare's own Container class handles instance
  * lifecycle (start/sleep/restart), this Worker just forwards.
  *
- * Deliberately minimal for the #91 spike: no demo/real split, no caching,
- * no auth beyond whatever `ANEMOI_API_KEY` the container itself enforces
- * (see anemoi.api.deps.require_api_key). The demo-vs-real routing and edge
- * caching described in #91's "Proposed scope of work" step 3 are a
- * follow-up once this container is confirmed deployable for real.
+ * #171: every request through the exported `fetch` handler now needs a
+ * valid per-customer API key (console-issued, verified against the same
+ * D1 database console binds as AUTH_DB) before it reaches the container --
+ * a rejected request never wakes the billed container. `scheduled()`'s
+ * `runDueCycles` is unaffected: it calls `container.fetch()` directly on
+ * the Durable Object binding, bypassing this gate entirely (see below).
+ * Demo-vs-real routing and edge caching described in #91's "Proposed
+ * scope of work" step 3 remain a follow-up.
  */
 import { Container, getContainer } from '@cloudflare/containers';
 import type { DurableObject } from 'cloudflare:workers';
+import { verifyApiKey } from './auth';
+import { recordCycleRun } from './metering';
 
 /**
  * `wrangler secret put` sets Worker-level bindings, not container
@@ -30,12 +35,25 @@ import type { DurableObject } from 'cloudflare:workers';
  * not declared in `wrangler.jsonc`'s bindings, just set via the API/CLI),
  * so this small extension is hand-maintained, not part of the generated
  * `Env` in `worker-configuration.d.ts`.
+ *
+ * `INTERNAL_PROXY_SECRET` is a second secret in the same category (#171):
+ * shared with console's own Worker (set via `wrangler secret put` on
+ * both), proving a request arrived through console's `/api/*` proxy
+ * (console/src/routes/api/[...path]/+server.ts) rather than the public
+ * internet. Needed because better-auth never returns a key's raw value
+ * after creation -- only its hash is stored (`apikey.key`) -- so console
+ * cannot "look up" a user's key to attach server-side the way a first
+ * draft of this design assumed. Console already resolves the session
+ * itself (hooks.server.ts); this secret is what lets it hand that
+ * resolved identity to this Worker without re-deriving auth from a key
+ * that doesn't exist in retrievable form.
  */
 interface RealApiEnv extends Env {
 	S3_ARTIFACT_API_ENDPOINT: string;
 	S3_ARTIFACT_BUCKET: string;
 	S3_ARTIFACT_ACCESS_KEYID: string;
 	S3_ARTIFACT_SECRET_ACCESS_KEY: string;
+	INTERNAL_PROXY_SECRET: string;
 }
 
 const SLEEP_DEADLINE_KEY = 'sleepAfterMs';
@@ -191,14 +209,95 @@ async function runDueCycles(env: Env, cycleLabel: string): Promise<void> {
 	}
 }
 
+/** Matches `POST /v1/storms/{storm_id}/cycles` -- the route that wakes
+ * the billed container and runs real inference, gated tighter than
+ * everything else. */
+const CYCLE_POST_RE = /^\/v1\/storms\/([^/]+)\/cycles\/?$/;
+
+/**
+ * Resolve the calling user id, trying two paths:
+ *
+ * 1. Console's own proxy (`console/src/routes/api/[...path]/+server.ts`),
+ *    identified by a shared secret only the two Workers know. Console has
+ *    already resolved its own session and is vouching for the
+ *    `X-Anemoi-User-Id` it sends -- this Worker can't re-derive that
+ *    itself, since better-auth never returns a key's raw value after
+ *    creation (only `apikey.key`, the hash).
+ * 2. A real customer API key (`X-Anemoi-Api-Key`), verified against
+ *    `AUTH_DB` -- the actual per-customer path #171 is about.
+ *
+ * Constant-time comparison isn't used for the secret check: it's a
+ * fixed, operator-controlled value compared once per request, not a
+ * per-user credential where timing leaks matter across many attempts.
+ */
+async function resolveUserId(request: Request, env: RealApiEnv): Promise<string | null> {
+	const internalSecret = request.headers.get('X-Anemoi-Internal-Secret');
+	if (internalSecret && env.INTERNAL_PROXY_SECRET && internalSecret === env.INTERNAL_PROXY_SECRET) {
+		return request.headers.get('X-Anemoi-User-Id');
+	}
+	const apiKey = request.headers.get('X-Anemoi-Api-Key');
+	return verifyApiKey(env.AUTH_DB, apiKey);
+}
+
 export default {
 	async fetch(request, env) {
+		const url = new URL(request.url);
+		const cycleMatch = request.method === 'POST' ? url.pathname.match(CYCLE_POST_RE) : null;
+
+		// #171's Phase 0 acceptance criterion is specifically "POST .../cycles
+		// no longer runnable anonymously" -- the route that wakes the billed
+		// container. Reads stay open, matching the product's existing
+		// behavior (anyone can already view forecasts via the console with
+		// no login) and the issue's own open "whether reads stay free"
+		// question, which this pass doesn't resolve either way. Identity is
+		// still resolved for everyone so a caller that *does* send a key
+		// gets it forwarded downstream, but only a cycle POST requires one.
+		const userId = await resolveUserId(request, env);
+		if (cycleMatch) {
+			if (!userId) {
+				return new Response('invalid or missing X-Anemoi-Api-Key', { status: 401 });
+			}
+			const { success } = await env.CYCLE_RATE_LIMITER.limit({ key: userId });
+			if (!success) {
+				return new Response('rate limit exceeded for cycle runs', { status: 429 });
+			}
+		}
+
+		// Cloned before `forwarded` is built below -- constructing a new
+		// Request from `request` consumes its body, so reading it again
+		// afterward would throw "body already used".
+		const bodyForMetering = cycleMatch ? request.clone() : null;
+
+		const forwarded = new Request(request, {
+			headers: new Headers(request.headers),
+		});
+		if (userId) forwarded.headers.set('X-Anemoi-User-Id', userId);
+		forwarded.headers.delete('X-Anemoi-Internal-Secret');
+		forwarded.headers.delete('X-Anemoi-Api-Key');
+
 		const container = getContainer(env.ANEMOI_REAL_API);
-		return container.fetch(request);
+		const response = await container.fetch(forwarded);
+
+		if (cycleMatch && userId && bodyForMetering && response.ok) {
+			// cycleLabel comes from the request body, not the URL -- storms.py's
+			// run_cycle route takes it as JSON, same shape runDueCycles below
+			// already sends. Best-effort: never let a malformed/unreadable body
+			// block a response that's already succeeded.
+			try {
+				const body = (await bodyForMetering.json()) as { cycle?: string };
+				if (body?.cycle) {
+					await recordCycleRun(env.AUTH_DB, userId, cycleMatch[1], body.cycle);
+				}
+			} catch (err) {
+				console.error('recordCycleRun: could not read request body', err);
+			}
+		}
+
+		return response;
 	},
 
 	async scheduled(controller, env, ctx) {
 		const cycleLabel = currentCycleLabel(new Date(controller.scheduledTime));
 		ctx.waitUntil(runDueCycles(env, cycleLabel));
 	},
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<RealApiEnv>;

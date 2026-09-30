@@ -1,0 +1,20 @@
+# Copy to .dev.vars for `wrangler dev` (Cloudflare's local-secrets
+# convention -- separate from .env, which Vite's own dev server reads).
+# Without these, hooks.server.ts still works (falls back to treating
+# every request as anonymous when AUTH_DB isn't bound), but login,
+# passkeys, magic link, and OAuth don't.
+
+BETTER_AUTH_SECRET=dev-only-change-me
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+ADMIN_USER_IDS=
+OPEN_REGISTRATION=true
+INTERNAL_PROXY_SECRET=dev-only-change-me
+
+# `wrangler dev` still needs real bindings for AUTH_DB/SEND_EMAIL/ANEMOI_API
+# (wrangler.jsonc) -- `--remote` uses the real Cloudflare resources; a
+# plain local `wrangler dev` uses Miniflare's local D1 emulation instead
+# (no real email sends; magic link/OTP fall back to a console.warn with
+# the link/code, see src/lib/server/email.ts).

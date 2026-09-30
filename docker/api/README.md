@@ -269,7 +269,22 @@ pnpm exec wrangler secret put S3_ARTIFACT_API_ENDPOINT
 pnpm exec wrangler secret put S3_ARTIFACT_BUCKET
 pnpm exec wrangler secret put S3_ARTIFACT_ACCESS_KEYID
 pnpm exec wrangler secret put S3_ARTIFACT_SECRET_ACCESS_KEY
+pnpm exec wrangler secret put INTERNAL_PROXY_SECRET
 ```
+
+`INTERNAL_PROXY_SECRET` (#171) must be set to the exact same value on
+`console`'s Worker too (`cd ../../console && pnpm exec wrangler secret put
+INTERNAL_PROXY_SECRET`) -- it's how this Worker tells "a request console's
+own `/api/*` proxy already authenticated" apart from an arbitrary public
+request, since better-auth never returns an API key's raw value after
+creation for console to attach one itself (see `src/auth.ts`,
+`src/index.ts`'s `resolveUserId`). Generate it once with something like
+`openssl rand -base64 32` and set the same value in both places.
+
+`AUTH_DB` (`d1_databases` in `wrangler.jsonc`) must point at the same D1
+database console's own `wrangler.jsonc` creates -- see console/README.md's
+"Deploying" section for `wrangler d1 create`/schema setup; this Worker only
+reads from it (`src/auth.ts`'s `verifyApiKey`), console owns writes.
 
 or in bulk, which `wrangler secret bulk` accepts either as a JSON object
 (`{"KEY": "value", ...}`, where a `null` value **deletes** that secret

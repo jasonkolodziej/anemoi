@@ -11,3 +11,12 @@ minimumReleaseAgeExclude:
   - miniflare@5.20260921.0-alpha
   - workerd@1.20260921.1
   - wrangler@4.136.1
+  - '@better-auth/api-key@1.7.7'
+  - '@better-auth/core@1.7.7'
+  - '@better-auth/drizzle-adapter@1.7.7'
+  - '@better-auth/kysely-adapter@1.7.7'
+  - '@better-auth/memory-adapter@1.7.7'
+  - '@better-auth/mongo-adapter@1.7.7'
+  - '@better-auth/prisma-adapter@1.7.7'
+  - '@better-auth/telemetry@1.7.7'
+  - better-auth@1.7.7

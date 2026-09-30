@@ -69,4 +69,33 @@
 			"new_sqlite_classes": ["AnemoiRealApi"],
 		},
 	],
+
+	// #171: same database console/wrangler.jsonc binds as AUTH_DB -- a key
+	// issued through console's apiKey plugin verifies here (src/auth.ts)
+	// without a second copy of the user/key data. database_id must match
+	// console's exactly (one real D1 database, `wrangler d1 create
+	// anemoi_auth`, shared by both Workers).
+	"d1_databases": [
+		{
+			"binding": "AUTH_DB",
+			"database_name": "anemoi_auth",
+			"database_id": "92bff5ef-6d73-4188-a75a-c763bac6a0e6",
+		},
+	],
+
+	// Route-differentiated burst protection (#171): tighter than the
+	// apiKey plugin's own per-key limit (console/schemas/better-auth.sql's
+	// `apikey.rateLimitMax`, which covers every route at one number),
+	// applied only to `POST .../cycles` in src/index.ts -- that's the
+	// route that wakes the billed container and runs real inference.
+	// `limit`/`period` are placeholders: real traffic is unknown yet
+	// (#171's own "Risks/Unknowns"), revisit once Phase 2 metering
+	// (cycle_runs) has real data.
+	"ratelimits": [
+		{
+			"name": "CYCLE_RATE_LIMITER",
+			"namespace_id": "1001",
+			"simple": { "limit": 6, "period": 60 },
+		},
+	],
 }
