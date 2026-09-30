@@ -24,10 +24,16 @@ on:
     # lockfile (`src/`, `pyproject.toml`, `uv.lock`). API code lives in src/,
     # so watching docker/api/ alone silently skipped API fixes (#175 had to
     # be deployed by hand). Markdown under docker/api/ changes nothing that
-    # ships.
+    # ships. The Dockerfile itself moved out of docker/api/ into
+    # docker/multistage.Dockerfile (shared with Cloud Run training, its
+    # `api` target) -- without watching that path too, a change to the
+    # Dockerfile alone (a new apt package, a build-arg bump) would repeat
+    # exactly the #175-shaped silent-skip this comment already warns about.
     paths:
       - "docker/api/**"
       - "!docker/api/**/*.md"
+      - "docker/multistage.Dockerfile"
+      - "docker/multistage.Dockerfile.dockerignore"
       - "src/**"
       - "pyproject.toml"
       - "uv.lock"
