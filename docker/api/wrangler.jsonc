@@ -1,7 +1,7 @@
 {
 	// Cloudflare Containers config for issue #91's primary proposal: real-mode
-	// Anemoi-API (torch inference, see ../Dockerfile) as a real linux/amd64
-	// container, fronted by this Worker. Deployed and live -- see
+	// Anemoi-API (torch inference, see ../multistage.Dockerfile) as a real
+	// linux/amd64 container, fronted by this Worker. Deployed and live -- see
 	// docker/api/README.md for status, required secrets, and how to deploy.
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "anemoi-api-real",
@@ -21,7 +21,11 @@
 	"containers": [
 		{
 			"class_name": "AnemoiRealApi",
-			"image": "./Dockerfile",
+			// Shared with the Cloud Run training image (docker/multistage.
+			// Dockerfile); Cloudflare Containers has no build-target option, so
+			// that file puts the `api` stage last -- the stage a plain build
+			// produces by default.
+			"image": "../multistage.Dockerfile",
 			// The Dockerfile's COPY instructions (pyproject.toml, src/, etc.)
 			// expect the repo root as the build context, not this directory --
 			// `image_build_context` defaults to the Dockerfile's own directory,

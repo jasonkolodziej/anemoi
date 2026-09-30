@@ -637,7 +637,7 @@ def cmd_registry_pull(args: argparse.Namespace) -> int:
     itself surfaces a real S3/R2 misconfiguration loudly (a missing/wrong
     credential run manually deserves a clear error) -- callers that want
     "never block startup over this" wrap the invocation themselves (see
-    docker/api/Dockerfile's CMD). "Loudly" means a clear one-line message
+    docker/multistage.Dockerfile's `api` target CMD). "Loudly" means a clear one-line message
     and a non-zero exit, not an uncaught traceback -- `cmd_skew_audit`'s
     own `CheckpointStoreError` handling is the same shape. An unhandled
     exception here read as a crash rather than a config problem to

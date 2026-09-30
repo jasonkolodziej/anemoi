@@ -56,7 +56,7 @@ anything -- found the hard way, three real deploys in, once against
 Live at `https://anemoi.systems` (custom domain, `console/wrangler.jsonc`'s
 `routes`) and `https://anemoi-console.jasonkolodziej.workers.dev`, both
 pointed at the real-mode API. The real API's `ANEMOI_API_CORS_ORIGINS`
-(`docker/api/Dockerfile`) has to explicitly allow-list *both* of this
+(`docker/multistage.Dockerfile`'s `api` target) has to explicitly allow-list *both* of this
 console's origins -- main.py's own default only covers local dev
 (`localhost:5173`/`127.0.0.1:5173`), which a browser hitting the deployed
 API from either deployed console origin doesn't match; found the hard

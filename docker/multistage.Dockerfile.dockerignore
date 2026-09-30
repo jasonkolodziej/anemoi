@@ -1,0 +1,18 @@
+# Applies only to docker/multistage.Dockerfile (a Dockerfile-specific ignore
+# file takes precedence over any context-root .dockerignore, and must live
+# at this same path relative to the build context root). Both the `api` and
+# `training` targets build from the repo root context but only need the
+# Python package plus training's entrypoint script -- everything else is
+# excluded rather than listed one directory at a time.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!src/
+!src/**
+!docker/cloud-run-training/entrypoint.sh
+
+# Exclude the project virtual environment from image builds
+.venv
+**/__pycache__

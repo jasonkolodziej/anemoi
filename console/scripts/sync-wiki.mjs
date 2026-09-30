@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Pulls the wiki (github.com/jasonkolodziej/anemoi.wiki) into the console at
 // build time, the same "fetch a static reference source over HTTP/git at
-// build time, bake it into the deploy" pattern docker/api/Dockerfile already
-// uses for HURDAT2 -- zero runtime network dependency, the docs page works
-// offline exactly like everything else in this SPA.
+// build time, bake it into the deploy" pattern docker/multistage.Dockerfile
+// already uses for HURDAT2 -- zero runtime network dependency, the docs page
+// works offline exactly like everything else in this SPA.
 //
 // Idempotent: skips the clone if content already exists, so `pnpm dev`
 // doesn't re-clone on every restart. `--force` re-fetches.

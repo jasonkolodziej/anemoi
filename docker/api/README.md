@@ -240,7 +240,7 @@ idempotency, not just the intent of the code.
 ## Local build/run
 
 ```bash
-docker build -f docker/api/Dockerfile -t anemoi-api-real:spike .
+docker build -f docker/multistage.Dockerfile --target api -t anemoi-api-real:spike .
 docker run --rm -p 8080:8080 \
   -e S3_ARTIFACT_API_ENDPOINT=... -e S3_ARTIFACT_BUCKET=... \
   -e S3_ARTIFACT_ACCESS_KEYID=... -e S3_ARTIFACT_SECRET_ACCESS_KEY=... \

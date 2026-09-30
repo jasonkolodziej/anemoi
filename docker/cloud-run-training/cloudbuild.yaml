@@ -1,6 +1,7 @@
-# Builds docker/cloud-run-training/Dockerfile from the repo root and pushes it
-# to Artifact Registry. `gcloud builds submit --tag` can't do this on its own:
-# it only builds a Dockerfile at the root of the uploaded source.
+# Builds the `training` target of docker/multistage.Dockerfile (shared with
+# the Cloudflare Containers API image) and pushes it to Artifact Registry.
+# `gcloud builds submit --tag` can't do this on its own: it only builds a
+# Dockerfile at the root of the uploaded source.
 #
 #   gcloud builds submit --config docker/cloud-run-training/cloudbuild.yaml \
 #     --substitutions _IMAGE=us-central1-docker.pkg.dev/${PROJECT_ID}/anemoi/anemoi-train,_TAG=$(git rev-parse --short=12 HEAD) .
@@ -12,7 +13,9 @@ steps:
     args:
       - build
       - -f
-      - docker/cloud-run-training/Dockerfile
+      - docker/multistage.Dockerfile
+      - --target
+      - training
       - --build-arg
       - VCS_REF=$_TAG
       - --build-arg

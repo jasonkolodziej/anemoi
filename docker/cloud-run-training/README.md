@@ -8,9 +8,8 @@ It runs training directly through the CLI (`anemoi train-schedule`) and does not
 
 ## What is in this folder
 
-- `Dockerfile`: builds a training image with `torch`, `gridded`, `storage`, and `tracking` extras.
-- `entrypoint.sh`: translates environment variables into `anemoi train-schedule` CLI arguments, or runs any other `anemoi` subcommand passed as job arguments (see "One-off commands").
-- `cloudbuild.yaml`: builds the image with Cloud Build and pushes it to Artifact Registry.
+- `entrypoint.sh`: translates environment variables into `anemoi train-schedule` CLI arguments, or runs any other `anemoi` subcommand passed as job arguments (see "One-off commands"). Baked into the `training` target of `../multistage.Dockerfile` (shared with the Cloudflare Containers API image, whose `api` target builds with `torch-cpu` instead of `torch`).
+- `cloudbuild.yaml`: builds `../multistage.Dockerfile`'s `training` target with Cloud Build and pushes it to Artifact Registry.
 - `workflows.train-schedule.yaml`: runs the per-model jobs in order (see "Workflow orchestration").
 
 ## Why Cloud Run Job (not service)
@@ -59,7 +58,7 @@ If your real run exceeds 1 hour, use one of these patterns:
 
 ## Build and push image
 
-Run from repository root. `gcloud builds submit --tag` alone won't work here: it only builds a Dockerfile at the root of the uploaded source, and this one lives in `docker/cloud-run-training/`.
+Run from repository root. `gcloud builds submit --tag` alone won't work here: it only builds a Dockerfile at the root of the uploaded source, and this one lives at `docker/multistage.Dockerfile`.
 
 ```bash
 gcloud builds submit \
@@ -92,8 +91,8 @@ Build and push:
 
 ```bash
 docker build \
-  -f docker/cloud-run-training/Dockerfile \
-  --build-arg UV_TOOLS_IMAGE=ghcr.io/astral-sh/uv:0.8.22 \
+  -f docker/multistage.Dockerfile \
+  --target training \
   --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --build-arg VCS_REF="$(git rev-parse HEAD)" \
   --build-arg VERSION="${GHCR_TAG}" \
@@ -106,7 +105,7 @@ docker push "${IMAGE_URI}"
 docker push "${GHCR_REGISTRY}/${GHCR_NAMESPACE}/${GHCR_IMAGE}:latest"
 ```
 
-`UV_TOOLS_IMAGE` is pinned in the Dockerfile and can be bumped intentionally during upgrades.
+`UV_IMAGE` (shared with the `api` target's builder stage) is pinned in `../multistage.Dockerfile` and can be bumped intentionally during upgrades via `--build-arg UV_IMAGE=...`.
 
 If `docker login ghcr.io` returns HTTP 403:
 
