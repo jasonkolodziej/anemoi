@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # MLflow tracking server, built from scratch rather than a pre-built image
 # so exactly what's installed is known: mlflow itself, psycopg2 for the
 # Postgres backend store, and boto3 for the S3-compatible (Cloudflare R2)

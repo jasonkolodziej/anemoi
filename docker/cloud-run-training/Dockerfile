@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Declared before the first FROM and pulled in as a named stage: not every
 # builder expands a build argument inside `COPY --from=` (Cloud Build's
 # docker step doesn't), but all of them expand one in `FROM`.
