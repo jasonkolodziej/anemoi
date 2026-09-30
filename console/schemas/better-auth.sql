@@ -1,6 +1,7 @@
--- better-auth schema for the reveille-registry.
--- Apply with: wrangler d1 execute reveille-auth --file=./schemas/better-auth.sql --remote
--- Apply with: wrangler d1 execute reveille-auth --file=./schemas/better-auth.sql --local
+-- better-auth schema for anemoi (ported from a prior project,
+-- reveille-registry -- database/project names below updated to match).
+-- Apply with: wrangler d1 execute anemoi_auth --file=./schemas/better-auth.sql --remote
+-- Apply with: wrangler d1 execute anemoi_auth --file=./schemas/better-auth.sql --local
 --
 -- This migration:
 -- 1. Drops the old custom auth tables (users, credentials, sessions, challenges)

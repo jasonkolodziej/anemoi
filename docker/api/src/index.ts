@@ -271,6 +271,13 @@ export default {
 		const forwarded = new Request(request, {
 			headers: new Headers(request.headers),
 		});
+		// Deleted unconditionally, not just overwritten when `userId`
+		// resolves: reads have no identity requirement, so an anonymous
+		// caller hitting this Worker's public route directly (bypassing
+		// console's proxy) could otherwise pass its own `X-Anemoi-User-Id`
+		// straight through to the container untouched (Copilot review,
+		// PR #197).
+		forwarded.headers.delete('X-Anemoi-User-Id');
 		if (userId) forwarded.headers.set('X-Anemoi-User-Id', userId);
 		forwarded.headers.delete('X-Anemoi-Internal-Secret');
 		forwarded.headers.delete('X-Anemoi-Api-Key');

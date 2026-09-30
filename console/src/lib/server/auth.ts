@@ -52,18 +52,36 @@ async function checkRegistrationOpen(d1: D1Database): Promise<boolean> {
 // ─── Auth Instance Factory ───────────────────────────────────────────────────
 
 let _auth: unknown;
+let _authCacheKey: string | undefined;
 
 /**
  * Create or return the cached better-auth instance.
  *
  * Must be called with the D1 binding on every request (typically in
- * `hooks.server.ts` or the catch-all route handler).
+ * `hooks.server.ts` or a route handler -- always pass `hostInfo` when one
+ * is available; see below).
+ *
+ * Cached per `hostInfo`'s resolved `baseURL`, not just once per isolate:
+ * this console is served from two origins (`anemoi.systems` and
+ * `anemoi-console.*.workers.dev`, both live per `wrangler.jsonc`), and
+ * `passkey({ rpID })`/`baseURL`/`trustedOrigins` all derive from
+ * `hostInfo`. Caching unconditionally on the first call froze the whole
+ * isolate's auth config to whichever origin happened to hit it first --
+ * WebAuthn rejects a passkey ceremony against a mismatched `rpId`, so
+ * passkey registration/verification on the *other* origin would silently
+ * fail for the rest of that isolate's life (Copilot review, PR #197).
  */
 export function getAuth(
 	d1: D1Database,
 	hostInfo?: ReturnType<typeof getDynamicHostInfo>,
 ): ReturnType<typeof betterAuth> {
-	if (_auth) return _auth as ReturnType<typeof betterAuth>;
+	// `BetterAuthOptions.baseURL`'s type also allows a dynamic-resolver
+	// config object, not just a string -- `hosting.ts` only ever
+	// constructs it as a plain string, so narrow rather than widen
+	// `cacheKey` to match.
+	const cacheKey = typeof hostInfo?.ba.baseURL === 'string' ? hostInfo.ba.baseURL : '';
+	if (_auth && _authCacheKey === cacheKey) return _auth as ReturnType<typeof betterAuth>;
+	_authCacheKey = cacheKey;
 
 	const dialect = new D1Dialect({ database: d1 });
 
@@ -177,12 +195,18 @@ let _adminBypassActive = false;
  *
  * Call this around `auth.api.createUser()` invocations from admin
  * endpoints so that `databaseHooks.user.create.before` allows the
- * creation even when registration is closed.
+ * creation even when registration is closed. `fn` is always async in
+ * practice (`createUser` returns a Promise) -- `await`ed here, not just
+ * returned, so the flag stays set until the hook it's meant to influence
+ * actually runs. A bare `return fn()` let `finally` clear the flag the
+ * instant the promise was created, before `databaseHooks.user.create
+ * .before` ever read it, silently defeating the bypass for its one real
+ * use case (Copilot review, PR #197).
  */
-export function withAdminBypass<T>(fn: () => T): T {
+export async function withAdminBypass<T>(fn: () => Promise<T>): Promise<T> {
 	_adminBypassActive = true;
 	try {
-		return fn();
+		return await fn();
 	} finally {
 		_adminBypassActive = false;
 	}

@@ -30,8 +30,16 @@ async function proxy(event: RequestEvent): Promise<Response> {
 
 	const headers = new Headers(request.headers);
 	// The session cookie is between the browser and this Worker only --
-	// anemoi-api-real has no notion of it and doesn't need it.
+	// anemoi-api-real has no notion of it and doesn't need it. The other
+	// two are stripped unconditionally, not just overwritten when a
+	// session resolves: without this, an anonymous caller's own guessed
+	// `X-Anemoi-Internal-Secret`/`X-Anemoi-User-Id` would pass straight
+	// through untouched whenever `locals.user` is absent (Copilot review,
+	// PR #197) -- brute-forcing the real secret is infeasible, but
+	// stripping untrusted input doesn't get to depend on that.
 	headers.delete('cookie');
+	headers.delete('x-anemoi-internal-secret');
+	headers.delete('x-anemoi-user-id');
 
 	const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
 	const body = hasBody ? request.body : undefined;
