@@ -231,8 +231,8 @@
 			<CardTitle>Passkeys</CardTitle>
 			<CardDescription>
 				Sign in with your device's screen lock or security key instead of
-				{data.user.email}. Add one here so you're not stuck with only
-				{data.user.name}'s original sign-in method.
+				your current sign-in method. Add one as a backup so losing access
+				to that method doesn't lock you out.
 			</CardDescription>
 		</CardHeader>
 		<CardContent class="flex flex-col gap-4">
