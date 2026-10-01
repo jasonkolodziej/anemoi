@@ -110,10 +110,14 @@ export function getAuth(
 				clientId: process.env.GITHUB_CLIENT_ID ?? "",
 				clientSecret: process.env.GITHUB_CLIENT_SECRET ?? "",
 			},
-			google: {
-				clientId: process.env.GOOGLE_CLIENT_ID ?? "",
-				clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
-			},
+			// Google sign-in disabled for now -- no OAuth app registered yet
+			// (GOOGLE_CLIENT_ID/SECRET unset). Re-enable by uncommenting here
+			// and in the login/register pages' OAuth button grid once one
+			// exists.
+			// google: {
+			// 	clientId: process.env.GOOGLE_CLIENT_ID ?? "",
+			// 	clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+			// },
 		},
 		plugins: [
 			passkey({
