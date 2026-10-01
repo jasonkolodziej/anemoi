@@ -20,6 +20,19 @@ import { buildSessionHeaders } from "$lib/server/auth-utils";
  * gets resolved for the whole app.
  */
 export const handle: Handle = async ({ event, resolve }) => {
+	// `adapter-cloudflare` throws on any `platform.env` access during
+	// prerendering (no real bindings exist at build time) -- this console
+	// still prerenders `/docs/[slug]` (opts into `ssr = true`, see its own
+	// README), so a plain `pnpm build` hit this for real: "Cannot access
+	// platform.env.SEND_EMAIL in a prerenderable route". `building` (set
+	// only during `vite build`, not `vite dev` or a deployed request) is
+	// also what's passed to `svelteKitHandler` below for the same reason.
+	if (building) {
+		event.locals.session = null;
+		event.locals.user = null;
+		return resolve(event);
+	}
+
 	setSendEmailBinding(event.platform?.env?.SEND_EMAIL);
 
 	const d1 = event.platform?.env?.AUTH_DB;
