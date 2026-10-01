@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { page } from "$app/state";
+  import { goto } from "$app/navigation";
+  import type { PageData } from "./$types";
   import { getStorm, runCycle, getCycle, getSkew } from "$lib/api/endpoints";
   import { ApiError } from "$lib/api/client";
   import type { StormDetail, CycleResult, SkewReportOut } from "$lib/api/types";
@@ -28,6 +30,8 @@
     formatLatLon,
     formatUtc,
   } from "$lib/utils";
+
+  let { data }: { data: PageData } = $props();
 
   const stormId = $derived(page.params.stormId!);
 
@@ -132,6 +136,14 @@
   });
 
   async function handleRunCycle() {
+    // #171: anemoi-api-real now rejects an unauthenticated cycle POST
+    // (the proxy 401s), and anonymous visitors have no way to authenticate
+    // a fetch -- send them to log in instead of a raw error surfacing
+    // from a click that could never have worked.
+    if (!data.user) {
+      await goto("/auth/login");
+      return;
+    }
     running = true;
     error = null;
     try {

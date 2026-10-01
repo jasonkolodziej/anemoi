@@ -1,4 +1,4 @@
-import adapter from '@sveltejs/adapter-static';
+import adapter from '@sveltejs/adapter-cloudflare';
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
@@ -11,16 +11,13 @@ export default defineConfig({
 				runes: ({ filename }) =>
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
-			// Static adapter: the console is a client-rendered SPA talking to
-			// Anemoi-API over fetch/WebSocket, so there is no server runtime to
-			// deploy -- `npm run build` emits plain files for any static host.
-			adapter: adapter({
-				pages: 'build',
-				assets: 'build',
-				fallback: 'index.html',
-				precompress: false,
-				strict: true
-			}),
+			// Cloudflare adapter, not adapter-static: #171 gives the console a
+			// real Worker (login, D1-backed sessions, API-key issuance,
+			// proxying to anemoi-api-real) -- `+page.server.ts`/`+server.ts`
+			// routes need a server runtime, which static prerendering can't
+			// provide. Emits `.svelte-kit/cloudflare/_worker.js` +
+			// `.svelte-kit/cloudflare` assets; see console/wrangler.jsonc.
+			adapter: adapter(),
 			// /docs/[slug] pages prerender from wiki content edited in a
 			// separate repo, with no chance for this build to catch a mistake
 			// before it happens -- a malformed link in some future wiki edit

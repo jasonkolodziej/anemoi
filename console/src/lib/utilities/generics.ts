@@ -113,7 +113,7 @@ export type GenericViewableContent =
  * <script lang="ts">
  *		import type { ExtractGenericViewableContent, GenericViewableContent } from "$lib/utilities/generics";
  *		import type { PrimitiveDivAttributes } from "$lib/utils";
- *		import { GenericRenderer } from "$lib/registry/ui/generic-renderer/index.ts";
+ *		import { GenericRenderer } from "$lib/components/ui/generic-renderer/index.ts";
  *		type $$Props = {
  *			readonly id: string;
  *			actions?: ExtractGenericViewableContent<GenericViewableContent>;
