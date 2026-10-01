@@ -10,6 +10,13 @@ GITHUB_CLIENT_SECRET=
 GOOGLE_CLIENT_ID=
 GOOGLE_CLIENT_SECRET=
 ADMIN_USER_IDS=
+# Only has any effect before schemas/better-auth.sql has been applied to
+# whichever D1 this points at -- that migration seeds a registration_policy
+# row that overrides this var from then on (see auth.ts's
+# checkRegistrationOpen). Against a fresh, schema-less local D1 this is
+# the only thing controlling it; against one you've already migrated,
+# use `UPDATE registration_policy SET value = 'true' WHERE key =
+# 'open_registration'` instead.
 OPEN_REGISTRATION=true
 INTERNAL_PROXY_SECRET=dev-only-change-me
 

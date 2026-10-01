@@ -144,7 +144,13 @@ CREATE TABLE IF NOT EXISTS "registration_policy" (
   "updated_at" TEXT DEFAULT (datetime('now'))
 );
 
--- Seed with default: registration closed
+-- Seed with default: registration closed. This row, not the
+-- OPEN_REGISTRATION env var/secret, is what actually governs sign-ups
+-- from here on (see auth.ts's checkRegistrationOpen) -- deliberately: a
+-- live, auditable admin toggle shouldn't be overridable by a forgotten
+-- deploy-time var. To open registration temporarily (e.g. to create the
+-- first account):
+--   UPDATE "registration_policy" SET "value" = 'true' WHERE "key" = 'open_registration';
 INSERT OR IGNORE INTO "registration_policy" ("key", "value")
   VALUES ('open_registration', 'false');
 
