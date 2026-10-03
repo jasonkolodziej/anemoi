@@ -1,0 +1,349 @@
+name: Deploy
+
+# One pipeline for everything that ships to Cloudflare: the console Worker
+# (anemoi.systems) with its D1 migrations, and docker/api (anemoi-api-real,
+# a Worker + Cloudflare Container). Replaces the separate deploy-console.yml
+# and deploy-docker-api.yml, which each asked for their own approval.
+#
+#   changes ──┬─▶ test-console ──┐
+#             └─▶ test-api ──────┴─▶ deploy  (one approval, cloudflare-production)
+#
+# changes       .github/scripts/deploy-plan.sh decides what to test and what
+#               to deploy, and writes the plan to the run summary -- read it
+#               before approving. On main, a component deploys when it has
+#               changed since its `deployed/<component>` tag, which `deploy`
+#               moves only after that component ships. A change that didn't
+#               ship (rejected, failed, superseded) stays pending for the next
+#               run instead of being dropped.
+# test-console  typecheck, build, auth e2e against the built Worker on workerd
+#               with better-auth's schema check on (D1 built from
+#               console/migrations/). Uploads the tested build for deploy.
+# test-api      docker/api's TypeScript check, plus the Python tests for the
+#               API the container serves (tests/test_api_*.py) with the
+#               image's own extras except torch-cpu.
+# deploy        ONE job behind the cloudflare-production environment's
+#               required reviewer, so one approval (or rejection) covers the
+#               whole plan. Its name lists what it will ship. In order: D1
+#               restore point → migrations → schema verification → console
+#               → docker/api. A failure stops everything after it.
+#
+# PRs run changes + the relevant tests only. Manual runs (Run workflow)
+# deploy the selected components from main regardless of tags -- e.g. to
+# pick up wiki edits in /docs, which don't touch this repo.
+#
+# Approving a run after a newer commit has landed on main deploys nothing
+# (the newer run will pick its changes up via the tags) rather than rolling
+# production back to an older commit.
+#
+# Secrets: CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID on the
+# cloudflare-production environment. The token needs Workers Scripts: Edit,
+# D1: Edit and Containers: Edit on the account, plus Workers Routes: Edit on
+# the anemoi.systems zone.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      console:
+        description: Deploy the console (+ D1 migrations)
+        type: boolean
+        default: true
+      api:
+        description: Deploy docker/api
+        type: boolean
+        default: true
+
+# Superseded PR runs are cancelled. Runs on main never share a group: each
+# one is approved (or rejected) on its own, and cancelling a queued run would
+# only delay its changes to the next run anyway.
+concurrency:
+  group: deploy-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      test_console: ${{ steps.plan.outputs.test_console }}
+      test_api: ${{ steps.plan.outputs.test_api }}
+      deploy_console: ${{ steps.plan.outputs.deploy_console }}
+      deploy_api: ${{ steps.plan.outputs.deploy_api }}
+      plan: ${{ steps.plan.outputs.plan }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # Full history + tags: the plan diffs against deployed/* tags and
+          # the PR's merge base.
+          fetch-depth: 0
+
+      - name: Decide what to test and deploy
+        id: plan
+        run: .github/scripts/deploy-plan.sh
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          HEAD_SHA: ${{ github.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          DISPATCH_CONSOLE: ${{ inputs.console }}
+          DISPATCH_API: ${{ inputs.api }}
+
+  test-console:
+    name: "Test: console"
+    needs: changes
+    if: needs.changes.outputs.test_console == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: console
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6.1.0
+        with:
+          # The exact pnpm in package.json's packageManager field.
+          package_json_file: console/package.json
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: console/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        # `check` runs sync-wiki first (the docs routes import its output).
+        run: pnpm run check:errors
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Auth e2e against the built Worker (workerd)
+        # global-setup.ts applies console/migrations/ to a fresh local D1;
+        # the config turns better-auth's schema check on.
+        run: pnpm run test:e2e:workerd
+
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-traces
+          path: console/test-results/
+          retention-days: 7
+
+      - name: Upload tested build
+        if: needs.changes.outputs.deploy_console == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: console-build
+          # Everything `wrangler deploy` reads: wrangler.jsonc's `main`
+          # (cloudflare/_worker.js) imports ../output/server and
+          # ../cloudflare-tmp/manifest.js; `assets` is cloudflare/. The
+          # generated tsconfig only because console/tsconfig.json extends
+          # it and wrangler's bundler warns when it's missing.
+          path: |
+            console/.svelte-kit/tsconfig.json
+            console/.svelte-kit/cloudflare
+            console/.svelte-kit/cloudflare-tmp
+            console/.svelte-kit/output
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+
+  test-api:
+    name: "Test: docker/api"
+    needs: changes
+    if: needs.changes.outputs.test_api == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6.1.0
+        with:
+          package_json_file: docker/api/package.json
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: docker/api/pnpm-lock.yaml
+
+      - name: Typecheck the Worker
+        working-directory: docker/api
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run check
+
+      - name: Set up uv
+        # setup-uv publishes full-version tags only (no floating v10).
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - name: API tests
+        # The routes the container serves, with the image's extras
+        # (docker/multistage.Dockerfile's api-builder) minus torch-cpu --
+        # the API tests don't need it, and the torch paths are exercised by
+        # the training pipeline instead. Scoped to tests/test_api_*.py
+        # because the wider suite currently has failures unrelated to the
+        # API (torch/gridded tests missing skip markers, and an
+        # order-dependent native crash) that would block every deploy.
+        run: >-
+          uv run --frozen --extra dev --extra api --extra tracking
+          --extra storage --extra gridded
+          pytest -q tests/test_api_docs.py tests/test_api_real_state.py tests/test_api_smoke.py
+
+  deploy:
+    name: "Deploy to production: ${{ needs.changes.outputs.plan }}"
+    needs: [changes, test-console, test-api]
+    # Runs only on main/manual, when something is planned, and when every
+    # test job that ran passed (a skipped test job means that component
+    # isn't in the plan).
+    if: >-
+      always()
+      && github.event_name != 'pull_request'
+      && needs.changes.result == 'success'
+      && (needs.changes.outputs.deploy_console == 'true' || needs.changes.outputs.deploy_api == 'true')
+      && contains(fromJSON('["success", "skipped"]'), needs.test-console.result)
+      && contains(fromJSON('["success", "skipped"]'), needs.test-api.result)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: cloudflare-production
+    permissions:
+      # Moves the deployed/<component> tags after each component ships.
+      contents: write
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      DEPLOY_CONSOLE: ${{ needs.changes.outputs.deploy_console }}
+      DEPLOY_API: ${{ needs.changes.outputs.deploy_api }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Skip if a newer commit is on main
+        id: fresh
+        # Approval can come long after the run started. Shipping an older
+        # commit over a newer one would roll production back; the newer
+        # commit's own run deploys these changes too, via the tags.
+        run: |
+          if [[ "${{ github.ref }}" != refs/heads/main ]]; then
+            echo "Deploys run from main only (this run is on ${{ github.ref }})." >&2
+            exit 1
+          fi
+          latest=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [[ "$latest" != "$GITHUB_SHA" ]]; then
+            echo "::notice::main has moved on to ${latest:0:7}; not deploying ${GITHUB_SHA:0:7}. Approve the newest Deploy run instead -- it includes these changes."
+            echo "current=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "current=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up pnpm
+        if: steps.fresh.outputs.current == 'true'
+        uses: pnpm/action-setup@v6.1.0
+        with:
+          package_json_file: ${{ env.DEPLOY_CONSOLE == 'true' && 'console/package.json' || 'docker/api/package.json' }}
+
+      - name: Set up Node.js
+        if: steps.fresh.outputs.current == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # ── console + D1 ──────────────────────────────────────────────────
+      - name: "console: install dependencies"
+        if: steps.fresh.outputs.current == 'true' && env.DEPLOY_CONSOLE == 'true'
+        working-directory: console
+        # wrangler, plus node_modules for wrangler deploy's bundler to
+        # resolve the server output's external imports.
+        run: pnpm install --frozen-lockfile
+
+      - name: "console: download tested build"
+        if: steps.fresh.outputs.current == 'true' && env.DEPLOY_CONSOLE == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: console-build
+          path: console/.svelte-kit
+
+      - name: "D1: record restore point"
+        if: steps.fresh.outputs.current == 'true' && env.DEPLOY_CONSOLE == 'true'
+        working-directory: console
+        # Roll back with: wrangler d1 time-travel restore anemoi_auth --bookmark=<id>
+        run: pnpm exec wrangler d1 time-travel info anemoi_auth
+
+      - name: "D1: apply migrations"
+        if: steps.fresh.outputs.current == 'true' && env.DEPLOY_CONSOLE == 'true'
+        working-directory: console
+        run: pnpm exec wrangler d1 migrations apply anemoi_auth --remote
+
+      - name: "D1: verify production schema matches the tested one"
+        if: steps.fresh.outputs.current == 'true' && env.DEPLOY_CONSOLE == 'true'
+        working-directory: console
+        run: |
+          pnpm exec wrangler d1 migrations apply anemoi_auth --local
+          node scripts/verify-d1-schema.mjs
+
+      - name: "console: wrangler deploy"
+        if: steps.fresh.outputs.current == 'true' && env.DEPLOY_CONSOLE == 'true'
+        working-directory: console
+        run: pnpm exec wrangler deploy
+
+      - name: "console: mark deployed"
+        if: steps.fresh.outputs.current == 'true' && env.DEPLOY_CONSOLE == 'true'
+        run: |
+          git tag -f deployed/console "$GITHUB_SHA"
+          git push -f origin refs/tags/deployed/console
+
+      # ── docker/api ────────────────────────────────────────────────────
+      - name: "docker/api: confirm the runner's Docker daemon is genuine Docker"
+        if: steps.fresh.outputs.current == 'true' && env.DEPLOY_API == 'true'
+        # docker/api/README.md "problem 3": a DOCKER_HOST pointed at podman
+        # silently broke wrangler's image build. Shouldn't happen on a
+        # GitHub-hosted runner; checked rather than assumed.
+        run: |
+          if [ -n "${DOCKER_HOST:-}" ]; then
+            echo "DOCKER_HOST is set ($DOCKER_HOST) on this runner -- unexpected, refusing to deploy" >&2
+            exit 1
+          fi
+          docker info --format 'Docker daemon OK: {{.ServerVersion}} ({{.OperatingSystem}})'
+
+      - name: "docker/api: install dependencies"
+        if: steps.fresh.outputs.current == 'true' && env.DEPLOY_API == 'true'
+        working-directory: docker/api
+        run: pnpm install --frozen-lockfile
+
+      - name: "docker/api: wrangler deploy (builds + pushes the container image)"
+        if: steps.fresh.outputs.current == 'true' && env.DEPLOY_API == 'true'
+        working-directory: docker/api
+        # cf:deploy wraps `env -u DOCKER_HOST wrangler deploy` -- the same
+        # command local deploys use.
+        run: pnpm run cf:deploy
+
+      - name: "docker/api: mark deployed"
+        if: steps.fresh.outputs.current == 'true' && env.DEPLOY_API == 'true'
+        run: |
+          git tag -f deployed/api "$GITHUB_SHA"
+          git push -f origin refs/tags/deployed/api

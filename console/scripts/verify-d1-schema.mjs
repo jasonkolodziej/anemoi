@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Verifies the production D1 (`--remote`) has everything the local D1 built
-// from console/migrations/ has: every table, every column (and that a column
-// required locally isn't nullable remotely), every index. Run by
-// .github/workflows/deploy-console.yml after `migrations apply --remote` and
+// from console/migrations/ has -- every table, every column, every index --
+// and fails if anything is missing. A column that's NOT NULL locally but
+// nullable in production is only reported, not failed: better-auth always
+// writes those columns, so it can't break an insert. Run by
+// .github/workflows/deploy.yml after `migrations apply --remote` and
 // before `wrangler deploy`, so the Worker only ships against a schema that
 // matches the one the e2e suite (and better-auth's own schema check) just
 // passed against.

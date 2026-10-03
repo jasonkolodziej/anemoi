@@ -320,15 +320,17 @@ builds and pushes the image as part of it.
 
 ### Automated deploy (#97)
 
-`.github/workflows/deploy-docker-api.yml` runs this exact `pnpm run
-cf:deploy` on every push to `main` that touches what the image or Worker
-is built from -- `docker/api/**` (except markdown), `src/**`,
-`pyproject.toml`, or `uv.lock` -- but
-it's gated behind the `cloudflare-production` GitHub Environment (a
-required reviewer, the repo owner), so a merge *queues* the deploy and
-nothing real ships until that's approved in the Actions run. Approving
-runs the identical command a manual deploy would, just from CI instead
-of a local machine.
+`.github/workflows/deploy.yml` (shared with the console) runs this exact
+`pnpm run cf:deploy` when what the image or Worker is built from --
+`docker/api/**` (except markdown), `docker/multistage.Dockerfile`,
+`src/**`, `pyproject.toml`, or `uv.lock` -- has changed since the last
+successful API deploy (the `deployed/api` git tag), after the API's tests
+pass. It's gated behind the `cloudflare-production` GitHub Environment (a
+required reviewer, the repo owner): one approval covers everything that
+run deploys (console and/or API), and nothing real ships until then.
+Approving runs the identical command a manual deploy would, just from CI
+instead of a local machine. To redeploy without a code change, use **Run
+workflow** on the Deploy workflow.
 
 It uses two secrets on that environment (Settings -> Environments ->
 `cloudflare-production` -> Environment secrets), both set as of
