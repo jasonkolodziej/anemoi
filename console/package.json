@@ -10,6 +10,7 @@
     "build": "pnpm run sync-wiki && vite build",
     "preview": "vite preview",
     "test:e2e": "playwright test",
+    "test:e2e:workerd": "playwright test -c playwright.workerd.config.ts",
     "prepare": "svelte-kit sync || echo ''",
     "check": "pnpm run sync-wiki && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:errors": "pnpm run check --threshold error",
