@@ -27,7 +27,7 @@ export default defineConfig({
 			' --var BETTER_AUTH_SECRET:e2e-only-not-a-real-secret-0123456789' +
 			' --var OPEN_REGISTRATION:true' +
 			// better-auth's own schema check against the local D1 that
-			// global-setup.ts builds from schemas/*.sql -- off in
+			// global-setup.ts builds from migrations/ -- off in
 			// production (see auth.ts), on here so schema drift fails.
 			' --var BETTER_AUTH_VALIDATE_SCHEMA:true',
 		// A static asset, not /api/auth/ok: with the schema check on, a

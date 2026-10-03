@@ -30,12 +30,15 @@
 	// Shared with docker/api/wrangler.jsonc -- both Workers bind the same
 	// database so anemoi-api-real can verify a console-issued API key
 	// without a second copy of the user/key data. Create with
-	// `wrangler d1 create anemoi_auth`; apply console/schemas/*.sql.
+	// `wrangler d1 create anemoi_auth`. Schema lives in console/migrations/
+	// (`wrangler d1 migrations apply anemoi_auth --local|--remote`); the
+	// deploy-console workflow applies new ones to production.
 	"d1_databases": [
 		{
 			"binding": "AUTH_DB",
 			"database_name": "anemoi_auth",
 			"database_id": "92bff5ef-6d73-4188-a75a-c763bac6a0e6",
+			"migrations_dir": "migrations",
 		},
 	],
 

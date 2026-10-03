@@ -198,10 +198,10 @@ test('sign out revokes the session row itself, not just the cookies', async ({ p
 	}
 });
 
-test("better-auth's schema check passes against schemas/*.sql", async ({ page }) => {
+test("better-auth's schema check passes against migrations/", async ({ page }) => {
 	// Under `pnpm test:e2e:workerd`, BETTER_AUTH_VALIDATE_SCHEMA=true makes
 	// every transactional better-auth call first diff the live local D1
-	// (built from schemas/*.sql by global-setup.ts) against what the
+	// (built from migrations/ by global-setup.ts) against what the
 	// installed plugins write; a mismatch throws SchemaMismatchError and
 	// the call 500s with the missing table/column named in the server log.
 	// The check diffs every table at once, so any transactional call trips
