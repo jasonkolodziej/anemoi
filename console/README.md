@@ -69,7 +69,7 @@ pnpm exec wrangler d1 migrations apply anemoi_auth --remote
 Schema changes go in a new numbered file under `migrations/`
 (`pnpm exec wrangler d1 migrations create anemoi_auth <name>`). D1 records
 each applied file in its `d1_migrations` table, so each one runs exactly
-once per database: `.github/workflows/deploy-console.yml` applies new ones
+once per database: `.github/workflows/deploy.yml` applies new ones
 to production on merge, and `e2e/global-setup.ts` applies them locally.
 Two rules, because migrations are applied *before* the new Worker
 version goes live and there's no automatic down-migration:

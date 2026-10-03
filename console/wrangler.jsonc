@@ -32,7 +32,8 @@
 	// without a second copy of the user/key data. Create with
 	// `wrangler d1 create anemoi_auth`. Schema lives in console/migrations/
 	// (`wrangler d1 migrations apply anemoi_auth --local|--remote`); the
-	// deploy-console workflow applies new ones to production.
+	// Deploy workflow (.github/workflows/deploy.yml) applies new ones to
+	// production.
 	"d1_databases": [
 		{
 			"binding": "AUTH_DB",
