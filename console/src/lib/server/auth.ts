@@ -30,8 +30,18 @@ import type { getDynamicHostInfo } from "./hosting";
  * Check whether open registration is enabled.
  *
  * 1. Query the `registration_policy` D1 table for `open_registration`.
- * 2. If no row or the query fails, fall back to the `OPEN_REGISTRATION`
+ * 2. If no row or the query fails, fall back to an `OPEN_REGISTRATION`
  *    environment variable (default: `"false"`).
+ *
+ * D1 deliberately wins over the env var whenever a row exists -- this is
+ * a live, auditable admin toggle (flip it with one SQL `UPDATE`, no
+ * redeploy or secret change needed), not a bootstrap default. The env
+ * var only matters before `better-auth.sql`'s migration has ever run
+ * (seeds the row as `'false'`): once it has, setting the env var/secret
+ * does nothing, by design -- closed-by-default shouldn't be
+ * accidentally reopened by a forgotten deploy-time var. To actually open
+ * registration:
+ *   UPDATE registration_policy SET value = 'true' WHERE key = 'open_registration';
  */
 async function checkRegistrationOpen(d1: D1Database): Promise<boolean> {
 	try {
