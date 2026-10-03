@@ -14,6 +14,11 @@ export default defineConfig({
 	forbidOnly: !!process.env.CI,
 	retries: process.env.CI ? 1 : 0,
 	reporter: 'list',
+	// Migrates the local D1 auth schema and opens registration for
+	// auth.spec.ts, then closes registration again -- see
+	// e2e/global-setup.ts. No-ops for every other spec file.
+	globalSetup: './e2e/global-setup.ts',
+	globalTeardown: './e2e/global-teardown.ts',
 	use: {
 		baseURL: 'http://127.0.0.1:5173',
 		trace: 'on-first-retry',
