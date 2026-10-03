@@ -21,7 +21,6 @@ import { admin, emailOTP, magicLink } from "better-auth/plugins";
 import { apiKey } from "@better-auth/api-key";
 import { sveltekitCookies } from "better-auth/svelte-kit";
 import { getRequestEvent } from "$app/server";
-import { D1Dialect } from "kysely-d1";
 import { sendMagicLinkEmail, sendVerificationOTPEmail } from "./email";
 import type { getDynamicHostInfo } from "./hosting";
 
@@ -83,14 +82,30 @@ export function getAuth(
 	if (_auth && _authCacheKey === cacheKey) return _auth as ReturnType<typeof betterAuth>;
 	_authCacheKey = cacheKey;
 
-	const dialect = new D1Dialect({ database: d1 });
-
 	_auth = betterAuth({
 		...hostInfo?.ba,
-		database: {
-			dialect,
-			type: "sqlite" as const,
-		},
+		// Passing the raw D1 binding (not a hand-built `{ dialect, type }`
+		// via the third-party `kysely-d1` package, which this used to do)
+		// is what makes better-auth's own adapter factory auto-detect D1 --
+		// confirmed in its source (@better-auth/kysely-adapter's
+		// createKyselyAdapter): detection is a duck-type check for
+		// `"batch" in db && "exec" in db && "prepare" in db`, which only a
+		// bare D1Database satisfies, not a `{ dialect, type }` wrapper. Only
+		// that branch sets `transaction: false` and swaps in better-auth's
+		// own D1-aware dialect -- D1 has no interactive transactions
+		// (confirmed in both kysely-d1's and better-auth's own D1 dialects:
+		// `beginTransaction()` just throws "not supported"). The
+		// `{ dialect, type }` shape we used before left `transaction`
+		// undefined, and at least one adapter code path (seen in
+		// @better-auth/kysely-adapter's `fetchInserted`-style helpers,
+		// backing `signOut` and other operations) unconditionally opens a
+		// `db.transaction()` rather than checking that flag -- that throw
+		// inside `kysely-d1`'s driver never reached our own try/catch as a
+		// clean rejection, instead leaving the request to hang until
+		// Cloudflare killed it (reproduced live: `/auth/logout` showed
+		// "Canceled" in `wrangler tail`, not an error, with sign-out never
+		// actually completing even once across repeated attempts).
+		database: d1,
 		// Caches the session + user payload in a signed cookie so
 		// `auth.api.getSession()` (hooks.server.ts, called on every request)
 		// skips the D1 round-trip for a signed-in user as long as the cache

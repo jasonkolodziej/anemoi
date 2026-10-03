@@ -7,14 +7,18 @@
  */
 import { betterAuth } from 'better-auth';
 import { apiKey } from '@better-auth/api-key';
-import { D1Dialect } from 'kysely-d1';
 
 function buildAuth(d1: D1Database) {
 	return betterAuth({
-		database: {
-			dialect: new D1Dialect({ database: d1 }),
-			type: 'sqlite' as const,
-		},
+		// Raw D1 binding, not a hand-built `{ dialect, type }` via
+		// `kysely-d1` -- see console/src/lib/server/auth.ts's `getAuth` for
+		// the full explanation. Only this shape makes better-auth's adapter
+		// factory auto-detect D1 and set `transaction: false`; the wrapped
+		// form left it undefined, and at least one adapter code path opens
+		// a `db.transaction()` regardless, which throws against D1 (no
+		// interactive transactions) in a way that hangs the request instead
+		// of rejecting cleanly.
+		database: d1,
 		plugins: [apiKey({ enableSessionForAPIKeys: true })],
 	});
 }
