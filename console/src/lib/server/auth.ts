@@ -79,8 +79,20 @@ export function getAuth(
 	// constructs it as a plain string, so narrow rather than widen
 	// `cacheKey` to match.
 	const cacheKey = typeof hostInfo?.ba.baseURL === 'string' ? hostInfo.ba.baseURL : '';
-	if (_auth && _authCacheKey === cacheKey) return _auth as ReturnType<typeof betterAuth>;
+	if (_auth && _authCacheKey === cacheKey) {
+		console.log(`[getAuth] cache hit (key=${cacheKey})`);
+		return _auth as ReturnType<typeof betterAuth>;
+	}
 	_authCacheKey = cacheKey;
+
+	// Chasing an intermittent production hang (#171 follow-up) that never
+	// reproduced locally -- this isolate is either cold or switching
+	// origins, and is about to pay the full cost of constructing 5
+	// plugins (passkey, magicLink, emailOTP, apiKey, admin). Timed so
+	// `wrangler tail` shows whether a slow/canceled request correlates
+	// with landing right here.
+	const constructStartedAt = Date.now();
+	console.log(`[getAuth] cache miss (key=${cacheKey}) -- constructing betterAuth instance`);
 
 	_auth = betterAuth({
 		...hostInfo?.ba,
@@ -94,18 +106,43 @@ export function getAuth(
 		// that branch sets `transaction: false` and swaps in better-auth's
 		// own D1-aware dialect -- D1 has no interactive transactions
 		// (confirmed in both kysely-d1's and better-auth's own D1 dialects:
-		// `beginTransaction()` just throws "not supported"). The
-		// `{ dialect, type }` shape we used before left `transaction`
-		// undefined, and at least one adapter code path (seen in
-		// @better-auth/kysely-adapter's `fetchInserted`-style helpers,
-		// backing `signOut` and other operations) unconditionally opens a
-		// `db.transaction()` rather than checking that flag -- that throw
-		// inside `kysely-d1`'s driver never reached our own try/catch as a
-		// clean rejection, instead leaving the request to hang until
-		// Cloudflare killed it (reproduced live: `/auth/logout` showed
-		// "Canceled" in `wrangler tail`, not an error, with sign-out never
-		// actually completing even once across repeated attempts).
+		// `beginTransaction()` just throws "not supported"). Real
+		// correctness fix regardless, though the `validateSchema: false`
+		// below turned out to be what actually explains the intermittent
+		// production "Canceled" hangs on signOut/passkey endpoints -- see
+		// its comment.
 		database: d1,
+		advanced: {
+			database: {
+				// better-auth's kysely adapter registers a runtime schema
+				// check (@better-auth/core's registerSchemaCheck/
+				// runWithTransaction, confirmed by reading both directly)
+				// that every "transactional" operation -- signOut, passkey
+				// registration, and apparently the list endpoints too --
+				// awaits *before* running, unconditionally, by default
+				// (`validateSchema` defaults to anything but `false`). The
+				// check itself does real `PRAGMA table_info` introspection
+				// against D1 for every better-auth-managed table. It's
+				// cached per adapter instance after the first clean
+				// result (so a warm isolate is fast), but on a cold
+				// isolate it's genuine network I/O against D1 -- and
+				// concurrent requests on that isolate all await the same
+				// pending check, so if it's slow they all stall or get
+				// killed together. This is what "wrangler tail" showed as
+				// "Canceled" (not an error -- the platform abandoning a
+				// stalled request), reproduced live, intermittently,
+				// specifically on signOut/passkey-register/list calls,
+				// and never locally (Miniflare's local D1 introspection
+				// has no real network latency to expose this). The schema
+				// itself is correct -- verified directly against the
+				// installed @better-auth/api-key's own schema definition
+				// and against both live D1 instances -- so this check has
+				// nothing left to catch; disabling it removes the
+				// introspection tax entirely rather than just caching it
+				// away.
+				validateSchema: false,
+			},
+		},
 		// Caches the session + user payload in a signed cookie so
 		// `auth.api.getSession()` (hooks.server.ts, called on every request)
 		// skips the D1 round-trip for a signed-in user as long as the cache
@@ -218,6 +255,7 @@ export function getAuth(
 		},
 	});
 
+	console.log(`[getAuth] betterAuth instance constructed in ${Date.now() - constructStartedAt}ms`);
 	return _auth as ReturnType<typeof betterAuth>;
 }
 

@@ -144,15 +144,39 @@
 		await loadPasskeys();
 	}
 
+	let signingOut = $state(false);
+
 	async function signOut() {
-		await fetch("/auth/logout", { method: "POST" });
-		// See login/+page.svelte's handlePasskeyLogin -- the root layout's
-		// user data doesn't refresh on its own after an in-app auth change.
-		await goto("/", { invalidateAll: true });
+		// Real production bug, caught live: this button had no pending
+		// state, so an impatient re-click fired a second, third, fourth...
+		// concurrent POST /auth/logout against the same session. better-auth
+		// handled the first fine but the platform killed the rest under the
+		// pile-up ("Canceled" in `wrangler tail`, not an error) -- looked
+		// exactly like sign-out "not working" even though a single click
+		// always completed cleanly once nothing was competing with it.
+		if (signingOut) return;
+		signingOut = true;
+		try {
+			await fetch("/auth/logout", { method: "POST" });
+			// See login/+page.svelte's handlePasskeyLogin -- the root layout's
+			// user data doesn't refresh on its own after an in-app auth change.
+			await goto("/", { invalidateAll: true });
+		} finally {
+			signingOut = false;
+		}
 	}
 
-	loadKeys();
-	loadPasskeys();
+	// Sequenced, not concurrent (no more `loadKeys(); loadPasskeys();`) --
+	// the same pile-up as signOut's, just self-inflicted on every single
+	// profile load instead of needing a rapid re-click: two concurrent
+	// auth-handler requests competing for one isolate, one of which would
+	// intermittently get "Canceled" rather than served.
+	async function loadAll() {
+		await loadKeys();
+		await loadPasskeys();
+	}
+
+	loadAll();
 </script>
 
 <div class="mx-auto flex max-w-lg flex-col gap-6 px-4 py-10">
@@ -162,7 +186,9 @@
 			<CardDescription>{data.user.email}</CardDescription>
 		</CardHeader>
 		<CardFooter>
-			<Button variant="outline" onclick={signOut}>Sign out</Button>
+			<Button variant="outline" onclick={signOut} disabled={signingOut}>
+				{signingOut ? "Signing out…" : "Sign out"}
+			</Button>
 		</CardFooter>
 	</Card>
 

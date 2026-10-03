@@ -17,8 +17,25 @@ function buildAuth(d1: D1Database) {
 		// form left it undefined, and at least one adapter code path opens
 		// a `db.transaction()` regardless, which throws against D1 (no
 		// interactive transactions) in a way that hangs the request instead
-		// of rejecting cleanly.
+		// of rejecting cleanly. Real correctness fix regardless, though
+		// the `validateSchema: false` below turned out to be what
+		// actually explains the intermittent "Canceled" hangs -- see its
+		// comment in console/src/lib/server/auth.ts (same mechanism, same
+		// fix, applies here too since this also goes through better-auth's
+		// kysely adapter against the same D1).
 		database: d1,
+		advanced: {
+			database: {
+				// See console/src/lib/server/auth.ts's getAuth for the
+				// full explanation: better-auth's kysely adapter awaits a
+				// real D1-introspection schema check before every
+				// "transactional" operation by default, which is slow on
+				// a cold isolate and was causing intermittent production
+				// hangs. The schema is verified correct, so disabling
+				// this removes the tax entirely.
+				validateSchema: false,
+			},
+		},
 		plugins: [apiKey({ enableSessionForAPIKeys: true })],
 	});
 }
