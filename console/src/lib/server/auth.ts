@@ -101,7 +101,12 @@ export function getAuth(event: RequestEvent): Auth | null {
 	if (!d1) return null;
 
 	const ctx = event.platform?.ctx;
-	const auth = buildAuth(d1, getDynamicHostInfo(event), ctx ? (p) => ctx.waitUntil(p) : undefined);
+	const auth = buildAuth(
+		d1,
+		getDynamicHostInfo(event),
+		ctx ? (p) => ctx.waitUntil(p) : undefined,
+		event.platform?.env?.SEND_EMAIL ?? null,
+	);
 	_authByRequest.set(event.request, auth);
 	return auth;
 }
@@ -110,6 +115,7 @@ function buildAuth(
 	d1: D1Database,
 	hostInfo: ReturnType<typeof getDynamicHostInfo>,
 	waitUntil: ((promise: Promise<unknown>) => void) | undefined,
+	sendEmail: SendEmail | null,
 ) {
 	return betterAuth({
 		...hostInfo.ba,
@@ -198,12 +204,12 @@ function buildAuth(
 			}),
 			magicLink({
 				sendMagicLink: async ({ email, url }) => {
-					await sendMagicLinkEmail(email, url);
+					await sendMagicLinkEmail(sendEmail, email, url);
 				},
 			}),
 			emailOTP({
 				async sendVerificationOTP({ email, otp, type }) {
-					await sendVerificationOTPEmail(email, otp, type);
+					await sendVerificationOTPEmail(sendEmail, email, otp, type);
 				},
 			}),
 			apiKey({ enableSessionForAPIKeys: true }),
@@ -229,17 +235,21 @@ function buildAuth(
 		databaseHooks: {
 			user: {
 				create: {
-					before: async (user) => {
-						// Admin-created users bypass the policy.
-						// The admin plugin's `/admin/create-user` endpoint already
-						// requires an authenticated admin session, so we check whether
-						// the user record was explicitly flagged as admin-created.
-						// Since databaseHooks don't receive the request context directly,
-						// we rely on the `_adminBypass` flag set in the before-hook
-						// middleware below. The flag is stored on the module-scoped
-						// variable which is safe because Workers process one request
-						// at a time per isolate.
-						if (_adminBypassActive) {
+					before: async (user, context) => {
+						// Admin-created users bypass the policy. Keyed off the
+						// endpoint this write came from, not a module-level flag
+						// (which this used to be, toggled by a never-called
+						// `withAdminBypass`): Workers run concurrent requests on
+						// one isolate, so a module flag set by one request is
+						// visible to every other request in flight -- a sign-up
+						// racing an admin's create-user could slip past a
+						// closed registration. `/admin/create-user` itself has
+						// already enforced the caller's `user:create` permission
+						// before any DB write (or it was a trusted server-side
+						// call with no request), so reaching this hook from it
+						// is proof enough. Same `context.path` check better-auth
+						// uses internally for this kind of scoping.
+						if (context?.path === "/admin/create-user") {
 							return { data: user };
 						}
 
@@ -255,35 +265,6 @@ function buildAuth(
 			},
 		},
 	});
-}
-
-// ── Admin bypass flag ────────────────────────────────────────────────────────
-// Workers isolates are single-threaded, so a module-level boolean is safe
-// as a request-scoped flag. It's set before the admin create-user call
-// and cleared immediately after.
-
-let _adminBypassActive = false;
-
-/**
- * Temporarily enable the admin bypass for registration policy.
- *
- * Call this around `auth.api.createUser()` invocations from admin
- * endpoints so that `databaseHooks.user.create.before` allows the
- * creation even when registration is closed. `fn` is always async in
- * practice (`createUser` returns a Promise) -- `await`ed here, not just
- * returned, so the flag stays set until the hook it's meant to influence
- * actually runs. A bare `return fn()` let `finally` clear the flag the
- * instant the promise was created, before `databaseHooks.user.create
- * .before` ever read it, silently defeating the bypass for its one real
- * use case (Copilot review, PR #197).
- */
-export async function withAdminBypass<T>(fn: () => Promise<T>): Promise<T> {
-	_adminBypassActive = true;
-	try {
-		return await fn();
-	} finally {
-		_adminBypassActive = false;
-	}
 }
 
 export type Auth = ReturnType<typeof buildAuth>;

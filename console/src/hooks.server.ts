@@ -3,7 +3,6 @@ import { sequence } from "@sveltejs/kit/hooks";
 import { svelteKitHandler } from "better-auth/svelte-kit";
 import { createGuardHook } from "svelte-guard";
 import type { Handle } from "@sveltejs/kit";
-import { setSendEmailBinding } from "$lib/server/email";
 import { getAuth } from "$lib/server/auth";
 import { buildSessionHeaders } from "$lib/server/auth-utils";
 
@@ -63,8 +62,6 @@ const authHandle: Handle = async ({ event, resolve }) => {
 		event.locals.user = null;
 		return resolve(event);
 	}
-
-	setSendEmailBinding(event.platform?.env?.SEND_EMAIL);
 
 	// Per-request instance -- see getAuth's comment for why it must never
 	// be shared across requests on Workers.

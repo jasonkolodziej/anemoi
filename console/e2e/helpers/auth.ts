@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readdirSync, statSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BrowserContext, Page } from '@playwright/test';
@@ -94,4 +95,19 @@ export async function addVirtualAuthenticator(context: BrowserContext, page: Pag
 		},
 	});
 	return { cdp, authenticatorId };
+}
+
+/**
+ * Runs SQL against the same local D1 (`anemoi_auth`, Miniflare state) the
+ * dev server under test reads -- the same tool global-setup.ts uses.
+ */
+export function localD1(sql: string): void {
+	execFileSync('npx', ['wrangler', 'd1', 'execute', 'anemoi_auth', '--local', '--command', sql], {
+		cwd: join(import.meta.dirname, '../..'),
+		stdio: 'pipe',
+	});
+}
+
+export function setRegistrationOpen(open: boolean): void {
+	localD1(`UPDATE registration_policy SET value = '${open}' WHERE key = 'open_registration';`);
 }

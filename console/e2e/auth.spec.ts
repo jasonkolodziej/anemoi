@@ -1,5 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { signUpViaMagicLink, addVirtualAuthenticator } from './helpers/auth';
+import {
+	signUpViaMagicLink,
+	addVirtualAuthenticator,
+	listEmailFiles,
+	waitForNewEmailLink,
+	localD1,
+	setRegistrationOpen,
+} from './helpers/auth';
 
 // Real coverage for the login/logout/passkey flows added by #171 and
 // #201 -- these would have caught both of the real bugs found debugging
@@ -213,4 +220,67 @@ test("better-auth's schema check passes against schemas/*.sql", async ({ page })
 	expect(created.status(), await created.text()).toBe(200);
 	const passkeys = await page.request.get('/api/auth/passkey/list-user-passkeys', QUICK);
 	expect(passkeys.status(), await passkeys.text()).toBe(200);
+});
+
+// ── Registration policy + admin bypass (auth.ts databaseHooks) ────────────
+// The bypass used to be a module-level flag, which isn't request-scoped on
+// Workers (one isolate serves concurrent requests) and was never actually
+// set by anything -- so an admin's `/admin/create-user` was rejected too
+// whenever registration was closed. It's now keyed off the endpoint path.
+
+test.describe('with registration closed', () => {
+	test.beforeAll(() => setRegistrationOpen(false));
+	test.afterAll(() => setRegistrationOpen(true));
+
+	test('a new magic-link sign-up is rejected', async ({ page }) => {
+		const email = freshEmail('closed-signup');
+		const before = listEmailFiles();
+		const res = await page.request.post('/api/auth/sign-in/magic-link', {
+			...QUICK,
+			data: { email, callbackURL: '/profile' },
+		});
+		expect(res.ok()).toBe(true); // sending the link is fine...
+		await page.goto(await waitForNewEmailLink(before));
+		// ...but verifying it must not create the user or a session.
+		const session = await page.request.get('/api/auth/get-session', QUICK);
+		expect(await session.json()).toBeNull();
+	});
+
+	test('an admin can still create a user; a non-admin cannot', async ({ page, browser }) => {
+		// The admin signs up while registration is open, is promoted in D1,
+		// then signs in again so the session (and its cookie cache) carries
+		// the new role.
+		const adminEmail = freshEmail('admin');
+		setRegistrationOpen(true);
+		await signUpViaMagicLink(page, adminEmail);
+		const plainEmail = freshEmail('not-admin');
+		const plain = await browser.newContext({ baseURL: new URL(page.url()).origin });
+		const plainPage = await plain.newPage();
+		await signUpViaMagicLink(plainPage, plainEmail);
+		setRegistrationOpen(false);
+		localD1(`UPDATE "user" SET role = 'admin' WHERE email = '${adminEmail}';`);
+		await page.context().clearCookies();
+		await signUpViaMagicLink(page, adminEmail);
+
+		const headers = { origin: new URL(page.url()).origin };
+		const target = freshEmail('admin-created');
+		const created = await page.request.post('/api/auth/admin/create-user', {
+			...QUICK,
+			headers,
+			data: { email: target, name: 'Admin Created', password: 'not-used-0123456789' },
+		});
+		expect(created.status(), await created.text()).toBe(200);
+		expect((await created.json()).user.email).toBe(target);
+
+		try {
+			const denied = await plainPage.request.post('/api/auth/admin/create-user', {
+				...QUICK,
+				headers,
+				data: { email: freshEmail('should-not-exist'), name: 'Nope', password: 'not-used-0123456789' },
+			});
+			expect(denied.status()).toBe(403);
+		} finally {
+			await plain.close();
+		}
+	});
 });
