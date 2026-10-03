@@ -84,7 +84,7 @@
 	],
 
 	// Route-differentiated burst protection (#171): tighter than the
-	// apiKey plugin's own per-key limit (console/schemas/better-auth.sql's
+	// apiKey plugin's own per-key limit (console/migrations/'s
 	// `apikey.rateLimitMax`, which covers every route at one number),
 	// applied only to `POST .../cycles` in src/index.ts -- that's the
 	// route that wakes the billed container and runs real inference.

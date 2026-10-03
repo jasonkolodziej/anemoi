@@ -1,24 +1,18 @@
--- better-auth schema for anemoi (ported from a prior project,
--- reveille-registry -- database/project names below updated to match).
--- Apply with: wrangler d1 execute anemoi_auth --file=./schemas/better-auth.sql --remote
--- Apply with: wrangler d1 execute anemoi_auth --file=./schemas/better-auth.sql --local
+-- Baseline: the auth schema as it stood when D1 migrations were adopted
+-- (formerly console/schemas/better-auth.sql + anemoi.sql, applied by hand).
 --
--- This migration:
--- 1. Drops the old custom auth tables (users, credentials, sessions, challenges)
--- 2. Creates the better-auth core tables (user, session, account, verification)
--- 3. Creates the passkey plugin table (passkey)
--- 4. Creates the API key plugin table (apikey)
--- 5. Adds admin plugin columns to user and session tables
--- 6. Creates the registration_policy table for runtime config
-
--- ═══════════════════════════════════════════════════════════════════════════════
--- Drop old tables
--- ═══════════════════════════════════════════════════════════════════════════════
-
-DROP TABLE IF EXISTS challenges;
-DROP TABLE IF EXISTS sessions;
-DROP TABLE IF EXISTS credentials;
-DROP TABLE IF EXISTS users;
+-- Every statement is IF NOT EXISTS / OR IGNORE on purpose: production
+-- already had all of this when `wrangler d1 migrations apply` first ran,
+-- so there this file is a no-op that just gets recorded in d1_migrations.
+-- A fresh database (local dev, e2e, CI) gets the full schema. Migrations
+-- after this one run exactly once per database, so they need not be
+-- idempotent -- but keep them additive (see console/README.md).
+--
+-- One exception to "no-op on production": `plan` is a column in CREATE
+-- TABLE "user" below, where production got it from anemoi.sql's ALTER
+-- TABLE. If a database somehow has "user" without "plan", this won't add
+-- it -- the deploy workflow's schema verification
+-- (scripts/verify-d1-schema.mjs) catches exactly that kind of gap.
 
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- better-auth core tables
@@ -36,7 +30,10 @@ CREATE TABLE IF NOT EXISTS "user" (
   "role" TEXT DEFAULT 'user',
   "banned" INTEGER DEFAULT 0,
   "banReason" TEXT,
-  "banExpires" INTEGER
+  "banExpires" INTEGER,
+  -- #171: matches auth.ts's `user.additionalFields.plan`. 'internal' is for
+  -- the operator (seed by hand); 'free' for everyone until a paid tier.
+  "plan" TEXT NOT NULL DEFAULT 'free'
 );
 
 CREATE TABLE IF NOT EXISTS "session" (
@@ -164,13 +161,6 @@ CREATE INDEX IF NOT EXISTS idx_passkey_userId ON "passkey"("userId");
 CREATE INDEX IF NOT EXISTS idx_passkey_credentialID ON "passkey"("credentialID");
 CREATE INDEX IF NOT EXISTS idx_apikey_referenceId ON "apikey"("referenceId");
 CREATE INDEX IF NOT EXISTS idx_apikey_key ON "apikey"("key");
--- Both marked `index: true` in better-auth 1.7.7's own schema but missing
--- from the ported file: every magic-link/email-OTP verify looks up
--- `verification` by identifier, and API-key lookups filter on configId.
--- Safe to re-run this whole file against an existing database to pick
--- these up (every statement above is IF NOT EXISTS / OR IGNORE).
-CREATE INDEX IF NOT EXISTS idx_verification_identifier ON "verification"("identifier");
-CREATE INDEX IF NOT EXISTS idx_apikey_configId ON "apikey"("configId");
 
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- Seed admin (run manually after the first user signs up)
@@ -178,3 +168,22 @@ CREATE INDEX IF NOT EXISTS idx_apikey_configId ON "apikey"("configId");
 -- Option A: Set ADMIN_USER_IDS env var in wrangler.jsonc or via `wrangler secret put`
 -- Option B: Run this SQL after the first user is created:
 --   UPDATE "user" SET "role" = 'admin' WHERE "email" = 'your@email.com';
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- cycle_runs: one row per accepted `POST /v1/storms/{id}/cycles`
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+-- Written by anemoi-api-real (docker/api/src/index.ts) on every request its
+-- edge gate accepts -- the billable event #171 is ultimately about
+-- metering. Phase 2 reads this to enforce a plan's cycle allowance; for
+-- now it's just an audit trail.
+CREATE TABLE IF NOT EXISTS "cycle_runs" (
+  "id" TEXT PRIMARY KEY NOT NULL,
+  "user_id" TEXT NOT NULL REFERENCES "user"("id") ON DELETE CASCADE,
+  "storm_id" TEXT NOT NULL,
+  "cycle_label" TEXT NOT NULL,
+  "started_at" TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_cycle_runs_userId ON "cycle_runs"("user_id");
+CREATE INDEX IF NOT EXISTS idx_cycle_runs_startedAt ON "cycle_runs"("started_at");
