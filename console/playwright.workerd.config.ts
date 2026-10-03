@@ -25,8 +25,16 @@ export default defineConfig({
 			'pnpm exec wrangler dev --port 8787 --local-upstream localhost:8787' +
 			' --var BETTER_AUTH_BASE_URL:http://localhost:8787' +
 			' --var BETTER_AUTH_SECRET:e2e-only-not-a-real-secret-0123456789' +
-			' --var OPEN_REGISTRATION:true',
-		url: 'http://localhost:8787/api/auth/ok',
+			' --var OPEN_REGISTRATION:true' +
+			// better-auth's own schema check against the local D1 that
+			// global-setup.ts builds from schemas/*.sql -- off in
+			// production (see auth.ts), on here so schema drift fails.
+			' --var BETTER_AUTH_VALIDATE_SCHEMA:true',
+		// A static asset, not /api/auth/ok: with the schema check on, a
+		// drifted schema 500s every auth route, and that should fail the
+		// schema test with better-auth's own message -- not surface as an
+		// opaque webServer startup timeout.
+		url: 'http://localhost:8787/favicon.svg',
 		reuseExistingServer: false,
 		timeout: 60_000,
 	},

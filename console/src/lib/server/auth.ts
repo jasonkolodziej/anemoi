@@ -132,14 +132,16 @@ function buildAuth(
 			// where better-auth falls back to a plain floating promise.
 			backgroundTasks: waitUntil ? { handler: waitUntil } : undefined,
 			database: {
-				// Skip better-auth's runtime schema check: every
-				// "transactional" operation awaits a `PRAGMA table_info`
-				// introspection of every better-auth table on a cold
-				// instance -- with a per-request instance (see getAuth)
-				// that would be every request. The schema is managed by
-				// console/schemas/*.sql and verified against the installed
-				// plugins' own schema definitions.
-				validateSchema: false,
+				// Skip better-auth's runtime schema check in production:
+				// every "transactional" operation awaits a `PRAGMA
+				// table_info` introspection of every better-auth table on
+				// a cold instance -- with a per-request instance (see
+				// getAuth) that would be every request. The schema is
+				// managed by console/schemas/*.sql instead.
+				// `pnpm test:e2e:workerd` turns it back on (the var below)
+				// so drift between those files and what the installed
+				// plugins write fails the suite, not production.
+				validateSchema: process.env.BETTER_AUTH_VALIDATE_SCHEMA === "true",
 			},
 		},
 		// Caches the session + user payload in a signed cookie so

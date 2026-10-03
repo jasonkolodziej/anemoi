@@ -108,3 +108,109 @@ test('login redirects an already-signed-in visitor to their profile', async ({ p
 	await page.waitForURL('**/profile');
 	await expect(page.getByText(email)).toBeVisible();
 });
+
+// ── Shared-instance hang (getAuth in src/lib/server/auth.ts) ──────────────
+// The real production bug behind "Passkeys: Loading..." / a stuck "Follow
+// your browser's prompt..." / sign-out doing nothing: `api-key/list` left a
+// fire-and-forget DELETE holding Kysely's connection mutex on an auth
+// instance shared by every request, and on workerd that DELETE never
+// settles, so every later D1 query hung. Only `pnpm test:e2e:workerd`
+// (the built Worker on workerd) can reproduce it -- under `vite dev`'s
+// Node runtime these pass either way -- but they're cheap enough to run
+// in both. Short per-request timeouts on purpose: a hang must fail fast
+// and say which call hung, not ride the 30s test timeout.
+
+const QUICK = { timeout: 5_000 };
+
+test('api-key list then passkey list, repeatedly, never wedges later requests', async ({ page }) => {
+	const email = freshEmail('wedge');
+	await signUpViaMagicLink(page, email);
+
+	// The exact order the profile page issues them in, several rounds so a
+	// leaked lock from round N shows up in round N+1.
+	for (let round = 0; round < 3; round++) {
+		const keys = await page.request.get('/api/auth/api-key/list', QUICK);
+		expect(keys.status(), `api-key/list, round ${round}`).toBe(200);
+		const passkeys = await page.request.get('/api/auth/passkey/list-user-passkeys', QUICK);
+		expect(passkeys.status(), `passkey/list-user-passkeys, round ${round}`).toBe(200);
+	}
+
+	// The first D1 write of a passkey registration, and sign-out's session
+	// delete -- the other two calls that hung in production.
+	const options = await page.request.get('/api/auth/passkey/generate-register-options', QUICK);
+	expect(options.status(), 'passkey/generate-register-options').toBe(200);
+
+	const signOut = await page.request.post('/auth/logout', { ...QUICK, maxRedirects: 0 });
+	expect(signOut.status(), 'POST /auth/logout').toBe(303);
+	const session = await page.request.get('/api/auth/get-session', QUICK);
+	expect(await session.json()).toBeNull();
+});
+
+test('profile: create an API key, add a passkey, then sign out, all on one page', async ({ page, context }) => {
+	const email = freshEmail('profile-flow');
+	await signUpViaMagicLink(page, email);
+	await addVirtualAuthenticator(context, page);
+
+	// Passkey list must finish loading after the page's own api-key list.
+	await expect(page.getByText('No passkeys yet.')).toBeVisible(QUICK);
+
+	// api-key create also fires the background expired-key DELETE.
+	await page.getByRole('button', { name: 'Generate new key' }).click();
+	await expect(page.getByText("Copy this key now -- it won't be shown again.")).toBeVisible(QUICK);
+
+	await page.getByRole('button', { name: 'Add a passkey' }).click();
+	await expect(page.getByText('(singleDevice)')).toBeVisible({ timeout: 15_000 });
+
+	await page.getByRole('button', { name: 'Sign out' }).click();
+	await page.waitForURL('**/', QUICK);
+	const session = await page.request.get('/api/auth/get-session', QUICK);
+	expect(await session.json()).toBeNull();
+});
+
+test('sign out revokes the session row itself, not just the cookies', async ({ page, browser }) => {
+	const email = freshEmail('revoke');
+	await signUpViaMagicLink(page, email);
+
+	// Replay the pre-logout session token without the signed cookie cache
+	// (better-auth.session_data) in a separate context: if signOut only
+	// cleared cookies but left the D1 session row, this would still be a
+	// valid session for up to the session's full lifetime.
+	const token = (await page.context().cookies()).find((c) => c.name === 'better-auth.session_token');
+	expect(token, 'session token cookie after sign-in').toBeTruthy();
+
+	await page.getByRole('button', { name: 'Sign out' }).click();
+	await page.waitForURL('**/', QUICK);
+
+	const replay = await browser.newContext();
+	try {
+		await replay.addCookies([{ ...token! }]);
+		const res = await replay.request.get(new URL('/api/auth/get-session', page.url()).toString(), QUICK);
+		expect(await res.json()).toBeNull();
+	} finally {
+		await replay.close();
+	}
+});
+
+test("better-auth's schema check passes against schemas/*.sql", async ({ page }) => {
+	// Under `pnpm test:e2e:workerd`, BETTER_AUTH_VALIDATE_SCHEMA=true makes
+	// every transactional better-auth call first diff the live local D1
+	// (built from schemas/*.sql by global-setup.ts) against what the
+	// installed plugins write; a mismatch throws SchemaMismatchError and
+	// the call 500s with the missing table/column named in the server log.
+	// The check diffs every table at once, so any transactional call trips
+	// it; these just make the test's intent explicit rather than relying
+	// on the other tests failing with a less obvious error.
+	const email = freshEmail('schema');
+	await signUpViaMagicLink(page, email);
+
+	// Origin header: better-auth's CSRF check rejects a cookie-authenticated
+	// POST without one (the browser would send it; page.request doesn't).
+	const created = await page.request.post('/api/auth/api-key/create', {
+		...QUICK,
+		headers: { origin: new URL(page.url()).origin },
+		data: { name: 'schema-check' },
+	});
+	expect(created.status(), await created.text()).toBe(200);
+	const passkeys = await page.request.get('/api/auth/passkey/list-user-passkeys', QUICK);
+	expect(passkeys.status(), await passkeys.text()).toBe(200);
+});
