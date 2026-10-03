@@ -2,8 +2,8 @@
  * better-auth server instance (factory pattern).
  *
  * D1 bindings aren't available at module scope on Cloudflare Workers,
- * so the auth instance is created lazily via `getAuth(d1)` and cached
- * for the lifetime of the worker isolate.
+ * so the auth instance is created via `getAuth(event)` -- once per
+ * request, never shared across requests (see `getAuth` for why).
  *
  * Includes:
  * - Passkey authentication (`@better-auth/passkey`)
@@ -21,8 +21,9 @@ import { admin, emailOTP, magicLink } from "better-auth/plugins";
 import { apiKey } from "@better-auth/api-key";
 import { sveltekitCookies } from "better-auth/svelte-kit";
 import { getRequestEvent } from "$app/server";
+import type { RequestEvent } from "@sveltejs/kit";
 import { sendMagicLinkEmail, sendVerificationOTPEmail } from "./email";
-import type { getDynamicHostInfo } from "./hosting";
+import { getDynamicHostInfo } from "./hosting";
 
 // ─── Registration Policy Helper ──────────────────────────────────────────────
 
@@ -50,52 +51,74 @@ async function checkRegistrationOpen(d1: D1Database): Promise<boolean> {
 
 // ─── Auth Instance Factory ───────────────────────────────────────────────────
 
-let _auth: unknown;
-let _authCacheKey: string | undefined;
+/**
+ * One better-auth instance per request, memoized on the `Request` so
+ * hooks.server.ts and a route handler in the same request (e.g.
+ * routes/auth/logout/+server.ts) share it rather than building two.
+ */
+const _authByRequest = new WeakMap<Request, Auth>();
 
 /**
- * Create or return the cached better-auth instance.
+ * Return this request's better-auth instance, or `null` when there's no
+ * `AUTH_DB` binding (plain `vite dev`, prerendering).
  *
- * Must be called with the D1 binding on every request (typically in
- * `hooks.server.ts` or a route handler -- always pass `hostInfo` when one
- * is available; see below).
+ * Deliberately NOT cached across requests (it used to be, once per
+ * isolate) -- that cache was the real cause of the production hangs on
+ * sign-out and the profile page's passkey list/registration ("Canceled"
+ * in `wrangler tail`). Reproduced under `wrangler dev` (workerd, not
+ * `vite dev`'s Node runtime, which is why it never showed up locally):
  *
- * Cached per `hostInfo`'s resolved `baseURL`, not just once per isolate:
- * this console is served from two origins (`anemoi.systems` and
- * `anemoi-console.*.workers.dev`, both live per `wrangler.jsonc`), and
- * `passkey({ rpID })`/`baseURL`/`trustedOrigins` all derive from
- * `hostInfo`. Caching unconditionally on the first call froze the whole
- * isolate's auth config to whichever origin happened to hit it first --
- * WebAuthn rejects a passkey ceremony against a mismatched `rpId`, so
- * passkey registration/verification on the *other* origin would silently
- * fail for the rest of that isolate's life (Copilot review, PR #197).
+ * 1. Kysely serializes every query through one per-instance
+ *    `ConnectionMutex` whenever the dialect reports
+ *    `supportsMultipleConnections === false` -- which SQLite, and so
+ *    better-auth's D1 dialect, does (kysely 0.29 RuntimeDriver).
+ * 2. `@better-auth/api-key`'s `listApiKeys` (and create/update/delete)
+ *    fire `deleteAllExpiredApiKeys()` without awaiting it or handing it
+ *    to `runInBackground`, so the endpoint responds while that DELETE is
+ *    still holding the mutex.
+ * 3. Workers never resumes a request's leftover I/O once its response is
+ *    sent, so that DELETE never settles and the mutex is never released.
+ *    Every later query on the shared instance -- the very next
+ *    `list-user-passkeys`, `generate-register-options`, sign-out's
+ *    session delete -- waits on it forever until the platform cancels.
+ *
+ * The profile page calls `apiKey.list()` right before
+ * `listUserPasskeys`, which is exactly the observed "Passkeys:
+ * Loading..." / stuck "Follow your browser's prompt..." / sign-out does
+ * nothing sequence. A per-request instance gets its own Kysely instance
+ * and mutex, so a stray background query can only ever affect the
+ * request that started it (construction is ~5-10ms -- plugin setup, no
+ * I/O). `advanced.backgroundTasks` below additionally hands the work
+ * better-auth *does* route through `runInBackground` to `waitUntil`, per
+ * better-auth's documented Cloudflare Workers setup, so it actually
+ * completes instead of being dropped.
  */
-export function getAuth(
+export function getAuth(event: RequestEvent): Auth | null {
+	const cached = _authByRequest.get(event.request);
+	if (cached) return cached;
+
+	const d1 = event.platform?.env?.AUTH_DB;
+	if (!d1) return null;
+
+	const ctx = event.platform?.ctx;
+	const auth = buildAuth(
+		d1,
+		getDynamicHostInfo(event),
+		ctx ? (p) => ctx.waitUntil(p) : undefined,
+		event.platform?.env?.SEND_EMAIL ?? null,
+	);
+	_authByRequest.set(event.request, auth);
+	return auth;
+}
+
+function buildAuth(
 	d1: D1Database,
-	hostInfo?: ReturnType<typeof getDynamicHostInfo>,
-): ReturnType<typeof betterAuth> {
-	// `BetterAuthOptions.baseURL`'s type also allows a dynamic-resolver
-	// config object, not just a string -- `hosting.ts` only ever
-	// constructs it as a plain string, so narrow rather than widen
-	// `cacheKey` to match.
-	const cacheKey = typeof hostInfo?.ba.baseURL === 'string' ? hostInfo.ba.baseURL : '';
-	if (_auth && _authCacheKey === cacheKey) {
-		console.log(`[getAuth] cache hit (key=${cacheKey})`);
-		return _auth as ReturnType<typeof betterAuth>;
-	}
-	_authCacheKey = cacheKey;
-
-	// Chasing an intermittent production hang (#171 follow-up) that never
-	// reproduced locally -- this isolate is either cold or switching
-	// origins, and is about to pay the full cost of constructing 5
-	// plugins (passkey, magicLink, emailOTP, apiKey, admin). Timed so
-	// `wrangler tail` shows whether a slow/canceled request correlates
-	// with landing right here.
-	const constructStartedAt = Date.now();
-	console.log(`[getAuth] cache miss (key=${cacheKey}) -- constructing betterAuth instance`);
-
-	_auth = betterAuth({
-		...hostInfo?.ba,
+	hostInfo: ReturnType<typeof getDynamicHostInfo>,
+	waitUntil: ((promise: Promise<unknown>) => void) | undefined,
+	sendEmail: SendEmail | null,
+) {
+	return betterAuth({
+		...hostInfo.ba,
 		// Passing the raw D1 binding (not a hand-built `{ dialect, type }`
 		// via the third-party `kysely-d1` package, which this used to do)
 		// is what makes better-auth's own adapter factory auto-detect D1 --
@@ -105,42 +128,26 @@ export function getAuth(
 		// bare D1Database satisfies, not a `{ dialect, type }` wrapper. Only
 		// that branch sets `transaction: false` and swaps in better-auth's
 		// own D1-aware dialect -- D1 has no interactive transactions
-		// (confirmed in both kysely-d1's and better-auth's own D1 dialects:
-		// `beginTransaction()` just throws "not supported"). Real
-		// correctness fix regardless, though the `validateSchema: false`
-		// below turned out to be what actually explains the intermittent
-		// production "Canceled" hangs on signOut/passkey endpoints -- see
-		// its comment.
+		// (`beginTransaction()` just throws "not supported").
 		database: d1,
 		advanced: {
+			// better-auth's documented hook for serverless runtimes:
+			// `ctx.context.runInBackground(...)` work (deferred API-key
+			// updates, etc.) goes to `waitUntil` so Workers keeps the
+			// request alive until it finishes. Undefined in `vite dev`,
+			// where better-auth falls back to a plain floating promise.
+			backgroundTasks: waitUntil ? { handler: waitUntil } : undefined,
 			database: {
-				// better-auth's kysely adapter registers a runtime schema
-				// check (@better-auth/core's registerSchemaCheck/
-				// runWithTransaction, confirmed by reading both directly)
-				// that every "transactional" operation -- signOut, passkey
-				// registration, and apparently the list endpoints too --
-				// awaits *before* running, unconditionally, by default
-				// (`validateSchema` defaults to anything but `false`). The
-				// check itself does real `PRAGMA table_info` introspection
-				// against D1 for every better-auth-managed table. It's
-				// cached per adapter instance after the first clean
-				// result (so a warm isolate is fast), but on a cold
-				// isolate it's genuine network I/O against D1 -- and
-				// concurrent requests on that isolate all await the same
-				// pending check, so if it's slow they all stall or get
-				// killed together. This is what "wrangler tail" showed as
-				// "Canceled" (not an error -- the platform abandoning a
-				// stalled request), reproduced live, intermittently,
-				// specifically on signOut/passkey-register/list calls,
-				// and never locally (Miniflare's local D1 introspection
-				// has no real network latency to expose this). The schema
-				// itself is correct -- verified directly against the
-				// installed @better-auth/api-key's own schema definition
-				// and against both live D1 instances -- so this check has
-				// nothing left to catch; disabling it removes the
-				// introspection tax entirely rather than just caching it
-				// away.
-				validateSchema: false,
+				// Skip better-auth's runtime schema check in production:
+				// every "transactional" operation awaits a `PRAGMA
+				// table_info` introspection of every better-auth table on
+				// a cold instance -- with a per-request instance (see
+				// getAuth) that would be every request. The schema is
+				// managed by console/schemas/*.sql instead.
+				// `pnpm test:e2e:workerd` turns it back on (the var below)
+				// so drift between those files and what the installed
+				// plugins write fails the suite, not production.
+				validateSchema: process.env.BETTER_AUTH_VALIDATE_SCHEMA === "true",
 			},
 		},
 		// Caches the session + user payload in a signed cookie so
@@ -192,17 +199,17 @@ export function getAuth(
 		},
 		plugins: [
 			passkey({
-				rpID: hostInfo?.rpId ?? process.env.RP_ID,
+				rpID: hostInfo.rpId,
 				rpName: "Anemoi",
 			}),
 			magicLink({
 				sendMagicLink: async ({ email, url }) => {
-					await sendMagicLinkEmail(email, url);
+					await sendMagicLinkEmail(sendEmail, email, url);
 				},
 			}),
 			emailOTP({
 				async sendVerificationOTP({ email, otp, type }) {
-					await sendVerificationOTPEmail(email, otp, type);
+					await sendVerificationOTPEmail(sendEmail, email, otp, type);
 				},
 			}),
 			apiKey({ enableSessionForAPIKeys: true }),
@@ -228,17 +235,21 @@ export function getAuth(
 		databaseHooks: {
 			user: {
 				create: {
-					before: async (user) => {
-						// Admin-created users bypass the policy.
-						// The admin plugin's `/admin/create-user` endpoint already
-						// requires an authenticated admin session, so we check whether
-						// the user record was explicitly flagged as admin-created.
-						// Since databaseHooks don't receive the request context directly,
-						// we rely on the `_adminBypass` flag set in the before-hook
-						// middleware below. The flag is stored on the module-scoped
-						// variable which is safe because Workers process one request
-						// at a time per isolate.
-						if (_adminBypassActive) {
+					before: async (user, context) => {
+						// Admin-created users bypass the policy. Keyed off the
+						// endpoint this write came from, not a module-level flag
+						// (which this used to be, toggled by a never-called
+						// `withAdminBypass`): Workers run concurrent requests on
+						// one isolate, so a module flag set by one request is
+						// visible to every other request in flight -- a sign-up
+						// racing an admin's create-user could slip past a
+						// closed registration. `/admin/create-user` itself has
+						// already enforced the caller's `user:create` permission
+						// before any DB write (or it was a trusted server-side
+						// call with no request), so reaching this hook from it
+						// is proof enough. Same `context.path` check better-auth
+						// uses internally for this kind of scoping.
+						if (context?.path === "/admin/create-user") {
 							return { data: user };
 						}
 
@@ -254,38 +265,6 @@ export function getAuth(
 			},
 		},
 	});
-
-	console.log(`[getAuth] betterAuth instance constructed in ${Date.now() - constructStartedAt}ms`);
-	return _auth as ReturnType<typeof betterAuth>;
 }
 
-// ── Admin bypass flag ────────────────────────────────────────────────────────
-// Workers isolates are single-threaded, so a module-level boolean is safe
-// as a request-scoped flag. It's set before the admin create-user call
-// and cleared immediately after.
-
-let _adminBypassActive = false;
-
-/**
- * Temporarily enable the admin bypass for registration policy.
- *
- * Call this around `auth.api.createUser()` invocations from admin
- * endpoints so that `databaseHooks.user.create.before` allows the
- * creation even when registration is closed. `fn` is always async in
- * practice (`createUser` returns a Promise) -- `await`ed here, not just
- * returned, so the flag stays set until the hook it's meant to influence
- * actually runs. A bare `return fn()` let `finally` clear the flag the
- * instant the promise was created, before `databaseHooks.user.create
- * .before` ever read it, silently defeating the bypass for its one real
- * use case (Copilot review, PR #197).
- */
-export async function withAdminBypass<T>(fn: () => Promise<T>): Promise<T> {
-	_adminBypassActive = true;
-	try {
-		return await fn();
-	} finally {
-		_adminBypassActive = false;
-	}
-}
-
-export type Auth = ReturnType<typeof getAuth>;
+export type Auth = ReturnType<typeof buildAuth>;

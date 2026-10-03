@@ -117,7 +117,12 @@ CREATE TABLE IF NOT EXISTS "apikey" (
   "prefix" TEXT,
   "key" TEXT NOT NULL,
   "referenceId" TEXT NOT NULL REFERENCES "user"("id") ON DELETE CASCADE,
-  "refillInterval" TEXT,
+  -- INTEGER (milliseconds) -- the plugin's own type is `number`. Was TEXT
+  -- as ported; a database created from the old file keeps TEXT affinity
+  -- (CREATE TABLE IF NOT EXISTS won't change it), which is harmless: the
+  -- only read is a `>` comparison that coerces, and nothing here sets
+  -- refills (server-only option, unused).
+  "refillInterval" INTEGER,
   "refillAmount" INTEGER,
   "lastRefillAt" TEXT,
   "enabled" INTEGER DEFAULT 1,
@@ -159,6 +164,13 @@ CREATE INDEX IF NOT EXISTS idx_passkey_userId ON "passkey"("userId");
 CREATE INDEX IF NOT EXISTS idx_passkey_credentialID ON "passkey"("credentialID");
 CREATE INDEX IF NOT EXISTS idx_apikey_referenceId ON "apikey"("referenceId");
 CREATE INDEX IF NOT EXISTS idx_apikey_key ON "apikey"("key");
+-- Both marked `index: true` in better-auth 1.7.7's own schema but missing
+-- from the ported file: every magic-link/email-OTP verify looks up
+-- `verification` by identifier, and API-key lookups filter on configId.
+-- Safe to re-run this whole file against an existing database to pick
+-- these up (every statement above is IF NOT EXISTS / OR IGNORE).
+CREATE INDEX IF NOT EXISTS idx_verification_identifier ON "verification"("identifier");
+CREATE INDEX IF NOT EXISTS idx_apikey_configId ON "apikey"("configId");
 
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- Seed admin (run manually after the first user signs up)

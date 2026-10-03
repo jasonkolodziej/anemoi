@@ -230,17 +230,21 @@ const CYCLE_POST_RE = /^\/v1\/storms\/([^/]+)\/cycles\/?$/;
  * fixed, operator-controlled value compared once per request, not a
  * per-user credential where timing leaks matter across many attempts.
  */
-async function resolveUserId(request: Request, env: RealApiEnv): Promise<string | null> {
+async function resolveUserId(
+	request: Request,
+	env: RealApiEnv,
+	ctx: ExecutionContext,
+): Promise<string | null> {
 	const internalSecret = request.headers.get('X-Anemoi-Internal-Secret');
 	if (internalSecret && env.INTERNAL_PROXY_SECRET && internalSecret === env.INTERNAL_PROXY_SECRET) {
 		return request.headers.get('X-Anemoi-User-Id');
 	}
 	const apiKey = request.headers.get('X-Anemoi-Api-Key');
-	return verifyApiKey(env.AUTH_DB, apiKey);
+	return verifyApiKey(env.AUTH_DB, ctx, apiKey);
 }
 
 export default {
-	async fetch(request, env) {
+	async fetch(request, env, ctx) {
 		const url = new URL(request.url);
 		const cycleMatch = request.method === 'POST' ? url.pathname.match(CYCLE_POST_RE) : null;
 
@@ -252,7 +256,7 @@ export default {
 		// question, which this pass doesn't resolve either way. Identity is
 		// still resolved for everyone so a caller that *does* send a key
 		// gets it forwarded downstream, but only a cycle POST requires one.
-		const userId = await resolveUserId(request, env);
+		const userId = await resolveUserId(request, env, ctx);
 		if (cycleMatch) {
 			if (!userId) {
 				return new Response('invalid or missing X-Anemoi-Api-Key', { status: 401 });

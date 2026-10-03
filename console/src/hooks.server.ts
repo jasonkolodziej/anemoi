@@ -3,8 +3,6 @@ import { sequence } from "@sveltejs/kit/hooks";
 import { svelteKitHandler } from "better-auth/svelte-kit";
 import { createGuardHook } from "svelte-guard";
 import type { Handle } from "@sveltejs/kit";
-import { setSendEmailBinding } from "$lib/server/email";
-import { getDynamicHostInfo } from "$lib/server/hosting";
 import { getAuth } from "$lib/server/auth";
 import { buildSessionHeaders } from "$lib/server/auth-utils";
 
@@ -36,7 +34,7 @@ import { buildSessionHeaders } from "$lib/server/auth-utils";
  * redundant work rather than after.
  */
 const authHandle: Handle = async ({ event, resolve }) => {
-	// Short id so staged logs from one request (here, auth.ts's getAuth,
+	// Short id so staged logs from one request (here,
 	// routes/auth/logout/+server.ts) can be told apart in `wrangler tail`
 	// when several auth requests are in flight on the same isolate --
 	// chasing an intermittent production hang (#171 follow-up) that
@@ -65,18 +63,16 @@ const authHandle: Handle = async ({ event, resolve }) => {
 		return resolve(event);
 	}
 
-	setSendEmailBinding(event.platform?.env?.SEND_EMAIL);
-
-	const d1 = event.platform?.env?.AUTH_DB;
-	if (!d1) {
+	// Per-request instance -- see getAuth's comment for why it must never
+	// be shared across requests on Workers.
+	const auth = getAuth(event);
+	if (!auth) {
 		// Local `vite dev` without `wrangler dev --remote` has no D1 binding
 		// at all -- treat every request as anonymous rather than throw.
 		event.locals.session = null;
 		event.locals.user = null;
 		return resolve(event);
 	}
-
-	const auth = getAuth(d1, getDynamicHostInfo(event));
 	if (verbose) console.log(`[authHandle ${requestId}] getAuth resolved at +${Date.now() - startedAt}ms`);
 
 	if (isBetterAuthRoute) {

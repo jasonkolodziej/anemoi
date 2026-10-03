@@ -20,7 +20,11 @@ export default defineConfig({
 	globalSetup: './e2e/global-setup.ts',
 	globalTeardown: './e2e/global-teardown.ts',
 	use: {
-		baseURL: 'http://127.0.0.1:5173',
+		// `localhost`, not `127.0.0.1`: hosting.ts derives the passkey rpId
+		// from the request hostname, and WebAuthn rejects an IP address as
+		// an rpId, so auth.spec.ts's passkey tests silently failed to
+		// register anything against 127.0.0.1.
+		baseURL: 'http://localhost:5173',
 		trace: 'on-first-retry',
 	},
 	projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],

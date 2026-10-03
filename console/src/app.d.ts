@@ -19,7 +19,7 @@ declare global {
 			user: UserIdentity | null;
 			/** Short per-request id, set in hooks.server.ts, so staged
 			 * diagnostic logs from the same request (hooks.server.ts,
-			 * routes/auth/logout/+server.ts, auth.ts's getAuth) can be
+			 * routes/auth/logout/+server.ts) can be
 			 * correlated in `wrangler tail` output when several auth
 			 * requests are in flight on the same isolate at once -- added
 			 * to chase an intermittent production hang (#171 follow-up)
@@ -37,6 +37,9 @@ declare global {
 			 * docker/api/src/index.ts's `RealApiEnv`. Shared with
 			 * anemoi-api-real; see routes/api/[...path]/+server.ts. */
 			env: Env & { INTERNAL_PROXY_SECRET: string };
+			/** Lets auth.ts hand better-auth's background work to
+			 * `waitUntil` (`advanced.backgroundTasks`). */
+			ctx: ExecutionContext;
 		}
 	}
 }

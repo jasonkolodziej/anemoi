@@ -24,7 +24,10 @@ export default defineConfig({
 			// (already happened once: a data-source link missing its URL
 			// scheme) would otherwise fail the *entire* console build, not
 			// just that one link.
-			prerender: { handleHttpError: 'warn' }
+			// Same reasoning for a link to a heading anchor a later wiki edit
+			// renamed (hit for real: operations-runbook linking a roadmap
+			// heading that no longer exists).
+			prerender: { handleHttpError: 'warn', handleMissingId: 'warn' }
 		})
 	],
 	server: {
