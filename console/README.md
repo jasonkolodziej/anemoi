@@ -63,9 +63,26 @@ from it; only this Worker writes):
 pnpm exec wrangler d1 create anemoi_auth
 # put the printed database_id into wrangler.jsonc's d1_databases AND
 # ../docker/api/wrangler.jsonc's d1_databases -- both must match exactly
-pnpm exec wrangler d1 execute anemoi_auth --remote --file=./schemas/better-auth.sql
-pnpm exec wrangler d1 execute anemoi_auth --remote --file=./schemas/anemoi.sql
+pnpm exec wrangler d1 migrations apply anemoi_auth --remote
 ```
+
+Schema changes go in a new numbered file under `migrations/`
+(`pnpm exec wrangler d1 migrations create anemoi_auth <name>`). D1 records
+each applied file in its `d1_migrations` table, so each one runs exactly
+once per database: `.github/workflows/deploy-console.yml` applies new ones
+to production on merge, and `e2e/global-setup.ts` applies them locally.
+Two rules, because migrations are applied *before* the new Worker
+version goes live and there's no automatic down-migration:
+
+- **Additive only.** Add tables, nullable/defaulted columns and indexes.
+  The still-running previous Worker must keep working against the new
+  schema. Renames/drops take two deploys: stop using it, then drop it.
+- **Never edit an applied migration** -- add a new one. A changed file
+  isn't re-run anywhere it's already recorded.
+
+If a migration does go wrong, the deploy log prints a D1 Time Travel
+bookmark from just before it ran:
+`pnpm exec wrangler d1 time-travel restore anemoi_auth --bookmark=<id>`.
 
 ### Secrets
 
