@@ -1,5 +1,7 @@
 import { building } from "$app/environment";
+import { sequence } from "@sveltejs/kit/hooks";
 import { svelteKitHandler } from "better-auth/svelte-kit";
+import { createGuardHook } from "svelte-guard";
 import type { Handle } from "@sveltejs/kit";
 import { setSendEmailBinding } from "$lib/server/email";
 import { getDynamicHostInfo } from "$lib/server/hosting";
@@ -19,7 +21,7 @@ import { buildSessionHeaders } from "$lib/server/auth-utils";
  * session or a bearer API key, and this is the one place that ambiguity
  * gets resolved for the whole app.
  */
-export const handle: Handle = async ({ event, resolve }) => {
+const authHandle: Handle = async ({ event, resolve }) => {
 	// `adapter-cloudflare` throws on any `platform.env` access during
 	// prerendering (no real bindings exist at build time) -- this console
 	// still prerenders `/docs/[slug]` (opts into `ssr = true`, see its own
@@ -54,3 +56,15 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	return svelteKitHandler({ event, resolve, auth, building });
 };
+
+// `-guard.ts` files under src/routes/** (e.g. profile/-guard.ts,
+// auth/login/-guard.ts) -- see https://github.com/mehdikhody/svelte-guard.
+// `sequence(authHandle, guardHook)` is load-bearing order: guards read
+// `event.locals.session`/`user`, which only exist once authHandle above
+// has run, so the guard hook must come second. During `building`,
+// authHandle's early return still flows into this hook (sequence wires
+// `resolve` to call the next handle) -- harmless, since every guard here
+// only inspects `locals`, never `platform.env`.
+const guards = import.meta.glob("./routes/**/-guard.*");
+
+export const handle: Handle = sequence(authHandle, createGuardHook(guards));

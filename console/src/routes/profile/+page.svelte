@@ -146,7 +146,9 @@
 
 	async function signOut() {
 		await fetch("/auth/logout", { method: "POST" });
-		await goto("/");
+		// See login/+page.svelte's handlePasskeyLogin -- the root layout's
+		// user data doesn't refresh on its own after an in-app auth change.
+		await goto("/", { invalidateAll: true });
 	}
 
 	loadKeys();

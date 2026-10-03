@@ -10,7 +10,7 @@ minimumReleaseAgeExclude:
   - '@cloudflare/workerd-windows-64@1.20260921.1'
   - miniflare@5.20260921.0-alpha
   - workerd@1.20260921.1
-  - wrangler@4.136.1
+  - wrangler@4.136.1 || 4.147.0
   - '@ark/schema@0.56.5'
   - '@ark/util@0.56.5'
   - '@better-auth/api-key@1.7.7'

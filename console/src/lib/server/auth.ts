@@ -91,6 +91,25 @@ export function getAuth(
 			dialect,
 			type: "sqlite" as const,
 		},
+		// Caches the session + user payload in a signed cookie so
+		// `auth.api.getSession()` (hooks.server.ts, called on every request)
+		// skips the D1 round-trip for a signed-in user as long as the cache
+		// is fresh -- confirmed in better-auth's own source
+		// (api/routes/session.mjs) that an anonymous request already
+		// short-circuits before touching the DB, so this specifically cuts
+		// per-request D1 load for authenticated traffic, which is now most
+		// page views since the top nav reads `locals.user` everywhere.
+		// Trade-off: a role/ban change (admin plugin) or a server-side
+		// session revocation won't show up in `locals.user` until the cache
+		// expires -- 5 minutes is the library default and fine for this
+		// console's traffic; shorten it if that staleness window matters
+		// more than the D1 savings.
+		session: {
+			cookieCache: {
+				enabled: true,
+				maxAge: 5 * 60,
+			},
+		},
 		// #171: the plan every customer is on. No paid values exist yet --
 		// this exists now so Phase 2 (quota enforcement) and Phase 3 (Stripe
 		// tiers) are additive later instead of needing a schema migration

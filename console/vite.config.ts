@@ -39,5 +39,32 @@ export default defineConfig({
 	// loads them as native ESM instead, which resolves the worker fine.
 	optimizeDeps: {
 		exclude: ['maplibre-gl', 'svelte-maplibre-gl']
+	},
+	build: {
+		// The only chunks over the default 500kB limit are mermaid and its
+		// own dependencies (elkjs, cytoscape, its diagram-grammar parsers --
+		// confirmed by inspecting the built chunks directly). mermaid is
+		// already dynamically `import()`ed from a single call site
+		// (src/lib/wiki/mermaid.ts's renderMermaidDiagrams, itself only
+		// invoked from docs/[slug]'s onMount, and only when a page actually
+		// has a `.mermaid` node) -- verified in the client build manifest
+		// that no other route's chunk references it. Raising the limit
+		// just far enough to cover it (current largest is ~1.46MB) avoids
+		// papering over a *real* regression elsewhere; it only silences
+		// this specific, already-isolated, already-lazy dependency.
+		chunkSizeWarningLimit: 1600,
+		rolldownOptions: {
+			checks: {
+				// Every build prints a "PLUGIN_TIMINGS" breakdown by default
+				// (rolldown's `checks.bundlerTimings`, on unless disabled).
+				// Its own slowest entries here are inherent to this project's
+				// size (writing the compiled bundle to disk, compiling ~2500
+				// Svelte files, maplibre-gl's worker handling) -- not
+				// something a config change fixes, so the report itself is
+				// just noise on every single build rather than an
+				// actionable warning.
+				bundlerTimings: false
+			}
+		}
 	}
 });
