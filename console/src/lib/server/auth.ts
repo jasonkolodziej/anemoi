@@ -143,7 +143,7 @@ function buildAuth(
 				// table_info` introspection of every better-auth table on
 				// a cold instance -- with a per-request instance (see
 				// getAuth) that would be every request. The schema is
-				// managed by console/schemas/*.sql instead.
+				// managed by console/migrations/ instead.
 				// `pnpm test:e2e:workerd` turns it back on (the var below)
 				// so drift between those files and what the installed
 				// plugins write fails the suite, not production.

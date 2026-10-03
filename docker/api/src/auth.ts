@@ -72,7 +72,7 @@ export async function verifyApiKey(
 		if (!result.valid || !result.key) return null;
 		// `referenceId`, not `userId` -- the field this plugin version (1.7.7)
 		// actually ships (confirmed against node_modules/@better-auth/api-key's
-		// own ApiKey type; console/schemas/better-auth.sql's ported `userId`
+		// own ApiKey type; the ported auth schema's `userId`
 		// column name was stale). Defaults to the owning user's id unless the
 		// plugin is configured with `references: "organization"`, which it
 		// isn't here.
