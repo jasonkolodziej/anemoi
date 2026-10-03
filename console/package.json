@@ -55,7 +55,7 @@
     "@better-auth/api-key": "^1.7.7",
     "@better-auth/passkey": "^1.7.7",
     "@internationalized/date": "^3.12.4",
-    "@lucide/svelte": "^1.47.0",
+    "@lucide/svelte": "^1.49.0",
     "@tanstack/svelte-table": "^9.2.4",
     "arktype": "^2.2.6",
     "better-auth": "^1.7.7",
