@@ -55,9 +55,23 @@ export function buildSessionHeaders(request: Request): Headers {
 	const headers = new Headers(request.headers);
 
 	if (!headers.has("x-api-key")) {
+		// better-auth's own routes use `?token=` for their own purpose --
+		// magic-link verify and email verification both take a `?token=`
+		// that means "the thing to verify," nothing to do with an API key.
+		// This function used to read `?token=` unconditionally and forward
+		// it as `x-api-key`, and since `hooks.server.ts` calls this (via
+		// `getSession`) for *every* request including these, a real
+		// magic-link verification link turned into a hard 500 ("Invalid
+		// API key") before better-auth's own handler ever got to consume
+		// its token (reproduced locally: `APIError: Invalid API key.` on
+		// `GET /api/auth/magic-link/verify?token=...`). Skip the
+		// query-param fallback specifically for better-auth's own
+		// basePath; `Authorization: Bearer` still works there if a caller
+		// genuinely needs bearer auth against it.
+		const url = new URL(request.url);
 		const token =
 			extractBearerToken(headers.get("Authorization")) ??
-			safeQueryParam(request.url, "token");
+			(url.pathname.startsWith("/api/auth/") ? null : safeQueryParam(request.url, "token"));
 
 		if (token) {
 			headers.set("x-api-key", token);
