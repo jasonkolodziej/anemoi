@@ -9,8 +9,8 @@
  * valid per-customer API key (console-issued, verified against the same
  * D1 database console binds as AUTH_DB) before it reaches the container --
  * a rejected request never wakes the billed container. `scheduled()`'s
- * `runDueCycles` is unaffected: it calls `container.fetch()` directly on
- * the Durable Object binding, bypassing this gate entirely (see below).
+ * cycle Workflow is unaffected: it calls `container.fetch()` directly on
+ * the Durable Object binding, bypassing this gate entirely.
  * Reads of the storm list, a storm, and a stored cycle are served from KV
  * (src/readCache.ts) without waking the container; every cycle run --
  * cron or manual POST -- refreshes what they serve. Demo-vs-real routing
@@ -20,7 +20,10 @@ import { Container, getContainer } from '@cloudflare/containers';
 import type { DurableObject } from 'cloudflare:workers';
 import { verifyApiKey } from './auth';
 import { recordCycleRun } from './metering';
+import { cycleInstanceId } from './cycleWorkflow';
 import { type ContainerFetch, putCycleResult, readThrough, refreshStormSnapshot } from './readCache';
+
+export { CycleWorkflow } from './cycleWorkflow';
 
 /**
  * `wrangler secret put` sets Worker-level bindings, not container
@@ -139,104 +142,30 @@ function currentCycleLabel(now: Date): string {
 	return `${y}${m}${d}_${String(hour).padStart(2, '0')}Z`;
 }
 
-interface StormSummaryOut {
-	storm_id: string;
-	active: boolean;
-	last_cycle: string | null;
-}
-
 /**
- * Runs the real operational cycle for every currently-active storm (#178:
- * nothing triggered a real cycle automatically -- every one in
- * production so far was a manual `POST .../cycles`, which is also why
- * drift/skew monitoring had almost no real samples to report on). Scheduled
- * `t+1:30` after each synoptic time (`wrangler.jsonc`'s cron), 10 minutes
- * past `scheduler.derive_vitals_timeout()`'s own real `t+1:20` -- by firing
- * time, TC-Vitals has either landed or the real `vitals_estimated` fallback
- * `RealState.run_cycle` already has is the honest answer, not a race against
- * it. Idempotent against `last_cycle` so a retried/duplicate invocation
- * (Cron Triggers are at-least-once) doesn't double-run a cycle; one storm's
- * failure is logged and does not stop the rest (`wrangler tail` is where
- * this becomes visible -- there is no dashboard for it otherwise).
+ * Start the operational cycle for every active storm (#178) as a durable
+ * Workflow instance (src/cycleWorkflow.ts). Scheduled `t+1:30` after each
+ * synoptic time (`wrangler.jsonc`'s cron), 10 minutes past
+ * `scheduler.derive_vitals_timeout()`'s own real `t+1:20` -- by firing time,
+ * TC-Vitals has either landed or `RealState.run_cycle`'s `vitals_estimated`
+ * fallback is the honest answer, not a race against it.
+ *
+ * The instance id is the cycle label, so a duplicate cron firing (Cron
+ * Triggers are at-least-once) finds the instance already exists instead of
+ * starting a second run.
  */
-async function runDueCycles(env: Env, cycleLabel: string): Promise<void> {
-	const container = getContainer(env.ANEMOI_REAL_API);
-	const fetchContainer: ContainerFetch = (req) => container.fetch(req);
-	let storms: StormSummaryOut[];
+async function startCycleWorkflow(env: Env, cycleLabel: string): Promise<void> {
+	const id = cycleInstanceId(cycleLabel);
 	try {
-		const stormsRes = await container.fetch(new Request('https://internal/v1/storms'));
-		if (!stormsRes.ok) {
-			console.error(`scheduled cycle: GET /v1/storms -> ${stormsRes.status}, aborting`);
-			return;
-		}
-		const body: unknown = await stormsRes.json();
-		if (!Array.isArray(body)) {
-			console.error('scheduled cycle: GET /v1/storms did not return an array, aborting', body);
-			return;
-		}
-		storms = body as StormSummaryOut[];
+		await env.CYCLE_WORKFLOW.create({ id, params: { cycleLabel } });
+		console.log(`scheduled cycle ${cycleLabel}: started workflow instance ${id}`);
 	} catch (err) {
-		// Network error, or the container never woke up -- a per-storm try/
-		// catch further down can't help here, since there's no list to loop
-		// over yet. Real gap Copilot review caught on this PR (#179): an
-		// unhandled throw here previously took the whole scheduled
-		// invocation down noisily instead of a clear logged abort.
-		console.error('scheduled cycle: GET /v1/storms threw, aborting', err);
-		return;
-	}
-	const active = storms.filter((s) => s.active);
-	console.log(`scheduled cycle ${cycleLabel}: ${active.length}/${storms.length} storm(s) active`);
-
-	for (const storm of active) {
-		if (storm.last_cycle === cycleLabel) {
-			console.log(`scheduled cycle ${cycleLabel}: ${storm.storm_id} already has it, skipping`);
-			continue;
-		}
 		try {
-			const res = await container.fetch(
-				new Request(`https://internal/v1/storms/${storm.storm_id}/cycles`, {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ cycle: cycleLabel, members: 20 }),
-				}),
-			);
-			if (!res.ok) {
-				console.error(
-					`scheduled cycle ${cycleLabel}: ${storm.storm_id} -> ${res.status} ${await res.text()}`,
-				);
-			} else {
-				console.log(`scheduled cycle ${cycleLabel}: ${storm.storm_id} -> ${res.status}`);
-				await putCycleResult(env.READ_CACHE, storm.storm_id, await res.text());
-			}
-		} catch (err) {
-			console.error(`scheduled cycle ${cycleLabel}: ${storm.storm_id} threw`, err);
+			const existing = await env.CYCLE_WORKFLOW.get(id);
+			console.log(`scheduled cycle ${cycleLabel}: ${id} already exists (${(await existing.status()).status}), not restarting`);
+		} catch {
+			console.error(`scheduled cycle ${cycleLabel}: could not start ${id}`, err);
 		}
-	}
-
-	await afterCycles(env, fetchContainer, cycleLabel);
-}
-
-/**
- * Post-cycle steps, each independent of the others' failure: refresh the
- * KV read cache from the now-awake container, then audit stored cycles
- * against the latest fixes. The audit used to run inside whichever console
- * request found the live feed stale (downloading every stored cycle of
- * every live storm from R2 while that request waited); it runs here now,
- * once per synoptic cycle, off any user's request path.
- */
-async function afterCycles(env: Env, fetchContainer: ContainerFetch, cycleLabel: string): Promise<void> {
-	try {
-		await refreshStormSnapshot(env.READ_CACHE, fetchContainer);
-	} catch (err) {
-		console.error(`scheduled cycle ${cycleLabel}: read-cache snapshot threw`, err);
-	}
-	try {
-		const res = await fetchContainer(
-			new Request('https://internal/v1/internal/calibration-audit', { method: 'POST' }),
-		);
-		console.log(`scheduled cycle ${cycleLabel}: calibration audit -> ${res.status} ${await res.text()}`);
-	} catch (err) {
-		console.error(`scheduled cycle ${cycleLabel}: calibration audit threw`, err);
 	}
 }
 
@@ -345,7 +274,7 @@ export default {
 
 		if (cycleMatch && userId && bodyForMetering && response.ok) {
 			// cycleLabel comes from the request body, not the URL -- storms.py's
-			// run_cycle route takes it as JSON, same shape runDueCycles below
+			// run_cycle route takes it as JSON, same shape the cycle Workflow
 			// already sends. Best-effort: never let a malformed/unreadable body
 			// block a response that's already succeeded.
 			try {
@@ -379,6 +308,6 @@ export default {
 
 	async scheduled(controller, env, ctx) {
 		const cycleLabel = currentCycleLabel(new Date(controller.scheduledTime));
-		ctx.waitUntil(runDueCycles(env, cycleLabel));
+		ctx.waitUntil(startCycleWorkflow(env, cycleLabel));
 	},
 } satisfies ExportedHandler<RealApiEnv>;

@@ -207,17 +207,35 @@ Also not done, per #91's remaining scope:
 
 ## Automatic cycle triggering
 
-`src/index.ts`'s `scheduled` handler runs the real operational cycle for
-every currently-active storm, gated on `wrangler.jsonc`'s cron trigger
-(`30 1,7,13,19 * * *`, UTC): `t+1:30` after each synoptic time
-(00/06/12/18Z), 10 minutes past `scheduler.derive_vitals_timeout()`'s own
-real `t+1:20` -- by fire time, TC-Vitals has either landed or
-`RealState.run_cycle`'s honest `vitals_estimated` fallback is the real
-answer, not a race against it. It's idempotent against each storm's
-`last_cycle` (Cron Triggers are at-least-once, and the trigger could also
-overlap a cycle someone ran by hand), and one storm's failure is logged
-and doesn't stop the rest -- there's no dashboard for this, `wrangler
-tail` is where a run's real per-storm outcome is visible.
+`wrangler.jsonc`'s cron trigger (`30 1,7,13,19 * * *`, UTC) starts one
+instance of the `anemoi-cycle` Workflow (`src/cycleWorkflow.ts`) per
+synoptic time: `t+1:30` after 00/06/12/18Z, 10 minutes past
+`scheduler.derive_vitals_timeout()`'s own real `t+1:20` -- by fire time,
+TC-Vitals has either landed or `RealState.run_cycle`'s honest
+`vitals_estimated` fallback is the real answer, not a race against it.
+
+Each instance is a chain of durable steps:
+
+1. **find due storms** -- active storms whose `last_cycle` isn't this cycle
+   yet (the cron could overlap a cycle someone ran by hand).
+2. **run cycle {storm}**, one step per storm -- retried twice (2 min
+   exponential backoff, 20 min timeout each) on a 5xx or a container that
+   didn't answer; a 4xx is recorded as `refused`, not retried. A retry
+   first checks the storm's cycle list, so an attempt that ran but lost
+   its response isn't run twice. One storm's failure never stops the rest.
+3. **refresh read cache** -- the KV snapshot below.
+4. **calibration audit** -- `POST /v1/internal/calibration-audit`, which
+   audits stored cycles against the latest fixes. It used to run inside
+   whichever console request found the live feed stale.
+
+The instance id is `cycle-<label>` (e.g. `cycle-20261008_06Z`), so a
+duplicate cron firing (Cron Triggers are at-least-once) finds it already
+exists and doesn't start a second run. Instance status, per-step outcomes
+and retries are in the dashboard's Workflows tab, or
+`wrangler workflows instances list anemoi-cycle`; the instance's output
+summarises every storm's outcome. Each step attempt logs one line to
+`wrangler tail` as `cycle workflow <label>: ...` (logged from inside the
+steps, so a replay of finished steps doesn't repeat them).
 
 Runs for **every** active storm, trained basin or not -- an untrained
 basin (only `AL` has real trained models, `data.atcf.TRAINED_BASINS`)
@@ -229,18 +247,10 @@ TypeScript reimplementation of `time_utils.cycle_label(time_utils
 .floor_synoptic(now))` -- verified to agree with the real Python function
 at every synoptic-hour boundary (`:00` and `:59` of hours 0, 6, 12, 18,
 plus the hours in between), since there's no way to import the Python
-module across the container boundary. The whole `runDueCycles` flow was
-also verified against the real deployed API directly (not just unit
-logic): a dry run correctly identified which of the real live storms
-were due, then a real run issued real `201`s for the due ones and
-correctly skipped the one already-current storm, and running it again
-immediately afterward skipped all three -- real, live proof of
-idempotency, not just the intent of the code.
-
-After the cycles, the same run refreshes the KV read cache (below) and
-calls `POST /v1/internal/calibration-audit`, which audits stored cycles
-against the latest fixes. That audit used to run inside whichever console
-request found the live feed stale.
+module across the container boundary. Before it became a Workflow, the
+same flow (as `runDueCycles`, #178) was verified against the real deployed
+API: a real run issued real `201`s for the due storms and skipped the one
+already-current storm, and an immediate second run skipped all three.
 
 ## Read cache (KV)
 
