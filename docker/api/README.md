@@ -237,6 +237,30 @@ correctly skipped the one already-current storm, and running it again
 immediately afterward skipped all three -- real, live proof of
 idempotency, not just the intent of the code.
 
+After the cycles, the same run refreshes the KV read cache (below) and
+calls `POST /v1/internal/calibration-audit`, which audits stored cycles
+against the latest fixes. That audit used to run inside whichever console
+request found the live feed stale.
+
+## Read cache (KV)
+
+`GET /v1/storms`, `GET /v1/storms/{id}` and `GET /v1/storms/{id}/cycles/{label}`
+are served from the `READ_CACHE` KV namespace (`src/readCache.ts`) without
+waking the container. The cron and every successful `POST .../cycles`
+write to it; a storm-list or storm entry older than 30 minutes is still
+served, and refreshed in the background; entries expire after 7 hours if
+nothing refreshes them. Cycle results are stored once and kept 90 days.
+
+- `X-Anemoi-Cache: hit|stale|miss|bypass` on each of those responses shows
+  which path served it (visible in `wrangler tail` and browser devtools).
+- `Cache-Control: no-cache` on a request skips the cache and refills it.
+  The console sends it only for the storm re-read right after a cycle run,
+  since KV reads can lag a write by up to a minute.
+- `/v1/internal/*` is 404 on the public route; only the cron reaches it,
+  through the container binding.
+- To clear the cache: `wrangler kv key list --binding READ_CACHE --remote`
+  and delete keys, or just wait for the next cron run to overwrite them.
+
 ## Local build/run
 
 ```bash

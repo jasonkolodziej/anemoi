@@ -329,6 +329,7 @@ def audit_storm(
     local_root: Path | str,
     *,
     now: datetime | None = None,
+    lead_hours: Iterable[int] | None = None,
 ) -> list[CalibrationSample]:
     """Real entry point for one storm: audits every real stored cycle
     result against the storm's own real accumulated fixes, persists any
@@ -337,6 +338,12 @@ def audit_storm(
     storm's fixes refresh -- best-effort throughout (a bad/unreadable
     stored cycle is skipped, not fatal to the rest), the same never-fail
     contract every other real monitoring hook in this codebase follows.
+
+    ``lead_hours``, when given, is the lead set every stored cycle carries;
+    it lets a cycle be skipped *without downloading it* when none of those
+    leads is due yet, or all of them are already audited. Without it every
+    stored cycle is downloaded on every call, which grows with each cycle a
+    storm accumulates.
     """
     from ..api.cycle_store import load_cycle_result
 
@@ -348,8 +355,11 @@ def audit_storm(
     samples_path = Path(local_root) / "calibration" / "calibration_samples.json"
     existing = load_calibration_samples(samples_path, checkpoint_store)
 
+    leads = tuple(lead_hours) if lead_hours is not None else None
     new_samples: list[CalibrationSample] = []
     for label in stored_labels:
+        if leads is not None and not _may_have_due_leads(storm_id, label, leads, now, audited):
+            continue
         try:
             result = load_cycle_result(checkpoint_store, storm_id, label)
         except Exception:  # noqa: BLE001 - one bad/unreadable cycle must not sink the rest
@@ -365,6 +375,22 @@ def audit_storm(
         save_calibration_samples(existing, samples_path, checkpoint_store)
         _save_audited(audited, audited_path, checkpoint_store)
     return new_samples
+
+
+def _may_have_due_leads(
+    storm_id: str, label: str, leads: tuple[int, ...], now: datetime, audited: set[str],
+) -> bool:
+    """Whether a stored cycle could yield a new sample, decided from its
+    label alone. Errs towards True (download and let `audit_cycle` decide)
+    for a label that doesn't parse."""
+    try:
+        target_time = parse_cycle_label(label)
+    except ValueError:
+        return True
+    return any(
+        audit_due(target_time, lead, now) and _audited_key(storm_id, label, lead) not in audited
+        for lead in leads
+    )
 
 
 def _verdict(rate: float | None, nominal: float, n: int) -> str:
