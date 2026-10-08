@@ -231,7 +231,9 @@ Each instance is a chain of durable steps:
 The instance id is `cycle-<label>` (e.g. `cycle-20261008_06Z`), so a
 duplicate cron firing (Cron Triggers are at-least-once) finds it already
 exists and doesn't start a second run. Instance status, per-step outcomes
-and retries are in the dashboard's Workflows tab, or
+and retries are in the Cloudflare dashboard under **Workers & Pages →
+Workflows → anemoi-cycle** (its own sidebar entry, not a tab on the
+`anemoi-api-real` Worker; empty until the first cron after a deploy), or
 `wrangler workflows instances list anemoi-cycle`; the instance's output
 summarises every storm's outcome. Each step attempt logs one line to
 `wrangler tail` as `cycle workflow <label>: ...` (logged from inside the

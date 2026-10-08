@@ -51,6 +51,25 @@ export function parseCycleLabel(label: string): Date | null {
 	return d;
 }
 
+/** Minutes after its synoptic time that a cycle is scheduled to run:
+ * anemoi-api-real's cron (`30 1,7,13,19 * * *`, docker/api/wrangler.jsonc)
+ * fires at t+1:30. Kept in sync by hand. */
+export const CYCLE_RUN_DELAY_MIN = 90;
+
+/** "08/12Z": day-of-month and hour, UTC -- a forecast point's valid time,
+ * compact enough for a map label. */
+export function formatDayHourZ(d: Date): string {
+	const pad = (n: number) => String(n).padStart(2, '0');
+	return `${pad(d.getUTCDate())}/${pad(d.getUTCHours())}Z`;
+}
+
+/** Valid time of a forecast lead from a cycle label, or null if the label
+ * doesn't parse. */
+export function leadValidTime(cycle: string, leadHours: number): Date | null {
+	const start = parseCycleLabel(cycle);
+	return start ? new Date(start.getTime() + leadHours * 3_600_000) : null;
+}
+
 export function formatUtc(iso: string): string {
 	const d = new Date(iso);
 	const pad = (n: number) => String(n).padStart(2, '0');

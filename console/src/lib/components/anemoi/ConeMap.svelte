@@ -83,7 +83,13 @@
   } from "svelte-maplibre-gl";
   import { polygonHull } from "d3-polygon";
   import type { ConeSegmentOut, FixOut, TrackPointOut } from "$lib/api/types";
-  import { cn, SAFFIR_SIMPSON, saffirSimpson } from "$lib/utils";
+  import {
+    cn,
+    formatDayHourZ,
+    leadValidTime,
+    SAFFIR_SIMPSON,
+    saffirSimpson,
+  } from "$lib/utils";
   import { colorFor } from "$lib/branding";
   import * as Tooltip from "$lib/components/ui/tooltip";
 
@@ -278,12 +284,21 @@
     return expr as ExpressionSpecification;
   })();
 
+  function pointTime(leadHours: number): string {
+    const valid = cycleLabel ? leadValidTime(cycleLabel, leadHours) : null;
+    return valid ? formatDayHourZ(valid) : `${leadHours}h`;
+  }
+
   const forecastPoints = $derived({
     type: "FeatureCollection" as const,
     features: forecastTrack.map((t) => ({
       type: "Feature" as const,
       properties: {
-        label: `${t.lead_hours}h · ${t.wind_kt.toFixed(0)}kt · ${saffirSimpson(t.wind_kt).label}`,
+        // Valid time, not the bare lead: leads count from the cycle's own
+        // synoptic time, while the current-fix marker is the storm's newest
+        // fix -- often a later synoptic time -- so "12h" next to it read as
+        // "12 hours from now". Falls back to the lead without a cycle.
+        label: `${pointTime(t.lead_hours)} · ${t.wind_kt.toFixed(0)}kt · ${saffirSimpson(t.wind_kt).label}`,
         lead_hours: t.lead_hours,
         wind_kt: t.wind_kt,
       },
@@ -718,7 +733,14 @@
     <Tooltip.Content side="top">
       {#if tooltipPoint}
         <div class="font-data space-y-0.5">
-          <p class="font-medium">+{tooltipPoint.lead_hours}h</p>
+          <p class="font-medium">
+            {pointTime(tooltipPoint.lead_hours)}
+            <span class="font-normal text-background/70"
+              >· +{tooltipPoint.lead_hours}h{cycleLabel
+                ? ` from ${cycleLabel.slice(-3)}`
+                : ""}</span
+            >
+          </p>
           <p>
             {tooltipPoint.wind_kt.toFixed(0)}kt · {saffirSimpson(
               tooltipPoint.wind_kt,
