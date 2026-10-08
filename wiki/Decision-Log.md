@@ -506,6 +506,16 @@ Even with entry 44, a cache miss still meant waiting on a cold container, behind
 
 **Enforced by** `pnpm check` and a `wrangler deploy --dry-run` bundle; `CycleWorkflow.run` was exercised with the `cloudflare:*` modules stubbed (recovery on retry, refusal without retry, a permanently failing storm not stopping the next one or the audit, `already run` on retry, replay emitting no duplicate logs). Not runnable under real Workflows locally.
 
+### 47. The storm page never said which cycle it was showing (#209) — *bugfix*
+
+**Reported from production** (AL092026 Isaias, ~07:00Z): the page looked like it showed the 06Z forecast, while the highlighted chip at the bottom said 00Z. The data was right -- the cron runs each cycle at t+1:30, so at 07:00Z the 06Z cycle hadn't run and 00Z was the newest forecast. The page made it look otherwise: the header's `06:00Z` was the storm's latest *fix*, unlabelled; the run form's cycle input defaults to the current synoptic time (06Z) and read as a readout; and the map put `12h, 24h, …` leads, counted from 00Z, beside the 06Z current-fix marker. The only sign of the cycle actually shown was that chip.
+
+**Fix.** A panel under the storm name states the cycle shown ("the latest run", or "an older run; the latest is X" with **Show latest**), that map times count from that cycle and not from the latest fix, and -- for an active storm -- that the current synoptic cycle hasn't run yet: *scheduled for 07:30Z (with the viewer's local time)*, *should appear within a few minutes*, or *overdue; the scheduled run may have failed* (45+ minutes past due). The fix line is labelled **latest fix**; the run form is a labelled **Run a new cycle** group; map points are labelled with their valid time (`08/12Z · 71kt · CAT 1`), the tooltip keeping `+12h from 00Z`. `CYCLE_RUN_DELAY_MIN = 90` in `console/src/lib/utils.ts` mirrors the cron by hand.
+
+**Not caused by entries 44–46**, though found right after them: the page had always worked this way. It only became prominent once automatic cycles (#178) made "the newest cycle" and "the current synoptic time" routinely differ for 90 minutes four times a day.
+
+**Enforced by** `console/e2e/cycle-context.spec.ts`, which pins the clock to 07:00Z with a storm whose latest fix is 06Z and newest cycle 00Z, and checks the stated cycle, the scheduled/running/overdue line, and the older-cycle callout.
+
 ---
 
 ## Implementation → rebrand

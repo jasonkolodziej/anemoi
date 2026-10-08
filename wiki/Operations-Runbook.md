@@ -55,7 +55,7 @@ The deployed `anemoi-api-real` Worker's cron (`30 1,7,13,19 * * *`, UTC) fires a
 3. **refresh read cache** -- the KV snapshot the console reads;
 4. **calibration audit** -- see [Monitoring](Monitoring#calibration-audit).
 
-So between t+0:00 and t+1:30 the newest forecast on a storm is still the previous cycle's.
+So between t+0:00 and t+1:30 the newest forecast on a storm is still the previous cycle's. The console's storm page says so ("The 20261008_06Z cycle hasn't run yet — it's scheduled for 07:30Z").
 
 **Where to look:** Cloudflare dashboard → **Workers & Pages → Workflows → anemoi-cycle** (its own sidebar entry, not a tab on the Worker). Instances are named `cycle-<label>`, e.g. `cycle-20261008_06Z`; each shows per-step outcomes and retries, and its output lists every storm as `ran`, `refused`, `already run` or `failed`. Or: `wrangler workflows instances list anemoi-cycle`. Step logs appear in `wrangler tail` as `cycle workflow <label>: ...`.
 
@@ -127,9 +127,11 @@ The orchestrator falls back to sequential mode automatically and alerts. Expect 
 
 ### A scheduled cycle didn't appear
 
+The storm page reports a cycle as *overdue* 45 minutes after its t+1:30 run time.
+
 1. Find the instance `cycle-<label>` (above). No instance at all means the cron didn't fire or the Worker isn't deployed with the `anemoi-cycle` Workflow binding -- check the Deploy run.
 2. A storm marked `refused` was rejected by the API (`4xx`, message in the output) and won't be retried; `failed` exhausted its retries -- `wrangler tail` and the step's attempts show why.
-3. A cycle can always be run by hand from the console's storm page (**Run cycle**); it writes the read cache like a scheduled one.
+3. A cycle can always be run by hand from the console's **Run a new cycle** form; it writes the read cache like a scheduled one.
 
 **Console shows something older than the API has:** the read cache (KV) serves a storm for up to 30 minutes before refreshing, and every cycle run refreshes it. To check what the API itself returns, request it with `Cache-Control: no-cache` (`X-Anemoi-Cache: bypass` confirms the cache was skipped).
 
