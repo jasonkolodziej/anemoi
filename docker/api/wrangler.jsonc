@@ -83,6 +83,18 @@
 		},
 	],
 
+	// The operational cycle per synoptic time, one durable step per storm
+	// (src/cycleWorkflow.ts); the cron above starts one instance per cycle
+	// label. Instances: dashboard > Workflows, or
+	// `wrangler workflows instances list anemoi-cycle`.
+	"workflows": [
+		{
+			"name": "anemoi-cycle",
+			"binding": "CYCLE_WORKFLOW",
+			"class_name": "CycleWorkflow",
+		},
+	],
+
 	// Read cache in front of the container (src/readCache.ts): the storm
 	// list, each storm's detail and each stored cycle result, written after
 	// every cycle run (cron or manual POST) and served without waking the
