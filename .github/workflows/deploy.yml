@@ -28,8 +28,9 @@ name: Deploy
 #               → docker/api. A failure stops everything after it.
 #
 # PRs run changes + the relevant tests only. Manual runs (Run workflow)
-# deploy the selected components from main regardless of tags -- e.g. to
-# pick up wiki edits in /docs, which don't touch this repo.
+# deploy the selected components from main regardless of tags. A change
+# under wiki/ counts as a console change: the console's /docs pages are
+# built from it (wiki.yml publishes the same folder to the GitHub wiki).
 #
 # Approving a run after a newer commit has landed on main deploys nothing
 # (the newer run will pick its changes up via the tags) rather than rolling
