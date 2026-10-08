@@ -36,7 +36,7 @@ These files are the source for the GitHub wiki of the `anemoi` repository. They 
 
 ## Page inventory
 
-26 files: 23 content pages, 2 special pages, this README.
+29 files: 26 content pages, 2 special pages, this README.
 
 | Page | Covers |
 |---|---|
@@ -57,7 +57,9 @@ These files are the source for the GitHub wiki of the `anemoi` repository. They 
 | `Monitoring` | §4.6.3, §8.3 — skew audit and drift |
 | `Verification-Metrics` | §7.3, Appendix B — scoring and targets |
 | `Storage-and-Versioning` | §9 — hierarchy, tiers, retention |
-| `Codebase-Map` | Module layout, key types, exceptions |
+| `Codebase-Map` | Module layout (src/, docker/api, console, CI), key types, exceptions |
+| `API` | Anemoi-API: endpoints, payload, read cache, errors |
+| `Branding` | Wind-god names, colours, typography |
 | `Configuration-Reference` | The three YAML files |
 | `Testing` | Suite map, conventions, fixtures |
 | `References` | Verified scholarly citations for algorithms, thresholds and baselines |
