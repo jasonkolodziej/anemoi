@@ -9,6 +9,7 @@
   import { listRegistry } from "$lib/api/endpoints";
   import { pollWhileVisible } from "$lib/poll";
   import { setWaiterLoading } from "$lib/stores/waiter";
+  import { recall, remember } from "$lib/lastKnown";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
   import {
@@ -91,11 +92,24 @@
     error = null;
     if (!background) setWaiterLoading(true);
     try {
-      storm = await getStorm(stormId);
+      // When the label to show is already known (a pinned one, or the
+      // newest from the last poll or visit), fetch it alongside the storm
+      // rather than after it; only a label the storm turns out to have
+      // moved past needs a second round trip.
+      const known = viewedLabel ?? latestLabel;
+      const [s, early] = await Promise.all([
+        getStorm(stormId),
+        known ? getCycle(stormId, known).catch(() => null) : null,
+      ]);
+      storm = s;
+      remember(`storm:${stormId}`, s);
       // Refresh whichever cycle is actually being viewed. Only follow the
       // newest label while the user hasn't pinned one (#186).
       const label = viewedLabel ?? latestLabel;
-      if (label) cycle = await getCycle(stormId, label);
+      if (label) {
+        cycle = label === known && early ? early : await getCycle(stormId, label);
+        remember(`cycle:${stormId}`, cycle);
+      }
       getSkew()
         .then((r) => (skew = r))
         .catch(() => {});
@@ -118,7 +132,15 @@
   }
 
   onMount(() => {
-    load();
+    // Draw this storm as it was on the last visit and refresh behind it,
+    // rather than an empty page under the waiter while the API answers.
+    const lastStorm = recall<StormDetail>(`storm:${stormId}`);
+    if (lastStorm?.storm_id === stormId) {
+      storm = lastStorm;
+      const lastCycle = recall<CycleResult>(`cycle:${stormId}`);
+      if (lastCycle?.payload.cycle === latestLabel) cycle = lastCycle;
+    }
+    load({ background: storm !== null });
     listRegistry()
       .then((entries) => {
         const skiron = entries.find((entry) => entry.model === "skiron");
