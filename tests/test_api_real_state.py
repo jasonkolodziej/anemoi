@@ -271,13 +271,17 @@ def test_real_state_merges_a_live_storm(client, monkeypatch):
     storm, with a `working` quality latest_fix (not `final`), and be
     reachable by run_cycle the same way an archive storm is."""
     from anemoi.data.besttrack import Fix, Track, TrackQuality
+    from anemoi.time_utils import floor_synoptic
 
     live_track = Track(
         storm_id="AL992026",
         fixes=(
             Fix(
                 storm_id="AL992026",
-                valid_time=datetime(2026, 9, 22, 0, 0, tzinfo=UTC),
+                # Relative to now: `active` is "latest fix within the last
+                # 14 days", so a hardcoded date stopped counting as active
+                # two weeks after it was written.
+                valid_time=floor_synoptic(datetime.now(UTC)),
                 lat=25.0,
                 lon=-70.0,
                 max_wind_kt=50.0,
