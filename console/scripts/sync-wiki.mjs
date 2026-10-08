@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Pulls the wiki (github.com/jasonkolodziej/anemoi.wiki) into the console at
-// build time, the same "fetch a static reference source over HTTP/git at
+// Renders the wiki (the repo's wiki/ folder, published to
+// github.com/jasonkolodziej/anemoi.wiki) into the console at build time, the same "fetch a static reference source over HTTP/git at
 // build time, bake it into the deploy" pattern docker/multistage.Dockerfile
 // already uses for HURDAT2 -- zero runtime network dependency, the docs page
 // works offline exactly like everything else in this SPA.
@@ -34,6 +34,12 @@ import { rehypeMermaid } from '../src/lib/wiki/rehype-mermaid.mjs';
 
 const WIKI_REPO = 'https://github.com/jasonkolodziej/anemoi.wiki.git';
 const CONSOLE_ROOT = fileURLToPath(new URL('..', import.meta.url));
+// The wiki's source of truth is the repo's own wiki/ folder, which
+// .github/workflows/wiki.yml publishes to the GitHub wiki. Building from it
+// directly keeps /docs in step with the commit being deployed (no network,
+// no race with the publish); the clone is only a fallback for a console
+// checked out without the rest of the repo.
+const LOCAL_WIKI = join(CONSOLE_ROOT, '..', 'wiki');
 const MANIFEST_DIR = join(CONSOLE_ROOT, 'src/lib/wiki-content');
 const STATIC_DIR = join(CONSOLE_ROOT, 'static/wiki');
 const force = process.argv.includes('--force');
@@ -135,10 +141,15 @@ function stripToText(markdown) {
 		.trim();
 }
 
-const tmp = mkdtempSync(join(tmpdir(), 'anemoi-wiki-'));
+const useLocal = existsSync(join(LOCAL_WIKI, 'Home.md'));
+const tmp = useLocal ? LOCAL_WIKI : mkdtempSync(join(tmpdir(), 'anemoi-wiki-'));
 try {
-	console.log(`[sync-wiki] cloning ${WIKI_REPO}...`);
-	execFileSync('git', ['clone', '--depth', '1', '-q', WIKI_REPO, tmp], { stdio: 'inherit' });
+	if (useLocal) {
+		console.log(`[sync-wiki] reading ${LOCAL_WIKI}`);
+	} else {
+		console.log(`[sync-wiki] no local wiki/, cloning ${WIKI_REPO}...`);
+		execFileSync('git', ['clone', '--depth', '1', '-q', WIKI_REPO, tmp], { stdio: 'inherit' });
+	}
 
 	rmSync(MANIFEST_DIR, { recursive: true, force: true });
 	mkdirSync(MANIFEST_DIR, { recursive: true });
@@ -192,5 +203,5 @@ try {
 
 	console.log(`[sync-wiki] wrote ${pages.length} pages to ${STATIC_DIR}`);
 } finally {
-	rmSync(tmp, { recursive: true, force: true });
+	if (!useLocal) rmSync(tmp, { recursive: true, force: true });
 }

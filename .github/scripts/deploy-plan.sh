@@ -24,11 +24,27 @@ DOCS_RE='\.md$'
 # the pipeline change itself gets exercised) but doesn't by itself deploy.
 PIPELINE_RE='^\.github/(workflows/deploy\.yml|scripts/deploy-plan\.sh)$'
 
+# The wiki's source. All Markdown, but not "just docs" for the console: its
+# /docs pages are built from it (console/scripts/sync-wiki.mjs).
+WIKI_RE='^wiki/'
+
 # touches <regex> <files...>: does any non-Markdown file match?
 touches() {
 	local re=$1
 	shift
 	printf '%s\n' "$@" | grep -Ev "$DOCS_RE" | grep -Eq "$re"
+}
+
+# touches_console <files...>: console code, or the wiki it renders.
+touches_console() {
+	touches "$CONSOLE_RE" "$@" || printf '%s\n' "$@" | grep -Eq "$WIKI_RE"
+}
+
+# touches_component <console|api> <files...>
+touches_component() {
+	local comp=$1
+	shift
+	if [[ $comp == console ]]; then touches_console "$@"; else touches "$API_RE" "$@"; fi
 }
 
 changed_since() { # changed_since <commit> -> files changed from it to HEAD_SHA
@@ -41,7 +57,7 @@ declare -A why=([console]="no changes" [api]="no changes")
 case "$EVENT" in
 pull_request)
 	mapfile -t files < <(git diff --name-only "$BASE_SHA...$HEAD_SHA")
-	touches "$CONSOLE_RE|$PIPELINE_RE" "${files[@]}" && test_console=true
+	{ touches_console "${files[@]}" || touches "$PIPELINE_RE" "${files[@]}"; } && test_console=true
 	touches "$API_RE|$PIPELINE_RE" "${files[@]}" && test_api=true
 	;;
 workflow_dispatch)
@@ -58,8 +74,6 @@ workflow_dispatch)
 	;;
 push)
 	for comp in console api; do
-		re=$CONSOLE_RE
-		[[ $comp == api ]] && re=$API_RE
 		tag="deployed/$comp"
 		if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
 			printf -v "deploy_$comp" true
@@ -67,7 +81,7 @@ push)
 			continue
 		fi
 		mapfile -t files < <(changed_since "refs/tags/$tag")
-		if touches "$re" "${files[@]}"; then
+		if touches_component "$comp" "${files[@]}"; then
 			printf -v "deploy_$comp" true
 			why[$comp]="changed since $tag ($(git rev-parse --short "refs/tags/$tag"))"
 		fi

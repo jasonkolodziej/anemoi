@@ -1,0 +1,43 @@
+# Publishes wiki/ to the GitHub wiki on every push to main that changes it.
+# wiki/ is the source of truth; edits go through PRs like any other change.
+# See wiki/README.md ("Publishing") and .github/scripts/publish-wiki.sh.
+name: Publish wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "wiki/**"
+      - ".github/workflows/wiki.yml"
+      - ".github/scripts/publish-wiki.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: write # the wiki repo is covered by the repository's contents permission
+
+# Publishes queue rather than race; each one compares against the last.
+concurrency:
+  group: publish-wiki
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the drift check reads wiki/ at the last published commit
+
+      - name: Clone the wiki
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: git clone -q "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" "$RUNNER_TEMP/wiki"
+
+      - name: Publish wiki/
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          # The wiki commit wiki/ was imported from. Only consulted before
+          # the first publish; after that each wiki commit names its source.
+          IMPORTED_FROM: 380c3b91847d949c7b8bde8961202e19c5a5acd0
+        run: .github/scripts/publish-wiki.sh "$RUNNER_TEMP/wiki"
