@@ -78,10 +78,10 @@ _SKEW_SAMPLES_TTL = timedelta(hours=6)
 
 #: How long the real calibration-sample corpus (#166's live-monitoring
 #: follow-up) stays valid before a process re-pulls it from durable
-#: storage. New real samples land whenever `_audit_calibration_due`
-#: (piggybacked on `_refresh_live_storms`, every `_LIVE_STORMS_TTL`) finds
-#: a newly-due lead -- more often than skew's offline audit, but still far
-#: less often than every request, so this sits between the two.
+#: storage. New real samples land whenever `run_calibration_audit` (called
+#: by the Worker after each synoptic cycle's runs) finds a newly-due lead --
+#: more often than skew's offline audit, but still far less often than every
+#: request, so this sits between the two.
 _CALIBRATION_SAMPLES_TTL = timedelta(hours=1)
 
 #: Real forecast lead times every real deterministic_fn/ensemble_fn this
@@ -173,6 +173,10 @@ class RealState:
         #: storm or disturb the archive storms.
         self._live_storms: dict[str, RealStormState] = {}
         self._live_storms_fetched_at: datetime | None = None
+        #: Single-flight guard for `_refresh_live_storms`: the console fires
+        #: several requests at once, and without this each one that arrived
+        #: while the first fetch was in flight re-fetched NHC too.
+        self._live_refresh_lock = threading.Lock()
 
         registry_root = registry_root or os.environ.get(
             "REGISTRY_ROOT", str(Path.home() / ".anemoi" / "registry"),
@@ -269,37 +273,59 @@ class RealState:
         just keeps whatever live storms were already known, exactly the
         "no real X available must degrade, never crash" contract every
         other real-data fetch in this codebase follows -- see
-        `data.live_atcf.fetch_live_tracks`, which itself never raises."""
-        now = datetime.now(UTC)
-        if (
-            self._live_storms_fetched_at is not None
-            and now - self._live_storms_fetched_at < _LIVE_STORMS_TTL
-        ):
+        `data.live_atcf.fetch_live_tracks`, which itself never raises.
+
+        Single-flight: while one request is fetching, others serve the live
+        storms already known instead of fetching again. Only the very first
+        fetch of a process makes concurrent callers wait, since until it
+        lands there is nothing to serve."""
+        if not self._live_storms_stale():
             return
-        from ..data.live_atcf import fetch_live_tracks
+        if not self._live_refresh_lock.acquire(blocking=self._live_storms_fetched_at is None):
+            return
+        try:
+            if not self._live_storms_stale():
+                return  # another caller refreshed while this one waited
+            from ..data.live_atcf import fetch_live_tracks
 
-        tracks = fetch_live_tracks()
-        if tracks:
-            # Carry each storm's cycle history over: rebuilding it empty
-            # dropped every cycle run on a live storm on each refresh (#175).
-            self._live_storms = {
-                t.storm_id: self._new_storm_state(t, self._live_storms.get(t.storm_id))
-                for t in tracks
-            }
-        self._live_storms_fetched_at = now
-        self._audit_calibration_due()
+            tracks = fetch_live_tracks()
+            if tracks:
+                # Carry each storm's cycle history over: rebuilding it empty
+                # dropped every cycle run on a live storm on each refresh (#175).
+                self._live_storms = {
+                    t.storm_id: self._new_storm_state(t, self._live_storms.get(t.storm_id))
+                    for t in tracks
+                }
+            self._live_storms_fetched_at = datetime.now(UTC)
+        finally:
+            self._live_refresh_lock.release()
 
-    def _audit_calibration_due(self) -> None:
-        """Real calibration audit pass (#166's live-monitoring follow-up),
-        piggybacked on the real live-feed refresh above rather than a
-        separate offline CLI/cron -- see `monitoring.calibration_audit`'s
-        own module docstring for why the real truth this needs (what a
-        storm actually did next) is already arriving via this exact
-        refresh, not published days later by a separate pipeline the way
-        skew's ERA5T is. Best-effort throughout: a failure here must
-        never break a live-storm refresh, the same contract
-        `_record_drift_sample`/`_record_skew_sample` already establish
-        for real monitoring hooks attached to `run_cycle`.
+    def _live_storms_stale(self) -> bool:
+        return (
+            self._live_storms_fetched_at is None
+            or datetime.now(UTC) - self._live_storms_fetched_at >= _LIVE_STORMS_TTL
+        )
+
+    def run_calibration_audit(self) -> int:
+        """Refresh the live feed if stale, then audit every live storm's
+        stored cycles; returns how many new samples landed. The Worker calls
+        this (`POST /v1/internal/calibration-audit`) after each synoptic
+        cycle's runs -- it used to run inside `_refresh_live_storms`, i.e.
+        inside whichever console request happened to find the feed stale,
+        downloading every stored cycle of every live storm from R2 while
+        that request waited."""
+        self._refresh_live_storms()
+        return self._audit_calibration_due()
+
+    def _audit_calibration_due(self) -> int:
+        """Real calibration audit pass (#166's live-monitoring follow-up) --
+        see `monitoring.calibration_audit`'s own module docstring for why
+        the real truth this needs (what a storm actually did next) is
+        already arriving via the live feed refresh, not published days
+        later by a separate pipeline the way skew's ERA5T is. Best-effort
+        throughout: one storm's failure must not sink another's, the same
+        contract `_record_drift_sample`/`_record_skew_sample` already
+        establish for real monitoring hooks attached to `run_cycle`.
 
         `_ensure_cycle_index` runs first (idempotent after its own first
         real success) so a due cycle registered by an *earlier* container
@@ -313,15 +339,19 @@ class RealState:
         try:
             store = self._checkpoint_store
         except Exception:  # noqa: BLE001 - no real store configured -- nothing to audit against
-            return
-        for storm in self._live_storms.values():
+            return 0
+        added = 0
+        for storm in list(self._live_storms.values()):
             try:
-                audit_storm(
+                added += len(audit_storm(
                     storm.storm_id, tuple(storm.cycles), storm.track.fixes,
-                    store, self.registry.root,
-                )
+                    store, self.registry.root, lead_hours=_LEAD_HOURS,
+                ))
             except Exception:  # noqa: BLE001 - one storm's audit failure must not sink another's
                 continue
+        if added:
+            self._calibration_samples = None  # re-read the corpus on next report
+        return added
 
     def _new_storm_state(
         self, track: Track, previous: RealStormState | None = None,

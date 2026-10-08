@@ -104,6 +104,29 @@ def test_fetch_live_tracks_skips_a_storm_whose_own_fetch_fails(monkeypatch):
     assert tracks[0].name == "TEST"  # threaded through from CurrentStorms.json
 
 
+def test_fetch_live_tracks_fetches_storms_concurrently_and_keeps_index_order(monkeypatch):
+    """Each storm's bulletin is its own HTTP round trip with its own timeout;
+    fetched one after another, a busy season's refresh took their sum inside
+    a console request. The barrier only opens if both fetches are in flight
+    at once."""
+    import dataclasses
+    import threading
+
+    monkeypatch.setattr(live_atcf, "_get", lambda url: CURRENT_STORMS_FIXTURE)
+    barrier = threading.Barrier(2, timeout=5)
+
+    def fake_fetch_live_track(storm_id, name=None):
+        barrier.wait()
+        fix = live_atcf.parse_tcvitals(
+            "NHC 99L TEST      20260921 0600 210N 0700W 270 046 0995 1012 0300 26 050\n"
+        )[0]
+        fix = dataclasses.replace(fix, storm_id=storm_id)
+        return live_atcf.Track(storm_id=storm_id, fixes=(fix,), name=name)
+
+    monkeypatch.setattr(live_atcf, "fetch_live_track", fake_fetch_live_track)
+    assert [t.storm_id for t in fetch_live_tracks()] == ["AL992026", "AL982026"]
+
+
 def test_fetch_live_tracks_returns_empty_when_index_unreachable(monkeypatch):
     def raise_error(url):
         raise LiveAtcfError("simulated network failure")

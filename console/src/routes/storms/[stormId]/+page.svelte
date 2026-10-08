@@ -171,7 +171,7 @@
       // 404'd on it and rewrote `error` (Copilot review, #190).
       cycle = result;
       viewedLabel = cycleInput;
-      storm = await getStorm(stormId);
+      storm = await getStorm(stormId, { fresh: true });
     } catch (e) {
       error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
     } finally {

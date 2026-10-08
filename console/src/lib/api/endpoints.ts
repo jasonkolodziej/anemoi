@@ -24,7 +24,12 @@ export const getSchedule = (date: string, worstCase = false) =>
 	apiFetch<ScheduleOut>('/v1/schedule', { query: { date, worst_case: worstCase } });
 
 export const listStorms = () => apiFetch<StormSummary[]>('/v1/storms');
-export const getStorm = (stormId: string) => apiFetch<StormDetail>(`/v1/storms/${stormId}`);
+/** `fresh` skips anemoi-api-real's KV read cache (docker/api/src/readCache.ts)
+ * -- for the read right after a cycle run, which must see that run. */
+export const getStorm = (stormId: string, { fresh = false }: { fresh?: boolean } = {}) =>
+	apiFetch<StormDetail>(`/v1/storms/${stormId}`, {
+		headers: fresh ? { 'Cache-Control': 'no-cache' } : undefined
+	});
 
 export const runCycle = (stormId: string, body: RunCycleRequest) =>
 	apiFetch<CycleResult>(`/v1/storms/${stormId}/cycles`, {

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from urllib.error import URLError
 
 from .atcf import parse_tcvitals
@@ -41,6 +42,10 @@ TCVITALS_ARCH_URL = "https://ftp.nhc.noaa.gov/atcf/com/{storm_id}-tcvitals-arch.
 
 #: Bounded, not arbitrary -- a hung request must not hang a cold start.
 _TIMEOUT_S = 10.0
+
+#: Upper bound on concurrent per-storm bulletin fetches -- NHC rarely
+#: tracks more than a handful of storms at once across every basin.
+_MAX_PARALLEL_FETCHES = 8
 
 
 class LiveAtcfError(RuntimeError):
@@ -99,15 +104,24 @@ def fetch_live_tracks() -> list[Track]:
     Tracks. Best-effort per storm: one storm's own fetch/parse failure
     doesn't drop the others. Returns ``[]`` (not an exception) if the
     index itself is unreachable -- callers must keep working with
-    whatever real archive data they already have."""
+    whatever real archive data they already have.
+
+    The per-storm bulletins are fetched concurrently: one after another,
+    each with its own ``_TIMEOUT_S``, a busy season's refresh took as long
+    as every storm's fetch added together, inside a console request."""
     try:
         storms = fetch_current_storms()
     except LiveAtcfError:
         return []
-    tracks: list[Track] = []
-    for storm_id, name in storms:
+
+    def fetch_one(storm: tuple[str, str | None]) -> Track | None:
+        storm_id, name = storm
         try:
-            tracks.append(fetch_live_track(storm_id, name=name))
+            return fetch_live_track(storm_id, name=name)
         except (LiveAtcfError, ValueError):
-            continue
-    return tracks
+            return None
+
+    if not storms:
+        return []
+    with ThreadPoolExecutor(max_workers=min(len(storms), _MAX_PARALLEL_FETCHES)) as pool:
+        return [t for t in pool.map(fetch_one, storms) if t is not None]

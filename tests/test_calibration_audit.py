@@ -233,6 +233,55 @@ def test_audit_storm_persists_new_samples_and_skips_them_on_a_second_pass(tmp_pa
     assert second == []  # already audited -- not re-scored
 
 
+class _CountingClient(_FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.gets: list[str] = []
+
+    def get(self, key, local_path):
+        self.gets.append(key)
+        super().get(key, local_path)
+
+
+def test_audit_storm_does_not_download_a_cycle_with_no_lead_due_yet(tmp_path):
+    """Run from the live refresh, this used to download every stored cycle
+    of every live storm on each pass. With the lead set known, a cycle none
+    of whose leads has come due can be skipped from its label alone."""
+    client = _CountingClient()
+    store = CheckpointStore(_CONFIG, client=client)
+    from anemoi.api.cycle_store import cycle_key, save_cycle_result
+
+    save_cycle_result(store, _result(lead_hours=(12,)))
+    samples = audit_storm(
+        "AL012026", ["20260901_00Z"], (), store, tmp_path,
+        now=_TARGET + timedelta(hours=11), lead_hours=(12,),
+    )
+    assert samples == []
+    assert cycle_key("AL012026", "20260901_00Z") not in client.gets
+
+
+def test_audit_storm_does_not_download_a_cycle_whose_leads_are_all_audited(tmp_path):
+    client = _CountingClient()
+    store = CheckpointStore(_CONFIG, client=client)
+    from anemoi.api.cycle_store import cycle_key, save_cycle_result
+
+    save_cycle_result(store, _result(lead_hours=(12,)))
+    truth = _fix(_TARGET + timedelta(hours=12), lat=20.0, lon=-60.0, wind_kt=62.0)
+    first = audit_storm(
+        "AL012026", ["20260901_00Z"], (truth,), store, tmp_path,
+        now=_TARGET + timedelta(hours=12), lead_hours=(12,),
+    )
+    assert len(first) == 1
+
+    client.gets.clear()
+    second = audit_storm(
+        "AL012026", ["20260901_00Z"], (truth,), store, tmp_path,
+        now=_TARGET + timedelta(hours=13), lead_hours=(12,),
+    )
+    assert second == []
+    assert cycle_key("AL012026", "20260901_00Z") not in client.gets
+
+
 def test_audit_storm_degrades_past_an_unreadable_stored_cycle(tmp_path):
     """A corrupted/missing stored cycle for one label must not sink the
     whole storm's audit pass -- the same per-record degrade contract

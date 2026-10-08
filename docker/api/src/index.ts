@@ -11,13 +11,16 @@
  * a rejected request never wakes the billed container. `scheduled()`'s
  * `runDueCycles` is unaffected: it calls `container.fetch()` directly on
  * the Durable Object binding, bypassing this gate entirely (see below).
- * Demo-vs-real routing and edge caching described in #91's "Proposed
- * scope of work" step 3 remain a follow-up.
+ * Reads of the storm list, a storm, and a stored cycle are served from KV
+ * (src/readCache.ts) without waking the container; every cycle run --
+ * cron or manual POST -- refreshes what they serve. Demo-vs-real routing
+ * from #91's "Proposed scope of work" step 3 remains a follow-up.
  */
 import { Container, getContainer } from '@cloudflare/containers';
 import type { DurableObject } from 'cloudflare:workers';
 import { verifyApiKey } from './auth';
 import { recordCycleRun } from './metering';
+import { type ContainerFetch, putCycleResult, readThrough, refreshStormSnapshot } from './readCache';
 
 /**
  * `wrangler secret put` sets Worker-level bindings, not container
@@ -158,6 +161,7 @@ interface StormSummaryOut {
  */
 async function runDueCycles(env: Env, cycleLabel: string): Promise<void> {
 	const container = getContainer(env.ANEMOI_REAL_API);
+	const fetchContainer: ContainerFetch = (req) => container.fetch(req);
 	let storms: StormSummaryOut[];
 	try {
 		const stormsRes = await container.fetch(new Request('https://internal/v1/storms'));
@@ -202,10 +206,37 @@ async function runDueCycles(env: Env, cycleLabel: string): Promise<void> {
 				);
 			} else {
 				console.log(`scheduled cycle ${cycleLabel}: ${storm.storm_id} -> ${res.status}`);
+				await putCycleResult(env.READ_CACHE, storm.storm_id, await res.text());
 			}
 		} catch (err) {
 			console.error(`scheduled cycle ${cycleLabel}: ${storm.storm_id} threw`, err);
 		}
+	}
+
+	await afterCycles(env, fetchContainer, cycleLabel);
+}
+
+/**
+ * Post-cycle steps, each independent of the others' failure: refresh the
+ * KV read cache from the now-awake container, then audit stored cycles
+ * against the latest fixes. The audit used to run inside whichever console
+ * request found the live feed stale (downloading every stored cycle of
+ * every live storm from R2 while that request waited); it runs here now,
+ * once per synoptic cycle, off any user's request path.
+ */
+async function afterCycles(env: Env, fetchContainer: ContainerFetch, cycleLabel: string): Promise<void> {
+	try {
+		await refreshStormSnapshot(env.READ_CACHE, fetchContainer);
+	} catch (err) {
+		console.error(`scheduled cycle ${cycleLabel}: read-cache snapshot threw`, err);
+	}
+	try {
+		const res = await fetchContainer(
+			new Request('https://internal/v1/internal/calibration-audit', { method: 'POST' }),
+		);
+		console.log(`scheduled cycle ${cycleLabel}: calibration audit -> ${res.status} ${await res.text()}`);
+	} catch (err) {
+		console.error(`scheduled cycle ${cycleLabel}: calibration audit threw`, err);
 	}
 }
 
@@ -213,6 +244,21 @@ async function runDueCycles(env: Env, cycleLabel: string): Promise<void> {
  * the billed container and runs real inference, gated tighter than
  * everything else. */
 const CYCLE_POST_RE = /^\/v1\/storms\/([^/]+)\/cycles\/?$/;
+
+/** Maintenance routes only this Worker's own cron calls, through the
+ * container binding directly -- never reachable from the public route. */
+const INTERNAL_RE = /^\/v1\/internal(\/|$)/i;
+
+/** Checked on the decoded path: the container's router decodes it too, so
+ * `/v1/%69nternal/...` would otherwise slip past a raw-path match. An
+ * undecodable path is refused outright rather than guessed at. */
+function isInternalPath(pathname: string): boolean {
+	try {
+		return INTERNAL_RE.test(decodeURIComponent(pathname));
+	} catch {
+		return true;
+	}
+}
 
 /**
  * Resolve the calling user id, trying two paths:
@@ -246,6 +292,9 @@ async function resolveUserId(
 export default {
 	async fetch(request, env, ctx) {
 		const url = new URL(request.url);
+		if (isInternalPath(url.pathname)) {
+			return new Response('not found', { status: 404 });
+		}
 		const cycleMatch = request.method === 'POST' ? url.pathname.match(CYCLE_POST_RE) : null;
 
 		// #171's Phase 0 acceptance criterion is specifically "POST .../cycles
@@ -287,6 +336,11 @@ export default {
 		forwarded.headers.delete('X-Anemoi-Api-Key');
 
 		const container = getContainer(env.ANEMOI_REAL_API);
+		const fetchContainer: ContainerFetch = (req) => container.fetch(req);
+
+		const cached = await readThrough(forwarded, env.READ_CACHE, ctx, fetchContainer);
+		if (cached) return cached;
+
 		const response = await container.fetch(forwarded);
 
 		if (cycleMatch && userId && bodyForMetering && response.ok) {
@@ -302,6 +356,22 @@ export default {
 			} catch (err) {
 				console.error('recordCycleRun: could not read request body', err);
 			}
+		}
+
+		if (cycleMatch && response.ok) {
+			// The container is awake and just changed this storm: refresh what
+			// the read cache serves for it, in the background. KV reads can lag
+			// this write by up to a minute, so the page that ran the cycle
+			// re-reads the storm with `Cache-Control: no-cache` instead of
+			// relying on it (console's getStorm `fresh` option).
+			const stormId = cycleMatch[1];
+			const forCache = response.clone();
+			ctx.waitUntil(
+				(async () => {
+					await putCycleResult(env.READ_CACHE, stormId, await forCache.text());
+					await refreshStormSnapshot(env.READ_CACHE, fetchContainer, [stormId]);
+				})().catch((err) => console.error('read-cache update after cycle POST threw', err)),
+			);
 		}
 
 		return response;
