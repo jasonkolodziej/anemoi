@@ -232,8 +232,10 @@ The instance id is `cycle-<label>` (e.g. `cycle-20261008_06Z`), so a
 duplicate cron firing (Cron Triggers are at-least-once) finds it already
 exists and doesn't start a second run. Instance status, per-step outcomes
 and retries are in the dashboard's Workflows tab, or
-`wrangler workflows instances list anemoi-cycle`; step logs show up in
-`wrangler tail` as `cycle workflow <label>: ...`.
+`wrangler workflows instances list anemoi-cycle`; the instance's output
+summarises every storm's outcome. Each step attempt logs one line to
+`wrangler tail` as `cycle workflow <label>: ...` (logged from inside the
+steps, so a replay of finished steps doesn't repeat them).
 
 Runs for **every** active storm, trained basin or not -- an untrained
 basin (only `AL` has real trained models, `data.atcf.TRAINED_BASINS`)

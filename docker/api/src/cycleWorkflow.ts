@@ -55,6 +55,10 @@ export class CycleWorkflow extends WorkflowEntrypoint<Env, CycleParams> {
 	async run(event: Readonly<WorkflowEvent<CycleParams>>, step: WorkflowStep) {
 		const { cycleLabel } = event.payload;
 		const fetchContainer: ContainerFetch = (req) => getContainer(this.env.ANEMOI_REAL_API).fetch(req);
+		// Logged only from inside step bodies: the Workflows runtime re-runs
+		// `run` from the top on every resume, replaying finished steps from
+		// their stored results, so a log line outside a step would repeat
+		// once per later step. Final outcomes are the instance's output.
 		const log = (msg: string) => console.log(`cycle workflow ${cycleLabel}: ${msg}`);
 
 		const due = await step.do('find due storms', LIGHT_STEP, async () => {
@@ -64,30 +68,41 @@ export class CycleWorkflow extends WorkflowEntrypoint<Env, CycleParams> {
 			const active = storms.filter((s) => s.active);
 			// Idempotent against `last_cycle`, as before: the cron could also
 			// overlap a cycle someone ran by hand.
-			return active.filter((s) => s.last_cycle !== cycleLabel).map((s) => s.storm_id);
+			const due = active.filter((s) => s.last_cycle !== cycleLabel).map((s) => s.storm_id);
+			log(`${due.length}/${active.length} active storm(s) due`);
+			return due;
 		});
-		log(`${due.length} storm(s) due`);
 
 		const outcomes: Record<string, string> = {};
 		for (const stormId of due) {
 			try {
-				outcomes[stormId] = await step.do(`run cycle ${stormId}`, CYCLE_STEP, () =>
-					runStormCycle(fetchContainer, this.env.READ_CACHE, stormId, cycleLabel),
-				);
+				outcomes[stormId] = await step.do(`run cycle ${stormId}`, CYCLE_STEP, async () => {
+					try {
+						const outcome = await runStormCycle(fetchContainer, this.env.READ_CACHE, stormId, cycleLabel);
+						log(`${stormId} -> ${outcome}`);
+						return outcome;
+					} catch (err) {
+						log(`${stormId} attempt failed: ${err instanceof Error ? err.message : String(err)}`);
+						throw err;
+					}
+				});
 			} catch (err) {
-				// Retries exhausted, or refused outright: record it and carry on
-				// with the other storms.
+				// Retries exhausted: record it and carry on with the other storms.
 				outcomes[stormId] = `failed: ${err instanceof Error ? err.message : String(err)}`;
 			}
-			log(`${stormId} -> ${outcomes[stormId]}`);
 		}
 
 		// Both post-cycle steps run even if a storm failed: the snapshot
 		// should reflect whatever did run, and the audit covers older cycles.
+		let snapshot = 'failed';
 		try {
-			await step.do('refresh read cache', LIGHT_STEP, () => refreshStormSnapshot(this.env.READ_CACHE, fetchContainer));
-		} catch (err) {
-			log(`read-cache refresh failed: ${err}`);
+			snapshot = await step.do('refresh read cache', LIGHT_STEP, async () => {
+				await refreshStormSnapshot(this.env.READ_CACHE, fetchContainer);
+				log('read cache refreshed');
+				return 'ok';
+			});
+		} catch {
+			/* retries exhausted; recorded in the output below */
 		}
 		let audit = 'failed';
 		try {
@@ -95,15 +110,16 @@ export class CycleWorkflow extends WorkflowEntrypoint<Env, CycleParams> {
 				const res = await fetchContainer(
 					new Request('https://internal/v1/internal/calibration-audit', { method: 'POST' }),
 				);
+				const body = await res.text();
+				log(`calibration audit -> ${res.status} ${body}`);
 				if (!res.ok) throw new Error(`calibration audit -> ${res.status}`);
-				return res.text();
+				return body;
 			});
-		} catch (err) {
-			log(`calibration audit failed: ${err}`);
+		} catch {
+			/* retries exhausted; recorded in the output below */
 		}
-		log(`calibration audit -> ${audit}`);
 
-		return { cycleLabel, outcomes, audit };
+		return { cycleLabel, outcomes, snapshot, audit };
 	}
 }
 
