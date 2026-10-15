@@ -313,10 +313,8 @@
   },
   "on_time": true,
   "run": {
-   "source": "manual",
-   "overrides": [
-    "members"
-   ]
+   "source": "scheduled",
+   "overrides": []
   },
   "provenance": null
  }

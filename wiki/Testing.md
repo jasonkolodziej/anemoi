@@ -92,11 +92,18 @@ pnpm run test:e2e                   # every spec: vite dev + the demo API
 pnpm run build && pnpm run test:e2e:workerd   # what CI runs: the built Worker
 ```
 
-CI (`deploy.yml`, *test-console*) runs `test:e2e:workerd`: `auth.spec.ts` and `storm-state-sync.spec.ts`, which mocks every API call in the browser (`e2e/fixtures/storm-page.json` holds a demo storm and cycle as templates) and so needs no backend. The other specs drive the demo API through the default config and are run by hand; the ones that click **Run cycle** while signed out fail since cycle runs need a login (#171).
+CI (`deploy.yml`, *test-console*) runs `test:e2e:workerd`: `auth.spec.ts` and `storm-state-sync.spec.ts`. The storm spec mocks every API call in the browser (`e2e/fixtures/storm-page.json` holds a demo storm and cycle as templates), so it needs no backend. The other specs drive the demo API through the default config and are run by hand.
+
+Specs are written as what someone does on the page and what they should see at each step (`storm-state-sync.spec.ts` is the model: *someone reading a storm*, *a signed-in forecaster running a cycle*).
+
+- **Signing in.** Running a cycle needs an account (#171), so specs that run one sign a fresh user in first: `e2e/helpers/storm.ts`'s `signIn`. `runFreshCycle` runs a label the storm doesn't have yet, since the form won't run one it has.
+- **Parallel sign-ins.** The local email simulator's files don't name their recipient, so `withEmailLock` (`e2e/helpers/auth.ts`) serializes the step from sending a magic link to reading it across workers.
+- **Closed registration.** `auth.spec.ts`'s `@registration-closed` tests close sign-up for the whole local D1, so both configs run them as a separate project after everything else.
+- **Can't pass offline.** `console-visuals`' map-tap tooltip test needs the map's base style (`tiles.openfreemap.org`); without network access the forecast dots it probes for are never drawn.
 
 | Spec | Guards against |
 |---|---|
-| `storm-state-sync.spec.ts` | The storm page's views of "which cycle" drifting apart: the run form stuck on the cycle the page was opened in, the date and hour pickers disagreeing with the text field, a 409 for a cycle already run with no way to it, a failed view leaving its chip selected, and one storm's pinned cycle, form, and error carried to the next (Decision Log 54) |
+| `storm-state-sync.spec.ts` | The storm page as its users go through it (Decision Log 54). **Reading:** the newest cycle stated everywhere, browsing older ones while new ones arrive, following the latest, the three cycle fields agreeing, an existing cycle offered to view, a failed view, moving between storms (and back), an archive storm, a phone screen. **Running:** the anonymous "sign in and come back", a successful run end to end, a refusal, a failure and retry, a 409, a storm switch mid-run, the sign-in redirect staying on-site |
 | `cycle-context.spec.ts` | The page not saying which cycle it shows, or that the current one hasn't run yet (Decision Log 47) |
 | `periodic-refresh.spec.ts` | The 60 s poll: firing at all, not mid-run, not raising the waiter, not moving a picked cycle, not chasing a failed one |
 | `auth.spec.ts` | Sign-up, sign-out, passkeys and API keys on the Workers runtime |

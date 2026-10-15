@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { runFreshCycle, signIn } from './helpers/storm';
 
 // Real browser coverage for the console-visuals proposal
 // (console/tmp/PROPOSAL.md): the Wind Rose tap tooltip, the Today's
@@ -7,6 +8,9 @@ import { test, expect } from '@playwright/test';
 // `INTENSITY` array) or a browser-native `title` tooltip with a real
 // shadcn component -- this is what would have caught either one
 // silently failing to render.
+
+// Running a cycle needs an account (#171).
+test.beforeEach(async ({ page }) => signIn(page));
 
 test('tapping a wind rose forecast point opens a real tooltip with its lead hour and wind speed', async ({
 	page,
@@ -17,7 +21,7 @@ test('tapping a wind rose forecast point opens a real tooltip with its lead hour
 	await page.goto('/');
 	await page.locator('a[href^="/storms/"]').first().click();
 	await page.waitForSelector('#cycle-input');
-	await page.getByRole('button', { name: 'Run cycle' }).click();
+	await runFreshCycle(page);
 	await expect(page.locator('canvas').first()).toBeVisible({ timeout: 10_000 });
 
 	// Forecast points are canvas-rendered (MapLibre), not real DOM nodes --
@@ -71,7 +75,7 @@ test('the intensity chart renders real data only, with no leftover fabricated ov
 	await page.goto('/');
 	await page.locator('a[href^="/storms/"]').first().click();
 	await page.waitForSelector('#cycle-input');
-	await page.getByRole('button', { name: 'Run cycle' }).click();
+	await runFreshCycle(page);
 
 	await expect(page.getByText('Intensity (10th-90th percentile)')).toBeVisible();
 	// The chart is a real <svg> (layerchart), drawn once real pdf data

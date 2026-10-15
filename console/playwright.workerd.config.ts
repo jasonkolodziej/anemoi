@@ -23,7 +23,22 @@ export default defineConfig({
 	globalSetup: './e2e/global-setup.ts',
 	globalTeardown: './e2e/global-teardown.ts',
 	use: { baseURL: 'http://localhost:8787', trace: 'retain-on-failure' },
-	projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+	// `@registration-closed` closes sign-up for the whole local D1, which
+	// would fail every other spec's sign-in running alongside it -- so it
+	// runs alone, once the rest have finished.
+	projects: [
+		{
+			name: 'chromium',
+			use: { ...devices['Desktop Chrome'] },
+			grepInvert: /@registration-closed/,
+		},
+		{
+			name: 'registration-closed',
+			use: { ...devices['Desktop Chrome'] },
+			grep: /@registration-closed/,
+			dependencies: ['chromium'],
+		},
+	],
 	webServer: {
 		command:
 			'pnpm exec wrangler dev --port 8787 --local-upstream localhost:8787' +

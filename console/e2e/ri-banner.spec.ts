@@ -1,10 +1,14 @@
 import { test, expect } from '@playwright/test';
+import { runFreshCycle, signIn } from './helpers/storm';
 
 // #188: `ri_probability` is a fraction of a finite ensemble and the alert
 // threshold is a hard cut at 30%, so a two-state banner had to call a coin
 // flip either "flagged" or "no signal". The third state says "cannot tell"
 // instead. These drive each state through the real page by rewriting the
 // cycle response, since a demo ensemble won't land on all three on its own.
+
+// Running a cycle needs an account (#171).
+test.beforeEach(async ({ page }) => signIn(page));
 
 const cases = [
 	{
@@ -62,7 +66,7 @@ for (const c of cases) {
 		const ran = page.waitForResponse(
 			(r) => r.request().method() === 'POST' && r.url().includes('/cycles'),
 		);
-		await page.getByRole('button', { name: /Run cycle/i }).click();
+		await runFreshCycle(page);
 		await ran;
 
 		await expect(page.getByText(c.expect)).toBeVisible();
@@ -95,7 +99,7 @@ test('a cycle stored before the interval existed still renders two-state', async
 	const ran = page.waitForResponse(
 		(r) => r.request().method() === 'POST' && r.url().includes('/cycles'),
 	);
-	await page.getByRole('button', { name: /Run cycle/i }).click();
+	await runFreshCycle(page);
 	await ran;
 
 	await expect(page.getByText(/No rapid intensification signal/)).toBeVisible();

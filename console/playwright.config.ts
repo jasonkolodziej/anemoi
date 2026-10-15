@@ -27,7 +27,22 @@ export default defineConfig({
 		baseURL: 'http://localhost:5173',
 		trace: 'on-first-retry',
 	},
-	projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+	// `@registration-closed` closes sign-up for the whole local D1, which
+	// would fail every other spec's sign-in running alongside it -- so it
+	// runs alone, once the rest have finished.
+	projects: [
+		{
+			name: 'chromium',
+			use: { ...devices['Desktop Chrome'] },
+			grepInvert: /@registration-closed/,
+		},
+		{
+			name: 'registration-closed',
+			use: { ...devices['Desktop Chrome'] },
+			grep: /@registration-closed/,
+			dependencies: ['chromium'],
+		},
+	],
 	webServer: [
 		{
 			command: 'uv run python -m anemoi.api',

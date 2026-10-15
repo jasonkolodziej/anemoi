@@ -652,6 +652,7 @@ Even with entry 44, a cache miss still meant waiting on a cold container, behind
 - **Nothing cleared a run's error** except the next poll, up to a minute later, and a 409 left no way to the cycle it named.
 - **A failed Past-cycles click still selected its chip** ("Viewing an older cycle") while the panel and map showed the previous cycle; a slower earlier click or poll could also land after a newer one.
 - **Every per-storm value survived a move to another storm.** A client-side navigation on the same route reuses the page component, and only `onMount` loaded data, so the next storm kept the last one's pinned cycle, form, and error -- and asked the API for the old storm's cycle labels.
+- **Signed-out visitors learned only by clicking.** **Run cycle** silently went to the sign-in page, and signing in landed on `/profile`, not back on the storm.
 
 **Fix** (`console/src/routes/storms/[stormId]/+page.svelte`, `CycleDateTimePicker.svelte`, `utils.ts`).
 
@@ -659,19 +660,36 @@ Even with entry 44, a cache miss still meant waiting on a cold container, behind
 - **Run button.** A malformed or off-synoptic label shows why and disables **Run cycle**. A label the storm already has says "has already run" and offers **View it**.
 - **Errors.** Editing the cycle clears the banner. A 409 re-reads the storm (bypassing KV), so Past cycles and the form show the cycle that exists.
 - **Viewing a cycle.** It pins only after the cycle loads, clears a stale error, and lets the newest click win. A poll's answer is dropped if the user picked another cycle meanwhile.
-- **Changing storm.** `openStorm(id)` runs whenever the route's `stormId` changes. It resets the storm, the cycle, the pinned label, the error, the form (members back to 50, coastline cleared) and the hover. A response for a previous storm is dropped.
+- **Changing storm.** `openStorm(id)` runs whenever the route's `stormId` changes. It resets the storm, the cycle, the pinned label, the error, the form (members back to 50, coastline cleared) and the hover. A response for a previous storm is dropped, including a run's result arriving after the user moved on (Copilot review).
+- **Signing in to run.** A signed-out visitor sees "Running a cycle needs an account — sign in and you'll come back here." Both that link and **Run cycle** go to `/auth/login?next=/storms/{id}`. The login form's callback and the signed-in redirect honour `next` only as a same-site path (`$lib/auth-return.ts` `safeNext`), so it can't be used as an open redirect.
 
-**Enforced by** `console/e2e/storm-state-sync.spec.ts`, written first and failing on the old page:
+**Enforced by** `console/e2e/storm-state-sync.spec.ts`, written first and failing on the old page. Each test is one thing a user does and what they should see at each step; every one checks that the panel, the chips, the callout and the three form fields agree.
 
-- the form following the clock, then holding an edit;
-- the text field, date button and hour select agreeing, including `_07Z` and half-typed input;
-- an existing cycle offered to view, with the chip, panel and callout agreeing after;
-- a failed chip not selected and its error cleared by the next view;
-- a 409 turning into **View it** and clearing on edit;
-- a client-side move to another storm resetting everything;
-- an archive storm defaulting inside its track.
+*Someone reading a storm*:
+
+- opening on the newest cycle, with the next one offered to run;
+- being told running needs an account, and coming back after signing in;
+- browsing an older cycle while newer ones arrive, then **Back to latest**;
+- following the latest as a new cycle lands (the form moving on with it);
+- the text field, date button and hour select agreeing;
+- an existing cycle offered to view;
+- a past cycle that won't load;
+- moving to another storm and back;
+- an archive storm;
+- a phone-width screen with no sideways scroll.
+
+*A signed-in forecaster running a cycle*:
+
+- the sign-in redirect staying on-site;
+- a successful run, from **Running…** to the cycle shown, with the request body checked;
+- a `not_scheduled_yet` refusal, resolved by the cron's run;
+- a failure, then a retry;
+- a 409 `exists`;
+- moving to another storm mid-run.
 
 The spec mocks the API, so CI now runs it against the built Worker next to `auth.spec.ts`.
+
+**Also fixed in the suite.** The 14 older specs that click **Run cycle** had failed since #171 by being sent to sign in. They now sign in and run a label the storm doesn't have. Signing in from parallel workers is serialized (`withEmailLock`). The closed-registration tests run as their own project, after the rest.
 
 ---
 

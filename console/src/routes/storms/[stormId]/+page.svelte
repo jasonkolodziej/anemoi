@@ -10,6 +10,7 @@
   import { pollWhileVisible } from "$lib/poll";
   import { setWaiterLoading } from "$lib/stores/waiter";
   import { recall, remember } from "$lib/lastKnown";
+  import { loginHref } from "$lib/auth-return";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
   import {
@@ -277,7 +278,8 @@
     // a fetch -- send them to log in instead of a raw error surfacing
     // from a click that could never have worked.
     if (!data.user) {
-      await goto("/auth/login");
+      // Back to this storm afterwards, not /profile.
+      await goto(loginHref(`/storms/${stormId}`));
       return;
     }
     if (cycleProblem !== null || cycleExists) return;
@@ -307,11 +309,13 @@
       // exists. Pinning before the await meant a failed run left the view
       // pinned to a label that was never created, and every 60s poll then
       // 404'd on it and rewrote `error` (Copilot review, #190).
+      // A result for a storm the user has since left belongs to that storm
+      // only (Copilot review, #217).
+      if (id !== stormId) return;
       cycle = result;
       // The label the API actually stored, not what was typed: it accepts
       // `20261015_6Z` and stores `20261015_06Z`, and pinning the typed form
       // made every later poll 404 on a label that doesn't exist (#212).
-      if (id !== stormId) return;
       viewedLabel = result.payload.cycle;
       viewRequest++;
       const fresh = await getStorm(id, { fresh: true });
@@ -527,6 +531,16 @@
         >
           {running ? "Running…" : "Run cycle"}
         </Button>
+        {#if !data.user}
+          <p class="w-full text-[11px] text-text-muted" data-testid="sign-in-to-run">
+            Running a cycle needs an account —
+            <a
+              href={loginHref(`/storms/${stormId}`)}
+              class="text-fusion underline underline-offset-2 hover:text-text">sign in</a
+            >
+            and you'll come back here.
+          </p>
+        {/if}
         {#if cycleProblem}
           <p class="w-full text-[11px] text-status-degraded" data-testid="cycle-input-problem">
             {cycleProblem}

@@ -4,6 +4,7 @@ import {
 	addVirtualAuthenticator,
 	listEmailFiles,
 	waitForNewEmailLink,
+	withEmailLock,
 	localD1,
 	setRegistrationOpen,
 } from './helpers/auth';
@@ -228,19 +229,25 @@ test("better-auth's schema check passes against migrations/", async ({ page }) =
 // set by anything -- so an admin's `/admin/create-user` was rejected too
 // whenever registration was closed. It's now keyed off the endpoint path.
 
-test.describe('with registration closed', () => {
+// Closing registration is global to the local D1, so every other spec that
+// signs a user up would fail while these run: the configs run them as their
+// own project, after everything else (`@registration-closed`).
+test.describe('with registration closed', { tag: '@registration-closed' }, () => {
 	test.beforeAll(() => setRegistrationOpen(false));
 	test.afterAll(() => setRegistrationOpen(true));
 
 	test('a new magic-link sign-up is rejected', async ({ page }) => {
 		const email = freshEmail('closed-signup');
-		const before = listEmailFiles();
-		const res = await page.request.post('/api/auth/sign-in/magic-link', {
-			...QUICK,
-			data: { email, callbackURL: '/profile' },
+		const link = await withEmailLock(async () => {
+			const before = listEmailFiles();
+			const res = await page.request.post('/api/auth/sign-in/magic-link', {
+				...QUICK,
+				data: { email, callbackURL: '/profile' },
+			});
+			expect(res.ok()).toBe(true); // sending the link is fine...
+			return waitForNewEmailLink(before);
 		});
-		expect(res.ok()).toBe(true); // sending the link is fine...
-		await page.goto(await waitForNewEmailLink(before));
+		await page.goto(link);
 		// ...but verifying it must not create the user or a session.
 		const session = await page.request.get('/api/auth/get-session', QUICK);
 		expect(await session.json()).toBeNull();

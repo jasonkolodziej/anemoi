@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readdirSync, statSync, readFileSync } from 'node:fs';
+import { closeSync, openSync, readdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BrowserContext, Page } from '@playwright/test';
 
@@ -54,6 +54,46 @@ export async function waitForNewEmailLink(before: Set<string>, timeoutMs = 10_00
 
 export { listEmailFiles };
 
+const EMAIL_LOCK = join(EMAIL_DIR, '..', 'e2e-email.lock');
+const STALE_LOCK_MS = 30_000;
+
+/**
+ * Runs `fn` -- trigger one email, then read it with `waitForNewEmailLink`
+ * -- while no other worker does the same. The simulator's files don't name
+ * their recipient, so "the newest new file" is only this worker's email if
+ * nobody else sent one meanwhile: with specs signing in in parallel, a
+ * worker otherwise followed another's magic link and signed in as them.
+ * A lock file shared by every worker; one older than `STALE_LOCK_MS` (a
+ * worker killed holding it) is taken over.
+ */
+export async function withEmailLock<T>(fn: () => Promise<T>): Promise<T> {
+	const deadline = Date.now() + 60_000;
+	for (;;) {
+		try {
+			closeSync(openSync(EMAIL_LOCK, 'wx'));
+			break;
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+			try {
+				if (Date.now() - statSync(EMAIL_LOCK).mtimeMs > STALE_LOCK_MS) unlinkSync(EMAIL_LOCK);
+			} catch {
+				/* released between the two calls -- just retry */
+			}
+			if (Date.now() > deadline) throw new Error(`Timed out waiting for ${EMAIL_LOCK}`);
+			await new Promise((r) => setTimeout(r, 50));
+		}
+	}
+	try {
+		return await fn();
+	} finally {
+		try {
+			unlinkSync(EMAIL_LOCK);
+		} catch {
+			/* taken over as stale -- nothing to release */
+		}
+	}
+}
+
 /**
  * Signs up/in a brand-new user via magic link entirely through the real
  * API (no UI form-filling here -- login-form.spec-level tests cover that
@@ -61,13 +101,14 @@ export { listEmailFiles };
  * on top of). Leaves the page navigated to `/profile`.
  */
 export async function signUpViaMagicLink(page: Page, email: string): Promise<void> {
-	const before = listEmailFiles();
-	const res = await page.request.post('/api/auth/sign-in/magic-link', {
-		data: { email, callbackURL: '/profile' },
+	const link = await withEmailLock(async () => {
+		const before = listEmailFiles();
+		const res = await page.request.post('/api/auth/sign-in/magic-link', {
+			data: { email, callbackURL: '/profile' },
+		});
+		if (!res.ok()) throw new Error(`sign-in/magic-link failed: ${res.status()} ${await res.text()}`);
+		return waitForNewEmailLink(before);
 	});
-	if (!res.ok()) throw new Error(`sign-in/magic-link failed: ${res.status()} ${await res.text()}`);
-
-	const link = await waitForNewEmailLink(before);
 	await page.goto(link);
 	await page.waitForURL('**/profile');
 }
