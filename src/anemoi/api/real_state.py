@@ -321,6 +321,23 @@ class RealState:
         self._refresh_live_storms()
         return self._audit_calibration_due()
 
+    def archive_atcf(self) -> dict:
+        """Copy NHC's as-issued storm files to durable storage (#213,
+        `data.atcf_archive`). The Worker's cycle Workflow calls this
+        (`POST /v1/internal/archive-atcf`) after each synoptic cycle's runs,
+        off the request path. Reports, rather than raises, a missing store or
+        an unreachable NHC, so the Workflow's output says why."""
+        from ..data.atcf_archive import archive_atcf
+
+        try:
+            store = self._checkpoint_store
+        except Exception as exc:  # noqa: BLE001 - no durable store configured
+            return {"error": f"no durable store: {exc}"}
+        try:
+            return archive_atcf(store).as_dict()
+        except Exception as exc:  # noqa: BLE001 - NHC's index unreachable; next pass retries
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
     def _audit_calibration_due(self) -> int:
         """Real calibration audit pass (#166's live-monitoring follow-up) --
         see `monitoring.calibration_audit`'s own module docstring for why

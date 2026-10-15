@@ -22,3 +22,11 @@ def calibration_audit(state=Depends(state_dependency)) -> dict:
     `DemoState` has no stored cycles to audit, so it reports zero."""
     run = getattr(state, "run_calibration_audit", None)
     return {"new_samples": run() if run is not None else 0}
+
+
+@router.post("/archive-atcf")
+def archive_atcf(state=Depends(state_dependency)) -> dict:
+    """Archive NHC's as-issued storm files to R2 (#213, `data.atcf_archive`).
+    `DemoState` has no live feed or store, so it archives nothing."""
+    run = getattr(state, "archive_atcf", None)
+    return run() if run is not None else {"storms": [], "written": 0}

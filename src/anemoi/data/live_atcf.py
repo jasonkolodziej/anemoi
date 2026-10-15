@@ -94,9 +94,15 @@ def fetch_live_track(storm_id: str, name: str | None = None) -> Track:
     fixes = [f for f in parse_tcvitals(_get(url)) if f.storm_id == storm_id]
     if not fixes:
         raise LiveAtcfError(f"{storm_id}: tcvitals-arch had no parseable fixes")
-    fixes.sort(key=lambda f: f.valid_time)
-    deduped = [f for i, f in enumerate(fixes) if i == 0 or f.valid_time != fixes[i - 1].valid_time]
-    return Track(storm_id=storm_id, fixes=tuple(deduped), name=name)
+    # One fix per valid time: the *latest* bulletin for it, i.e. NHC's own
+    # correction when one was issued. (This kept the first until #213, so a
+    # corrected position never reached the track.) Every revision is kept
+    # verbatim by `data.atcf_archive`, which is where the as-issued first
+    # bulletin is read from when that's what's wanted.
+    latest: dict = {}
+    for f in fixes:  # file order is issue order
+        latest[f.valid_time] = f
+    return Track(storm_id=storm_id, fixes=tuple(latest[t] for t in sorted(latest)), name=name)
 
 
 def fetch_live_tracks() -> list[Track]:

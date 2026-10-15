@@ -852,6 +852,30 @@ def cmd_drift_reference_fit(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_atcf_archive(args: argparse.Namespace) -> int:
+    """Archive NHC's as-issued storm files to durable storage now (#213) --
+    the same pass the cycle Workflow runs after every synoptic cycle; by
+    hand for a backfill, or to check what's being kept."""
+    import json
+
+    from .data.atcf_archive import archive_atcf, archived_tcvitals
+    from .tracking.checkpoint_store import CheckpointStore, CheckpointStoreError, S3Config
+
+    try:
+        store = CheckpointStore(S3Config.from_env())
+    except CheckpointStoreError as exc:
+        print(f"atcf-archive needs real S3_ARTIFACT_* durable storage credentials: {exc}")
+        return 1
+    if args.list_season is not None:
+        for storm_id, fixes in sorted(archived_tcvitals(store, args.list_season).items()):
+            times = sorted({f.valid_time for f in fixes})
+            span = f"{times[0]:%Y-%m-%d %HZ} .. {times[-1]:%Y-%m-%d %HZ}" if times else "-"
+            print(f"{storm_id}: {len(fixes)} bulletin(s), {len(times)} valid time(s), {span}")
+        return 0
+    print(json.dumps(archive_atcf(store).as_dict(), indent=2))
+    return 0
+
+
 def cmd_skew_audit(args: argparse.Namespace) -> int:
     """Real ERA5T-vs-operational skew audit (#148, the skew half).
 
@@ -1135,6 +1159,16 @@ def main(argv: list[str] | None = None) -> int:
         default=str(Path.home() / ".anemoi" / "registry"),
     )
     p.set_defaults(func=cmd_consistency_distill)
+
+    p = sub.add_parser(
+        "atcf-archive",
+        help="archive NHC's as-issued TC-Vitals/b-deck/a-deck to durable storage (#213)",
+    )
+    p.add_argument(
+        "--list", dest="list_season", type=int, default=None, metavar="SEASON",
+        help="instead of archiving, summarise the TC-Vitals archived for SEASON",
+    )
+    p.set_defaults(func=cmd_atcf_archive)
 
     p = sub.add_parser(
         "skew-audit",
