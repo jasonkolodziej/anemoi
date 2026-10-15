@@ -37,8 +37,10 @@ lists is archived, not only the trained ones: an EP storm's pairs are as
 good a noise estimate as an AL one's, and deciding later costs nothing.
 
 A storm stays on the list for `RECENT_WINDOW` after it leaves
-``CurrentStorms.json`` (``_recent.json`` remembers when each was last
-seen), so its final bulletins and the post-storm b-deck are caught too.
+``CurrentStorms.json`` (``archive/atcf/_recent.json`` remembers when each
+was last seen -- one file, not one per year, so a storm last seen on 31
+December is still followed on 1 January), so its final bulletins and the
+post-storm b-deck are caught too.
 
 Reading back: `archived_tcvitals` returns every archived TC-Vitals bulletin
 for a season, each revision once, in the order NHC issued them.
@@ -112,8 +114,9 @@ def currentstorms_key(year: int, fetched_at: datetime, body: bytes) -> str:
     return f"{ARCHIVE_PREFIX}{year}/_currentstorms/{fetched_at:%Y%m%dT%H%M%SZ}_{_digest(body)}.json"
 
 
-def _recent_key(year: int) -> str:
-    return f"{ARCHIVE_PREFIX}{year}/_recent.json"
+#: When each storm was last in CurrentStorms.json. Not per year: a per-year
+#: file started empty on 1 January and dropped a storm seen on 31 December.
+RECENT_KEY = f"{ARCHIVE_PREFIX}_recent.json"
 
 
 def _stored_digests(store: CheckpointStore, prefix: str) -> set[str]:
@@ -187,13 +190,15 @@ def archive_atcf(
         report.failed["_currentstorms"] = f"unparseable: {exc}"
         current = []
 
-    recent = _load_recent(store, year)
+    recent = _load_recent(store)
     for storm_id in current:
         recent[storm_id] = now.isoformat()
-    storms = sorted(
-        sid for sid, seen in recent.items()
+    # Only storms inside the window are kept, so the file stays small.
+    recent = {
+        sid: seen for sid, seen in recent.items()
         if now - datetime.fromisoformat(seen) <= RECENT_WINDOW
-    )
+    }
+    storms = sorted(recent)
     report.storms = storms
 
     for storm_id in storms:
@@ -214,7 +219,7 @@ def archive_atcf(
             _write_if_new(store, snapshot_key(season, storm_id, product, now, body), body, prefix, report)
 
     try:
-        _put_bytes(store, _recent_key(year), json.dumps(recent, sort_keys=True).encode())
+        _put_bytes(store, RECENT_KEY, json.dumps(recent, sort_keys=True).encode())
     except Exception as exc:  # noqa: BLE001
         report.failed["_recent"] = f"upload: {exc}"
     return report
@@ -233,8 +238,8 @@ def _write_if_new(
         report.failed[key] = f"upload: {exc}"
 
 
-def _load_recent(store: CheckpointStore, year: int) -> dict[str, str]:
-    key = _recent_key(year)
+def _load_recent(store: CheckpointStore) -> dict[str, str]:
+    key = RECENT_KEY
     try:
         if not store.exists(key):
             return {}

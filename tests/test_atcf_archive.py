@@ -121,6 +121,51 @@ def test_a_storm_is_still_archived_for_a_few_days_after_it_leaves_the_index(stor
     assert week.storms == []
 
 
+def test_a_storm_seen_on_new_years_eve_is_still_followed_on_new_years_day(store, s3):
+    """The recently-seen record was per year, so 1 January started empty
+    and dropped a storm last listed on 31 December (Copilot review, #213)."""
+    eve = datetime(2026, 12, 31, 19, 30, tzinfo=UTC)
+    archive_atcf(store, now=eve, fetch=_fetcher({
+        "CurrentStorms.json": INDEX, "al092026-tcvitals-arch.dat": VITALS_1,
+    }))
+    new_year = archive_atcf(store, now=eve + timedelta(hours=6), fetch=_fetcher({
+        "CurrentStorms.json": json.dumps({"activeStorms": []}),
+        "al092026-tcvitals-arch.dat": VITALS_2,
+    }))
+    assert "AL092026" in new_year.storms
+    # Filed under the storm's own season, not the calendar year it ran in.
+    assert len(_keys(s3, "archive/atcf/2026/AL092026/tcvitals/")) == 2
+
+
+def test_the_cli_archives_lists_and_needs_credentials(store, monkeypatch, capsys):
+    from anemoi import cli
+    from anemoi.tracking import checkpoint_store
+
+    archive_atcf(store, now=NOW, fetch=_fetcher({
+        "CurrentStorms.json": INDEX, "al092026-tcvitals-arch.dat": VITALS_2,
+    }))
+    monkeypatch.setattr(checkpoint_store.S3Config, "from_env", classmethod(lambda cls: store.config))
+    monkeypatch.setattr(checkpoint_store, "CheckpointStore", lambda config: store)
+
+    assert cli.main(["atcf-archive", "--list", "2026"]) == 0
+    out = capsys.readouterr().out
+    assert "AL092026: 2 bulletin(s), 2 valid time(s), 2026-09-21 00Z .. 2026-09-21 06Z" in out
+
+    monkeypatch.setattr(
+        atcf_archive, "archive_atcf",
+        lambda st: atcf_archive.ArchiveReport(storms=["AL092026"], written=["k"]),
+    )
+    assert cli.main(["atcf-archive"]) == 0
+    assert '"written": 1' in capsys.readouterr().out
+
+    def no_credentials(cls):
+        raise checkpoint_store.CheckpointStoreError("S3_ARTIFACT_BUCKET is not set")
+
+    monkeypatch.setattr(checkpoint_store.S3Config, "from_env", classmethod(no_credentials))
+    assert cli.main(["atcf-archive"]) == 1
+    assert "needs real S3_ARTIFACT_* durable storage credentials" in capsys.readouterr().out
+
+
 def test_one_failed_file_does_not_stop_the_others(store, s3):
     def fetch(url):
         if "tcvitals" in url and "al09" in url:
