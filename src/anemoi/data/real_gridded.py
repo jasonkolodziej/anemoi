@@ -287,7 +287,7 @@ def era5_to_gridded_fields(
 
 
 # --------------------------------------------------------------------------- #
-# GDAS/GFS analysis (raw GRIB2, byte-range fetch from AWS Open Data)
+# GDAS/GFS analyses and forecasts (raw GRIB2, byte-range fetch from AWS Open Data)
 # --------------------------------------------------------------------------- #
 
 GDAS_BUCKET_URL = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
@@ -343,7 +343,11 @@ def fetch_gdas_grib2_fields(
     valid_time: datetime, *, timeout: float = 60.0, session: Any = None, lead_hours: int = 0,
 ) -> dict[tuple[str, int | str], np.ndarray]:
     """Byte-range fetch the pressure-level messages this module needs from
-    NOAA's public GDAS/GFS analysis GRIB2 file on AWS Open Data.
+    NOAA's public GFS GRIB2 file valid at ``valid_time`` on AWS Open Data:
+    the analysis (``lead_hours=0``), or the ``f{lead_hours}`` forecast from
+    the cycle that many hours earlier (`gfs_url`; live cycles read the
+    ``t-6`` cycle's ``f006``, #215). The forecast files carry the same
+    messages under the same ``.idx`` names.
 
     Fetches only the target messages (a few MB total across ~7 requests),
     not the full ~450 MB file -- the ``.idx`` sidecar gives each message's
