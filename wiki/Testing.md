@@ -84,6 +84,25 @@ Each of these encodes a v2 defect so it cannot silently return.
 
 ---
 
+## Console end-to-end tests
+
+```bash
+cd console
+pnpm run test:e2e                   # every spec: vite dev + the demo API
+pnpm run build && pnpm run test:e2e:workerd   # what CI runs: the built Worker
+```
+
+CI (`deploy.yml`, *test-console*) runs `test:e2e:workerd`: `auth.spec.ts` and `storm-state-sync.spec.ts`, which mocks every API call in the browser (`e2e/fixtures/storm-page.json` holds a demo storm and cycle as templates) and so needs no backend. The other specs drive the demo API through the default config and are run by hand; the ones that click **Run cycle** while signed out fail since cycle runs need a login (#171).
+
+| Spec | Guards against |
+|---|---|
+| `storm-state-sync.spec.ts` | The storm page's views of "which cycle" drifting apart: the run form stuck on the cycle the page was opened in, the date and hour pickers disagreeing with the text field, a 409 for a cycle already run with no way to it, a failed view leaving its chip selected, and one storm's pinned cycle, form, and error carried to the next (Decision Log 54) |
+| `cycle-context.spec.ts` | The page not saying which cycle it shows, or that the current one hasn't run yet (Decision Log 47) |
+| `periodic-refresh.spec.ts` | The 60 s poll: firing at all, not mid-run, not raising the waiter, not moving a picked cycle, not chasing a failed one |
+| `auth.spec.ts` | Sign-up, sign-out, passkeys and API keys on the Workers runtime |
+
+---
+
 ## Markers
 
 ```toml

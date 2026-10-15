@@ -643,6 +643,36 @@ Even with entry 44, a cache miss still meant waiting on a cold container, behind
 
 **Enforced by** `tests/test_retrain_seasons.py` (the listing picker incl. a NE Pacific file and two releases of one season; the manifest; the pinned fallback; derived boundaries for several archives, Stage B's validation season absent from every Stage A split and the test season from every train/val split; a 2024 archive's test season non-empty; as-issued pairing and RMS; run tags with commit, split and trigger; the Dockerfile, entrypoint and scheduled workflow), the data-volume count test in `tests/test_cli.py`, and the real-run fixtures, now with a 2022 storm for Stage B validation.
 
+### 54. The storm page's run form, pickers, and cycle shown drifted apart (#217) — *bugfix*
+
+**Reported from production** (EP212026 Trudy, 15 Oct, ~13:40Z): latest cycle 12Z, viewing 06Z from Past cycles, and the **Run a new cycle** form on `20261015_00Z` -- a cycle the storm had, typed by nobody -- with a `409 … already has a 20261015_00Z cycle` banner above it.
+
+- **The form's cycle was fixed when the page was created.** It defaulted to the synoptic time at mount and never moved, so a tab opened just after midnight offered 00Z all day, and **Run cycle** could only 409. A storm whose track ended months ago defaulted to today's label, which the API refuses as outside the track.
+- **The hour select could disagree with the text field.** A label at a non-synoptic hour (`_07Z`) has no option, and the select fell back to showing 00Z.
+- **Nothing cleared a run's error** except the next poll, up to a minute later, and a 409 left no way to the cycle it named.
+- **A failed Past-cycles click still selected its chip** ("Viewing an older cycle") while the panel and map showed the previous cycle; a slower earlier click or poll could also land after a newer one.
+- **Every per-storm value survived a move to another storm.** A client-side navigation on the same route reuses the page component, and only `onMount` loaded data, so the next storm kept the last one's pinned cycle, form, and error -- and asked the API for the old storm's cycle labels.
+
+**Fix** (`console/src/routes/storms/[stormId]/+page.svelte`, `CycleDateTimePicker.svelte`, `utils.ts`).
+
+- **Form.** It follows `defaultCycleToRun(storm, now)` until the user edits it. That is the current synoptic cycle while it is within `CYCLE_LIFETIME_GRACE_H` (12 h, mirroring `cycle_policy.LIFETIME_GRACE`) of the latest fix; otherwise it is the storm's newest cycle not yet run. The default re-evaluates on every poll, and the poll still never touches an edit.
+- **Run button.** A malformed or off-synoptic label shows why and disables **Run cycle**. A label the storm already has says "has already run" and offers **View it**.
+- **Errors.** Editing the cycle clears the banner. A 409 re-reads the storm (bypassing KV), so Past cycles and the form show the cycle that exists.
+- **Viewing a cycle.** It pins only after the cycle loads, clears a stale error, and lets the newest click win. A poll's answer is dropped if the user picked another cycle meanwhile.
+- **Changing storm.** `openStorm(id)` runs whenever the route's `stormId` changes. It resets the storm, the cycle, the pinned label, the error, the form (members back to 50, coastline cleared) and the hover. A response for a previous storm is dropped.
+
+**Enforced by** `console/e2e/storm-state-sync.spec.ts`, written first and failing on the old page:
+
+- the form following the clock, then holding an edit;
+- the text field, date button and hour select agreeing, including `_07Z` and half-typed input;
+- an existing cycle offered to view, with the chip, panel and callout agreeing after;
+- a failed chip not selected and its error cleared by the next view;
+- a 409 turning into **View it** and clearing on edit;
+- a client-side move to another storm resetting everything;
+- an archive storm defaulting inside its track.
+
+The spec mocks the API, so CI now runs it against the built Worker next to `auth.spec.ts`.
+
 ---
 
 ## Implementation → rebrand

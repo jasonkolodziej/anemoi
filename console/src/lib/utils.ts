@@ -56,6 +56,48 @@ export function parseCycleLabel(label: string): Date | null {
  * fires at t+1:30. Kept in sync by hand. */
 export const CYCLE_RUN_DELAY_MIN = 90;
 
+/** How far past a storm's latest fix a cycle may start before the API
+ * refuses it as outside the storm's track. Mirrors
+ * anemoi.api.cycle_policy.LIFETIME_GRACE; kept in sync by hand. */
+export const CYCLE_LIFETIME_GRACE_H = 12;
+
+const SIX_HOURS_MS = 6 * 3_600_000;
+
+/** The cycle the storm page's "Run a new cycle" form offers until the user
+ * picks one: the synoptic cycle the clock is in, while that is still inside
+ * the storm's track; for a storm whose track ended long ago, its newest
+ * cycle it doesn't have yet (else its last fix's), since today's label would
+ * only be refused. Recomputed as the clock and the storm move, so a page
+ * left open doesn't keep offering the cycle it was opened in. */
+export function defaultCycleToRun(
+	storm: { latest_fix: { valid_time: string }; history: { valid_time: string }[]; cycles: string[] } | null,
+	now: Date,
+): string {
+	const current = floorSynoptic(now);
+	if (!storm) return cycleLabel(current);
+	const latest = new Date(storm.latest_fix.valid_time);
+	if (current.getTime() <= latest.getTime() + CYCLE_LIFETIME_GRACE_H * 3_600_000) {
+		return cycleLabel(current);
+	}
+	const first = new Date(storm.history[0]?.valid_time ?? storm.latest_fix.valid_time);
+	const have = new Set(storm.cycles);
+	for (let t = floorSynoptic(latest); t >= first; t = new Date(t.getTime() - SIX_HOURS_MS)) {
+		if (!have.has(cycleLabel(t))) return cycleLabel(t);
+	}
+	return cycleLabel(floorSynoptic(latest));
+}
+
+/** Why `label` can't be run as typed, or null when it's a well-formed
+ * synoptic cycle label. */
+export function cycleLabelProblem(label: string): string | null {
+	const parsed = parseCycleLabel(label);
+	if (!parsed) return 'Enter a cycle as YYYYMMDD_HHZ, e.g. 20261015_12Z.';
+	if (!(SYNOPTIC_HOURS as readonly number[]).includes(parsed.getUTCHours())) {
+		return 'Cycles start at 00, 06, 12 or 18Z.';
+	}
+	return null;
+}
+
 /** "08/12Z": day-of-month and hour, UTC -- a forecast point's valid time,
  * compact enough for a map label. */
 export function formatDayHourZ(d: Date): string {

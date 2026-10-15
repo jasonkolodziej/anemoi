@@ -12,9 +12,13 @@ import { defineConfig, devices } from '@playwright/test';
 // route, anemoi.systems) so baseURL/rpId/WebAuthn's secure-context check
 // all line up with the browser's origin. `/api/v1/*` 500s in the server
 // log are expected: the anemoi-api-real service binding isn't running.
+//
+// The storm page's state-sync suite runs here too: it mocks every API call
+// in the browser (no demo API, which CI doesn't start), so it needs nothing
+// but the built Worker -- and sign-in, for its run-a-cycle case.
 export default defineConfig({
 	testDir: './e2e',
-	testMatch: 'auth.spec.ts',
+	testMatch: ['auth.spec.ts', 'storm-state-sync.spec.ts'],
 	reporter: 'list',
 	globalSetup: './e2e/global-setup.ts',
 	globalTeardown: './e2e/global-teardown.ts',
