@@ -90,6 +90,14 @@ class GriddedFields:
     mslp: np.ndarray
     sst: np.ndarray
     ohc: np.ndarray
+    #: Forecast hour of the NWP file these came from: 0 for an analysis
+    #: (ERA5, a GDAS ``.anl``), 6 for the ``t-6`` cycle's ``f006`` the live
+    #: path reads (#215). Training records it per model; inference flags a
+    #: model fed a different one.
+    nwp_lead_hours: int = 0
+    #: Where they were read from (a GFS object URL, ``era5t``, ...), for a
+    #: cycle's provenance. Empty when unknown (older caches).
+    source: str = ""
 
     def __post_init__(self) -> None:
         shapes = {a.shape for a in self._arrays()}

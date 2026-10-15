@@ -608,9 +608,10 @@ class RealState:
         run: RunRequest,
     ) -> CycleOutput:
         from ..data.atcf import TRAINED_BASINS, storm_basin
+        from ..data.gdas_cache import GDAS_ARCHIVE_START
         from ..training.real_inference_cycle import build_real_deterministic_fn
         from ..training.real_inference_ensemble import build_real_ensemble_fn
-        from ..training.real_inference_live import _current_fields, live_gridded_source
+        from ..training.real_inference_live import fetch_live_nwp
 
         started_at = datetime.now(UTC)
         self.refresh_registry_if_stale()
@@ -638,14 +639,19 @@ class RealState:
         if basin not in TRAINED_BASINS:
             extra_flags.append(f"basin_untrained:{basin}")
 
-        fields: dict[str, object] = {}
+        # The gridded fields, fetched once, before anything runs (#215): the
+        # NWP cycle they come from -- t-6, or t-12 if that's missing -- is
+        # what the plan, the payload's `nwp_cycle_lag_hours` and the
+        # `nwp_stale` flag should say, instead of the latency model's guess.
+        nwp_fields, nwp = fetch_live_nwp(storm.track, fix, self._cache_dir)
+        if nwp is not None:
+            plan = replace(plan, inputs=replace(plan.inputs, nwp=nwp))
+        elif target >= GDAS_ARCHIVE_START:
+            extra_flags.append("nwp_unavailable")
+        fields: dict[str, object] = {"fields": nwp_fields}
 
         def live_fields(track_, current_, cache_dir_):
-            # Kept for the cycle's input record (`_persist_inputs`).
-            fields["fields"] = _current_fields(track_, current_, cache_dir_)
-            return fields["fields"]
-
-        live_fields.source_name = live_gridded_source(target)  # type: ignore[attr-defined]
+            return nwp_fields
 
         def deterministic(plan_, fix_):
             try:
@@ -682,6 +688,10 @@ class RealState:
             # happened rather than the plan's target (#214).
             now=datetime.now(UTC),
         )
+        if output.deterministic.input_skew:
+            output = replace(output, flags=(
+                *output.flags, "input_skew:" + ",".join(sorted(output.deterministic.input_skew)),
+            ))
         if output.deterministic.fusion == "synthetic":
             # No real model ran: say so on the cycle, not only in a debug field.
             output = replace(
@@ -698,6 +708,7 @@ class RealState:
                 "basin": basin,
                 "trained_basin": basin in TRAINED_BASINS,
                 "started_at": started_at,
+                "nwp": nwp,
                 **provenance.summary(),
             },
         )

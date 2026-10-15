@@ -50,7 +50,7 @@ constant with a docstring saying so -- see
 from __future__ import annotations
 
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -287,7 +287,7 @@ def era5_to_gridded_fields(
 
 
 # --------------------------------------------------------------------------- #
-# GDAS/GFS analysis (raw GRIB2, byte-range fetch from AWS Open Data)
+# GDAS/GFS analyses and forecasts (raw GRIB2, byte-range fetch from AWS Open Data)
 # --------------------------------------------------------------------------- #
 
 GDAS_BUCKET_URL = "https://noaa-gfs-bdp-pds.s3.amazonaws.com"
@@ -304,12 +304,21 @@ GDAS_LEVEL_MESSAGES: tuple[tuple[str, int], ...] = (
 GDAS_MSLP_KEY: tuple[str, str] = ("PRMSL", "mean sea level")
 
 
-def _gdas_analysis_url(valid_time: datetime) -> str:
+def gfs_url(valid_time: datetime, lead_hours: int = 0) -> str:
+    """The GFS GRIB2 file valid at ``valid_time``: the analysis of that cycle
+    for ``lead_hours=0``, else the ``f{lead}`` forecast of the cycle
+    ``lead_hours`` earlier (#215). The live cycle at ``t`` runs at t+1:30;
+    the ``t`` analysis lands ~t+3:30, the ``t-6`` cycle's ``f006`` ~t-2:30."""
     require_synoptic(valid_time)
+    if lead_hours < 0 or lead_hours % 6:
+        raise ValueError(f"lead_hours must be a non-negative multiple of 6, got {lead_hours}")
+    cycle = valid_time - timedelta(hours=lead_hours)
+    name = "anl" if lead_hours == 0 else f"f{lead_hours:03d}"
     return (
-        f"{GDAS_BUCKET_URL}/gfs.{valid_time:%Y%m%d}/{valid_time:%H}/atmos/"
-        f"gfs.t{valid_time:%H}z.pgrb2.0p25.anl"
+        f"{GDAS_BUCKET_URL}/gfs.{cycle:%Y%m%d}/{cycle:%H}/atmos/"
+        f"gfs.t{cycle:%H}z.pgrb2.0p25.{name}"
     )
+
 
 
 def _parse_grib2_index(idx_text: str) -> dict[tuple[str, str], tuple[int, int | None]]:
@@ -331,10 +340,14 @@ def _parse_grib2_index(idx_text: str) -> dict[tuple[str, str], tuple[int, int | 
 
 
 def fetch_gdas_grib2_fields(
-    valid_time: datetime, *, timeout: float = 60.0, session: Any = None
+    valid_time: datetime, *, timeout: float = 60.0, session: Any = None, lead_hours: int = 0,
 ) -> dict[tuple[str, int | str], np.ndarray]:
     """Byte-range fetch the pressure-level messages this module needs from
-    NOAA's public GDAS/GFS analysis GRIB2 file on AWS Open Data.
+    NOAA's public GFS GRIB2 file valid at ``valid_time`` on AWS Open Data:
+    the analysis (``lead_hours=0``), or the ``f{lead_hours}`` forecast from
+    the cycle that many hours earlier (`gfs_url`; live cycles read the
+    ``t-6`` cycle's ``f006``, #215). The forecast files carry the same
+    messages under the same ``.idx`` names.
 
     Fetches only the target messages (a few MB total across ~7 requests),
     not the full ~450 MB file -- the ``.idx`` sidecar gives each message's
@@ -355,7 +368,7 @@ def fetch_gdas_grib2_fields(
 
     http = session if session is not None else requests
 
-    url = _gdas_analysis_url(valid_time)
+    url = gfs_url(valid_time, lead_hours)
     idx_resp = http.get(f"{url}.idx", timeout=timeout)
     idx_resp.raise_for_status()
     byte_ranges = _parse_grib2_index(idx_resp.text)
@@ -394,6 +407,8 @@ def gdas_to_gridded_fields(
     flavor: Flavor = Flavor.GDAS_FINETUNE,
     *,
     box_deg: float = 10.0,
+    nwp_lead_hours: int = 0,
+    source: str = "",
 ) -> GriddedFields:
     """Map fetched GDAS/GFS GRIB2 messages (from :func:`fetch_gdas_grib2_fields`,
     or a matching dict built in a test) into a storm-relative :class:`GriddedFields`.
@@ -428,4 +443,6 @@ def gdas_to_gridded_fields(
         rh700=rh700, t700=t700, mslp=mslp,
         sst=np.full(u200.shape, GDAS_SST_PLACEHOLDER_C),
         ohc=np.full(u200.shape, OHC_PLACEHOLDER_KJ_CM2),
+        nwp_lead_hours=nwp_lead_hours,
+        source=source,
     )

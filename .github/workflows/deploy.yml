@@ -224,7 +224,7 @@ jobs:
           --extra storage --extra gridded
           pytest -q tests/test_api_docs.py tests/test_api_real_state.py tests/test_api_smoke.py
           tests/test_config_sync.py tests/test_cycle_policy.py tests/test_atcf_archive.py
-          tests/test_cycle_provenance.py
+          tests/test_cycle_provenance.py tests/test_nwp_lead.py
 
       # The first build of the API image used to happen inside `wrangler
       # deploy`, in production -- so an image that couldn't start (since

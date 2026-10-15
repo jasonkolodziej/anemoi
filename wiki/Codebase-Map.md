@@ -43,7 +43,7 @@ src/anemoi/
 │   ├── real_gridded.py   real ERA5 (Zarr) + GDAS/GFS (GRIB2) -> GriddedFields
 │   ├── gridded_cache.py  source-agnostic concurrent fetch + disk cache engine, plus durable R2 archive sync (#22)
 │   ├── era5_cache.py     era5-specific fetch fn over gridded_cache (Stage A)
-│   ├── gdas_cache.py     gdas-specific fetch fn over gridded_cache (Stage B)
+│   ├── gdas_cache.py     gdas-specific fetch fn over gridded_cache (Stage B); one NWP lead per cache dir (#215)
 │   ├── real_goes.py      GOES-18/19 ABI imagery + derived products -> SatelliteCrop (#146)
 │   ├── real_microwave.py RSS SSMIS microwave radiometer data (#147)
 │   ├── real_dropsonde.py NOAA/AFRC dropsonde profiles (#147)
@@ -75,7 +75,7 @@ src/anemoi/
 │   ├── real_run_fusion.py     real masked-absolute-space training for the fusion layer (#22)
 │   ├── real_orchestrator.py   all seven real tasks wired into orchestrator.run_schedule
 │   ├── real_inference.py      rebuild a trained model from its registered checkpoint (#78)
-│   ├── real_inference_live.py real-time feature building for live inference (#78)
+│   ├── real_inference_live.py real-time feature building for live inference (#78); the t−6 f006 fetch (#215)
 │   ├── real_inference_cycle.py    real deterministic_fn for inference.cycle.run_cycle (#78, #85)
 │   ├── real_inference_ensemble.py real ensemble_fn (seeded per cycle) for run_cycle (#78, #85, #188)
 │   ├── spread_backtest.py     Anemoi-Spread calibration backtest (#10)

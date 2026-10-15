@@ -29,7 +29,9 @@ Three rules, each mechanised.
 | Stage | Data | Period | Purpose |
 |---|---|---|---|
 | **A — Pretrain** | ERA5; final best-track as labels | 1980–present | Representation learning on the long, clean record |
-| **B — Fine-tune** | GDAS/GFS 0.25° analyses; working best-track / TC-Vitals as **inputs**; final best-track as labels | 2015–present | Adapt to the noisier, biased operational distribution |
+| **B — Fine-tune** | GDAS/GFS 0.25° **`t−6` forecasts valid at the fix time** (`f006`, since #215; analyses before); working best-track / TC-Vitals as **inputs**; final best-track as labels | 2021–present | Adapt to the noisier, biased operational distribution |
+
+**Stage B and live cycles read the same GFS product (#215).** A live cycle at `t` runs at t+1:30; the `t` analysis is published around t+3:30, so the only gridded field a scheduled cycle can have is the `t−6` cycle's 6-hour forecast. Until #215 the live path asked for the analysis anyway -- the gridded models almost never contributed to a scheduled cycle -- and Stage B trained on analyses. Now `curriculum.yaml`'s `stage_b.nwp_lead_hours` (6) is what `anemoi gdas-cache` fetches, each cache directory records its lead (`_meta.json`; one lead per directory), each registered version carries an `nwp_lead_hours` tag, and a cycle that feeds a model a forecast hour other than its tag says so (`input_skew:<models>`, and `provenance.input_skew`). Every version registered before #215 trained on analyses, so until the next Stage B run on an `f006` cache, every live cycle the gridded models join is flagged.
 
 Stage B's learning rate defaults to an order of magnitude below Stage A's (1e-4 vs 1e-3). The aim is to re-seat the model on the operational distribution, not to relearn the representation on a decade of data.
 

@@ -357,10 +357,12 @@ def build_real_deterministic_fn(
         # produce the exact same "didn't contribute" outcome, and told apart
         # only by which reason each model actually got.
         reasons: dict[str, str] = {}
+        input_skew: dict[str, str] = {}
         # Every gridded-field consumer below shares one fetch (#214): the
         # same fields for each model, read once, and a record of whether
         # any were available at all -- the cycle's provenance.
-        from .real_inference_live import _current_fields, live_gridded_source
+        from ..tracking.experiment_tracking import NWP_LEAD_TAG
+        from .real_inference_live import _current_fields
 
         fetch = fields_fetcher or _current_fields
         fetched: dict[str, object] = {}
@@ -386,7 +388,9 @@ def build_real_deterministic_fn(
                 elif abs_pred is None:
                     reason = "no real live feature, checkpoint, or env standardisation stats"
                     if _gdas_likely_unpublished(current.valid_time):
-                        reason += " (real GDAS analysis for this valid time may not have published yet)"
+                        reason += (
+                            " (the GFS forecast for this valid time may not have published yet)"
+                        )
                     reasons[name] = reason
             else:
                 version = registry.production(name) or registry.in_stage(name, Stage.STAGING)
@@ -400,7 +404,7 @@ def build_real_deterministic_fn(
                     if raw is None:
                         if _gdas_likely_unpublished(current.valid_time):
                             reasons[name] = (
-                                "no real live feature -- real GDAS analysis for this "
+                                "no real live feature -- the t-6 GFS forecast for this "
                                 "cycle's valid time likely hasn't published yet "
                                 "(typical latency ~3.5h); should resolve on a later cycle"
                             )
@@ -420,6 +424,17 @@ def build_real_deterministic_fn(
 
             per_model_abs[name] = abs_pred
             used_versions[name] = version.version
+            # #215: a gridded model fed fields of a different forecast hour
+            # than it trained on (every version before #215 trained on
+            # analyses, while live cycles read the t-6 forecast). It still
+            # contributes -- a 6 h forecast is close to an analysis, and the
+            # alternative is no gridded model at all -- but the cycle says so.
+            fields_now = fetched.get("fields")
+            if name != "lstm" and fields_now is not None:
+                trained = int(version.tags.get(NWP_LEAD_TAG, "0"))
+                fed = fields_now.nwp_lead_hours
+                if trained != fed:
+                    input_skew[name] = f"trained on f{trained:03d}, fed f{fed:03d}"
             error = version.metrics.get("track_error_48h_nm")
             recent_errors[name] = error if error and error > 0 else _UNKNOWN_ERROR_SENTINEL
 
@@ -459,9 +474,10 @@ def build_real_deterministic_fn(
             model_versions=model_versions, fusion=fusion,
             gridded_source=(
                 None if fetched.get("fields") is None
-                else live_gridded_source(current.valid_time) if fields_fetcher is None
-                else getattr(fields_fetcher, "source_name", "custom")
+                else getattr(fetched["fields"], "source", "")
+                or getattr(fields_fetcher, "source_name", "unknown")
             ),
+            input_skew=input_skew,
         )
 
     return deterministic_fn

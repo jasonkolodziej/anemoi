@@ -33,6 +33,7 @@ from ..tracking.experiment_tracking import (
     arch_params_tag,
     build_run_tags,
     candidate_tags,
+    gridded_input_tags,
     log_curriculum_stages,
     standardization_tags,
 )
@@ -338,6 +339,7 @@ class RealOrchestratorRunner:
             tag_dict["arch_params"] = arch_params
         tag_dict.update(candidate_tags(artifacts))
         tag_dict.update(standardization_tags(artifacts))
+        tag_dict.update(gridded_input_tags(self.gdas_cache_dir))
         version = self.registry.register(
             task.name,
             run_id=f"orchestrator-{datetime.now(UTC):%Y%m%dT%H%M%S}",
