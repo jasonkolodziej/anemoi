@@ -72,14 +72,6 @@ def gdas_likely_unpublished(
     return valid_time - timedelta(hours=lead) + latency > now
 
 
-def live_gridded_source(valid_time: datetime, lead_hours: int | None = None) -> str:
-    """The GFS file a live cycle at ``valid_time`` reads first (#214/#215)."""
-    from ..data.real_gridded import gfs_url
-    from ..time_utils import NWP_LAG_HOURS
-
-    return gfs_url(valid_time, NWP_LAG_HOURS if lead_hours is None else lead_hours)
-
-
 def _current_window(track: Track, current: Fix, length: int) -> tuple[Fix, ...] | None:
     return track.window_ending(current.valid_time, length)
 

@@ -320,9 +320,6 @@ def gfs_url(valid_time: datetime, lead_hours: int = 0) -> str:
     )
 
 
-def _gdas_analysis_url(valid_time: datetime) -> str:
-    return gfs_url(valid_time, 0)
-
 
 def _parse_grib2_index(idx_text: str) -> dict[tuple[str, str], tuple[int, int | None]]:
     """Parse a NOMADS/AWS ``.idx`` sidecar (``msgnum:offset:date:param:level:``)
