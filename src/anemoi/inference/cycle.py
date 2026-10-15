@@ -79,6 +79,25 @@ class DeterministicForecast:
 
 
 @dataclass(frozen=True, slots=True)
+class RunInfo:
+    """Who asked for a cycle, and what they changed (#212).
+
+    ``source`` is ``"scheduled"`` for the operational run the cycle
+    Workflow starts at t+1:30, or ``"manual"`` for one a user started from
+    the console or the API. A scheduled run is the official cycle; a
+    manual one only fills a cycle nothing has run, and the next scheduled
+    run of that label replaces it. ``overrides`` names every request field
+    that changed the inputs away from the operational defaults (``lat``,
+    ``lon``, ``wind_kt``, ``members``, ``worst_case``, ``coastline``), so a
+    reader of the stored cycle -- or a retrain filtering its history --
+    can tell an as-issued forecast from an experiment.
+    """
+
+    source: str
+    overrides: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class CycleOutput:
     plan: CyclePlan
     deterministic: DeterministicForecast
@@ -91,6 +110,9 @@ class CycleOutput:
     #: caller didn't supply one, the same condition that leaves `products.
     #: landfall_probability` `None` too.
     coastline: tuple[float, float] | None = None
+    #: Set by the API state that ran the cycle; `None` for a cycle run
+    #: outside the API (tests, replay harnesses).
+    run: RunInfo | None = None
 
     @property
     def label(self) -> str:

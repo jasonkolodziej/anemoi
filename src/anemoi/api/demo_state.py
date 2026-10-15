@@ -15,7 +15,7 @@ from __future__ import annotations
 import random
 import string
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -32,6 +32,7 @@ from ..monitoring.drift import DriftReport, ReferenceDistribution, detect_featur
 from ..monitoring.skew import SkewReport
 from ..tracking.registry import DERIVED_MODELS, GROUP1_MODELS, ModelRegistry, Stage, latent_signature
 from ..training.triggers import SeasonState, evaluate_all
+from .cycle_policy import RunRequest
 
 
 @dataclass
@@ -116,7 +117,11 @@ class DemoState:
         members: int,
         worst_case: bool,
         coastline: tuple[float, float] | None,
+        run: RunRequest | None = None,
     ) -> CycleOutput:
+        """Runs anything asked: the demo has no cron and no shared audience,
+        so `api.cycle_policy`'s rules are `RealState`'s alone. The run is
+        still recorded, so the demo's results have the real shape."""
         storm = self.get_storm(storm_id)
         from ..time_utils import parse_cycle_label
 
@@ -159,6 +164,7 @@ class DemoState:
             coastline=coastline,
             requested_members=members,
         )
+        output = replace(output, run=(run or RunRequest()).info())
         with self._lock:
             storm.cycles[output.label] = output
         return output

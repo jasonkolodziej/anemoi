@@ -20,6 +20,7 @@ import { Container, getContainer } from '@cloudflare/containers';
 import type { DurableObject } from 'cloudflare:workers';
 import { verifyApiKey } from './auth';
 import { recordCycleRun } from './metering';
+import { RUN_SOURCE_HEADER, cycleRunStormId, isInternalPath } from './routing';
 import { cycleInstanceId } from './cycleWorkflow';
 import { type ContainerFetch, putCycleResult, readThrough, refreshStormSnapshot } from './readCache';
 
@@ -60,6 +61,9 @@ interface RealApiEnv extends Env {
 	S3_ARTIFACT_ACCESS_KEYID: string;
 	S3_ARTIFACT_SECRET_ACCESS_KEY: string;
 	INTERNAL_PROXY_SECRET: string;
+	/** Comma-separated user ids allowed to re-run an existing cycle
+	 * (`api.cycle_policy`, #212). Optional: unset means no operators. */
+	ANEMOI_OPERATOR_USER_IDS?: string;
 }
 
 const SLEEP_DEADLINE_KEY = 'sleepAfterMs';
@@ -84,6 +88,7 @@ export class AnemoiRealApi extends Container<RealApiEnv> {
 				S3_ARTIFACT_BUCKET: env.S3_ARTIFACT_BUCKET,
 				S3_ARTIFACT_ACCESS_KEYID: env.S3_ARTIFACT_ACCESS_KEYID,
 				S3_ARTIFACT_SECRET_ACCESS_KEY: env.S3_ARTIFACT_SECRET_ACCESS_KEY,
+				ANEMOI_OPERATOR_USER_IDS: env.ANEMOI_OPERATOR_USER_IDS ?? '',
 			},
 		});
 	}
@@ -169,26 +174,6 @@ async function startCycleWorkflow(env: Env, cycleLabel: string): Promise<void> {
 	}
 }
 
-/** Matches `POST /v1/storms/{storm_id}/cycles` -- the route that wakes
- * the billed container and runs real inference, gated tighter than
- * everything else. */
-const CYCLE_POST_RE = /^\/v1\/storms\/([^/]+)\/cycles\/?$/;
-
-/** Maintenance routes only this Worker's own cron calls, through the
- * container binding directly -- never reachable from the public route. */
-const INTERNAL_RE = /^\/v1\/internal(\/|$)/i;
-
-/** Checked on the decoded path: the container's router decodes it too, so
- * `/v1/%69nternal/...` would otherwise slip past a raw-path match. An
- * undecodable path is refused outright rather than guessed at. */
-function isInternalPath(pathname: string): boolean {
-	try {
-		return INTERNAL_RE.test(decodeURIComponent(pathname));
-	} catch {
-		return true;
-	}
-}
-
 /**
  * Resolve the calling user id, trying two paths:
  *
@@ -224,7 +209,7 @@ export default {
 		if (isInternalPath(url.pathname)) {
 			return new Response('not found', { status: 404 });
 		}
-		const cycleMatch = request.method === 'POST' ? url.pathname.match(CYCLE_POST_RE) : null;
+		const cycleStormId = cycleRunStormId(request.method, url.pathname);
 
 		// #171's Phase 0 acceptance criterion is specifically "POST .../cycles
 		// no longer runnable anonymously" -- the route that wakes the billed
@@ -235,7 +220,7 @@ export default {
 		// still resolved for everyone so a caller that *does* send a key
 		// gets it forwarded downstream, but only a cycle POST requires one.
 		const userId = await resolveUserId(request, env, ctx);
-		if (cycleMatch) {
+		if (cycleStormId) {
 			if (!userId) {
 				return new Response('invalid or missing X-Anemoi-Api-Key', { status: 401 });
 			}
@@ -248,7 +233,7 @@ export default {
 		// Cloned before `forwarded` is built below -- constructing a new
 		// Request from `request` consumes its body, so reading it again
 		// afterward would throw "body already used".
-		const bodyForMetering = cycleMatch ? request.clone() : null;
+		const bodyForMetering = cycleStormId ? request.clone() : null;
 
 		const forwarded = new Request(request, {
 			headers: new Headers(request.headers),
@@ -263,16 +248,22 @@ export default {
 		if (userId) forwarded.headers.set('X-Anemoi-User-Id', userId);
 		forwarded.headers.delete('X-Anemoi-Internal-Secret');
 		forwarded.headers.delete('X-Anemoi-Api-Key');
+		forwarded.headers.delete(RUN_SOURCE_HEADER);
 
 		const container = getContainer(env.ANEMOI_REAL_API);
 		const fetchContainer: ContainerFetch = (req) => container.fetch(req);
 
-		const cached = await readThrough(forwarded, env.READ_CACHE, ctx, fetchContainer);
+		// Only a signed-in caller may skip the cache: an anonymous
+		// `Cache-Control: no-cache` (DevTools' "Disable cache" sends one) would
+		// otherwise wake the container on every read (#212).
+		const cached = await readThrough(forwarded, env.READ_CACHE, ctx, fetchContainer, {
+			allowBypass: userId !== null,
+		});
 		if (cached) return cached;
 
 		const response = await container.fetch(forwarded);
 
-		if (cycleMatch && userId && bodyForMetering && response.ok) {
+		if (cycleStormId && userId && bodyForMetering && response.ok) {
 			// cycleLabel comes from the request body, not the URL -- storms.py's
 			// run_cycle route takes it as JSON, same shape the cycle Workflow
 			// already sends. Best-effort: never let a malformed/unreadable body
@@ -280,20 +271,20 @@ export default {
 			try {
 				const body = (await bodyForMetering.json()) as { cycle?: string };
 				if (body?.cycle) {
-					await recordCycleRun(env.AUTH_DB, userId, cycleMatch[1], body.cycle);
+					await recordCycleRun(env.AUTH_DB, userId, cycleStormId, body.cycle);
 				}
 			} catch (err) {
 				console.error('recordCycleRun: could not read request body', err);
 			}
 		}
 
-		if (cycleMatch && response.ok) {
+		if (cycleStormId && response.ok) {
 			// The container is awake and just changed this storm: refresh what
 			// the read cache serves for it, in the background. KV reads can lag
 			// this write by up to a minute, so the page that ran the cycle
 			// re-reads the storm with `Cache-Control: no-cache` instead of
 			// relying on it (console's getStorm `fresh` option).
-			const stormId = cycleMatch[1];
+			const stormId = cycleStormId;
 			const forCache = response.clone();
 			ctx.waitUntil(
 				(async () => {

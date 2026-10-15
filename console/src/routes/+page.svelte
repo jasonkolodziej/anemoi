@@ -23,7 +23,7 @@
   interface Remembered {
     date: string;
     storms: StormSummary[];
-    plans: CyclePlanOut[];
+    plans: CyclePlanOut[] | null;
     stateMode: "demo" | "real";
   }
 
@@ -41,16 +41,20 @@
     try {
       const today = cycleLabel(new Date()).slice(0, 8); // YYYYMMDD
       const isoDate = `${today.slice(0, 4)}-${today.slice(4, 6)}-${today.slice(6, 8)}`;
-      const [s, sched, h] = await Promise.all([
+      // Settled one by one: the storm list is the page, and a cold start or
+      // a 5xx on the schedule or health used to replace a perfectly good
+      // (KV-served) storm list with "Could not reach Anemoi-API" (#212).
+      const [s, sched, h] = await Promise.allSettled([
         listStorms(),
         getSchedule(isoDate),
         health(),
       ]);
-      storms = s;
-      plans = sched.plans;
-      stateMode = h.state_mode;
+      if (s.status === "rejected") throw s.reason;
+      storms = s.value;
+      if (sched.status === "fulfilled") plans = sched.value.plans;
+      if (h.status === "fulfilled") stateMode = h.value.state_mode;
       error = null; // a later successful poll must clear an earlier outage banner
-      remember("home", { date: today, storms: s, plans: sched.plans, stateMode: h.state_mode });
+      remember("home", { date: today, storms: s.value, plans, stateMode });
     } catch (e) {
       error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
     } finally {

@@ -11,16 +11,26 @@
  *   storms:index         GET /v1/storms                       soft TTL, then refreshed
  *   storm:{id}           GET /v1/storms/{id}                  soft TTL, then refreshed
  *   cycle:{id}:{label}   GET /v1/storms/{id}/cycles/{label}   immutable once run
+ *   health               GET /v1/health                       soft TTL, then refreshed
+ *   schedule:{date}:{wc} GET /v1/schedule?date=&worst_case=   soft TTL, then refreshed
+ *   skew:{lead}          GET /v1/monitoring/skew?lead_hours=  soft TTL, then refreshed
+ *
+ * The last three are what the console polls every minute next to the storm
+ * reads (#212): left uncached, a visible tab kept the container awake on
+ * them alone, cache or no cache.
  *
  * Past the soft TTL an entry is still served at once and refreshed in the
  * background (stale-while-revalidate); the hard expiry is KV's own, so a
  * dead cron makes data disappear rather than look current. Every response
  * carries `X-Anemoi-Cache: hit|stale|miss|bypass`, visible in `wrangler tail`.
  *
- * A request sent with `Cache-Control: no-cache` skips the lookup and refills
- * the entry from the container. KV reads can lag a write by up to a minute,
- * so the console sends it for the one read that must see a write it just
- * caused: the storm, right after running a cycle on it.
+ * A signed-in request sent with `Cache-Control: no-cache` skips the lookup
+ * and refills the entry from the container. KV reads can lag a write by up
+ * to a minute, so the console sends it for the one read that must see a
+ * write it just caused: the storm, right after running a cycle on it. An
+ * anonymous one is served from the cache like any other read (#212) --
+ * otherwise anyone could wake the container at will, and browsers send it
+ * on their own (a hard reload, DevTools' "Disable cache").
  *
  * Functions here take the KV binding and a container fetcher rather than
  * reaching for globals, so the fetch handler, the cron and a future
@@ -48,20 +58,47 @@ interface EntryMeta {
 	storedAt: number;
 }
 
-interface CacheTarget {
+export interface CacheTarget {
 	key: string;
 	immutable: boolean;
+	/** Path and query a background refresh fetches. */
+	source: string;
 }
 
-/** The cache key for a cacheable GET path, or null to pass it through. */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** The cache key for a cacheable GET, or null to pass it through. A query
+ * is only accepted on the routes that take one, and only with exactly the
+ * parameters the key is built from, so two requests sharing a key always
+ * get the same answer. */
 export function cacheTargetFor(url: URL): CacheTarget | null {
-	if (url.search) return null; // none of the cached routes take a query
 	const path = url.pathname.replace(/\/$/, '');
-	if (path === '/v1/storms') return { key: STORMS_INDEX_KEY, immutable: false };
+	const params = [...url.searchParams.keys()];
+	const only = (...allowed: string[]) => params.every((k) => allowed.includes(k)) && new Set(params).size === params.length;
+	if (path === '/v1/schedule') {
+		const date = url.searchParams.get('date');
+		const worstCase = url.searchParams.get('worst_case') ?? 'false';
+		if (!only('date', 'worst_case') || !date || !DATE_RE.test(date) || !['true', 'false'].includes(worstCase)) {
+			return null;
+		}
+		return {
+			key: `schedule:${date}:${worstCase}`,
+			immutable: false,
+			source: `${path}?date=${date}&worst_case=${worstCase}`,
+		};
+	}
+	if (path === '/v1/monitoring/skew') {
+		const lead = url.searchParams.get('lead_hours') ?? '48';
+		if (!only('lead_hours') || !/^\d{1,3}$/.test(lead)) return null;
+		return { key: `skew:${lead}`, immutable: false, source: `${path}?lead_hours=${lead}` };
+	}
+	if (url.search) return null; // no other cached route takes a query
+	if (path === '/v1/health') return { key: 'health', immutable: false, source: path };
+	if (path === '/v1/storms') return { key: STORMS_INDEX_KEY, immutable: false, source: path };
 	const cycle = path.match(/^\/v1\/storms\/([^/]+)\/cycles\/([^/]+)$/);
-	if (cycle) return { key: cycleKey(cycle[1], cycle[2]), immutable: true };
+	if (cycle) return { key: cycleKey(cycle[1], cycle[2]), immutable: true, source: path };
 	const storm = path.match(/^\/v1\/storms\/([^/]+)$/);
-	if (storm) return { key: stormKey(storm[1]), immutable: false };
+	if (storm) return { key: stormKey(storm[1]), immutable: false, source: path };
 	return null;
 }
 
@@ -111,13 +148,14 @@ export async function readThrough(
 	kv: KVNamespace,
 	ctx: ExecutionContext,
 	fetchContainer: ContainerFetch,
+	{ allowBypass = false }: { allowBypass?: boolean } = {},
 ): Promise<Response | null> {
 	if (request.method !== 'GET') return null;
 	const url = new URL(request.url);
 	const target = cacheTargetFor(url);
 	if (!target) return null;
 
-	const bypass = request.headers.get('Cache-Control')?.includes('no-cache') ?? false;
+	const bypass = allowBypass && (request.headers.get('Cache-Control')?.includes('no-cache') ?? false);
 	let cached: KVNamespaceGetWithMetadataResult<string, EntryMeta> | null = null;
 	if (!bypass) {
 		try {
@@ -129,7 +167,7 @@ export async function readThrough(
 	if (cached?.value != null) {
 		const age = Date.now() - (cached.metadata?.storedAt ?? 0);
 		if (target.immutable || age < SOFT_TTL_MS) return jsonResponse(cached.value, 'hit');
-		ctx.waitUntil(refresh(kv, target.key, url.pathname, fetchContainer));
+		ctx.waitUntil(refresh(kv, target.key, target.source, fetchContainer));
 		return jsonResponse(cached.value, 'stale');
 	}
 

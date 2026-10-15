@@ -124,6 +124,11 @@ def cycle_result_out(storm_id: str, output: CycleOutput | s.CycleResult) -> s.Cy
         payload=cycle_payload_out(output),
         products=cycle_products_out(output),
         on_time=output.on_time,
+        run=(
+            s.RunInfoOut(source=output.run.source, overrides=list(output.run.overrides))
+            if output.run is not None
+            else None
+        ),
     )
 
 

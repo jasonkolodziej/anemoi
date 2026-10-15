@@ -11,7 +11,7 @@ test_real_inference_ensemble.py already cover in depth.
 from __future__ import annotations
 
 import warnings
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -163,15 +163,26 @@ def test_run_cycle_rejects_a_cycle_that_has_not_started_yet(client):
     assert "has not started yet" in r.json()["detail"]
 
 
-def test_run_cycle_allows_the_in_progress_cycle(client):
+def test_run_cycle_allows_the_in_progress_cycle(client, monkeypatch):
     """A cycle whose synoptic time has already begun -- even if real vitals
     haven't landed yet -- is the existing, honest `vitals_estimated`
     degraded mode, not something this guard should touch."""
+    from anemoi.data.besttrack import Fix, Track, TrackQuality
     from anemoi.time_utils import cycle_label, floor_synoptic
 
-    now_cycle = cycle_label(floor_synoptic(datetime.now(UTC)))
+    # A live storm whose latest fix is the previous synoptic time -- the
+    # in-progress cycle's own vitals haven't landed -- run as the scheduled
+    # cycle (#212: a manual run of a label still due to run is refused).
+    now_start = floor_synoptic(datetime.now(UTC))
+    previous = now_start - timedelta(hours=6)
+    live = Track(storm_id="AL982026", fixes=(
+        Fix(storm_id="AL982026", valid_time=previous, lat=25.0, lon=-70.0,
+            max_wind_kt=50.0, min_pressure_mb=995.0, quality=TrackQuality.WORKING),
+    ))
+    monkeypatch.setattr("anemoi.data.live_atcf.fetch_live_tracks", lambda: [live])
     r = client.post(
-        "/v1/storms/AL012026/cycles", json={"cycle": now_cycle, "members": 4},
+        "/v1/storms/AL982026/cycles", json={"cycle": cycle_label(now_start), "members": 4},
+        headers={"X-Anemoi-Run-Source": "scheduled"},
     )
     assert r.status_code == 201
 
@@ -304,8 +315,14 @@ def test_real_state_merges_a_live_storm(client, monkeypatch):
     assert r.status_code == 200
     assert r.json()["storm_id"] == "AL992026"
 
+    from anemoi.time_utils import cycle_label
+
     r = client.post(
-        "/v1/storms/AL992026/cycles", json={"cycle": "20260922_00Z", "members": 4},
+        "/v1/storms/AL992026/cycles",
+        json={"cycle": cycle_label(floor_synoptic(datetime.now(UTC))), "members": 4},
+        # The scheduled run: a manual one of a label still due to run by the
+        # cron is refused (#212, test_cycle_policy.py).
+        headers={"X-Anemoi-Run-Source": "scheduled"},
     )
     assert r.status_code == 201
 

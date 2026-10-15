@@ -50,8 +50,8 @@ uv run anemoi schedule 2026-08-06 --worst-case
 
 The deployed `anemoi-api-real` Worker's cron (`30 1,7,13,19 * * *`, UTC) fires at **t+1:30** after each synoptic time -- 10 minutes past the derived vitals timeout, so vitals have landed or the honest `vitals_estimated` fallback applies. Each firing starts one instance of the **`anemoi-cycle` Workflow** ([Decision Log #46](Decision-Log#46-the-cron-became-a-durable-workflow-208--reliability)):
 
-1. **find due storms** -- active storms whose last cycle isn't this one yet;
-2. **run cycle {storm}** -- one step per storm, retried twice on a 5xx or an unreachable container; a 4xx is recorded as `refused`;
+1. **find due storms** -- every active storm (since #212 the API, not this step, decides whether the label has already run);
+2. **run cycle {storm}** -- one step per storm, marked as the scheduled run and with the API's full ensemble (it sent `members: 20` until #212). The API answers `409` `exists` if the scheduled run already happened (`already run`), replaces a manual run of the label, and answers `409` `in_progress` if the label is running (retried). A 5xx or an unreachable container is retried twice; any other 4xx is recorded as `refused`;
 3. **refresh read cache** -- the KV snapshot the console reads;
 4. **calibration audit** -- see [Monitoring](Monitoring#calibration-audit).
 
@@ -131,9 +131,10 @@ The storm page reports a cycle as *overdue* 45 minutes after its t+1:30 run time
 
 1. Find the instance `cycle-<label>` (above). No instance at all means the cron didn't fire or the Worker isn't deployed with the `anemoi-cycle` Workflow binding -- check the Deploy run.
 2. A storm marked `refused` was rejected by the API (`4xx`, message in the output) and won't be retried; `failed` exhausted its retries -- `wrangler tail` and the step's attempts show why.
-3. A cycle can always be run by hand from the console's **Run a new cycle** form; it writes the read cache like a scheduled one.
+3. A cycle can be run by hand from the console's **Run a new cycle** form once its scheduled time has passed; it writes the read cache like a scheduled one, is labelled a manual run on the storm page, and is replaced by the next scheduled run of that label.
+4. **Re-running a cycle that exists** (a bad scheduled run) needs an operator: set `ANEMOI_OPERATOR_USER_IDS` (comma-separated user ids) with `wrangler secret put ANEMOI_OPERATOR_USER_IDS` in `docker/api` -- the Worker forwards it to the container -- and `POST` with `"replace": true`. Everyone else gets `409`.
 
-**Console shows something older than the API has:** the read cache (KV) serves a storm for up to 30 minutes before refreshing, and every cycle run refreshes it. To check what the API itself returns, request it with `Cache-Control: no-cache` (`X-Anemoi-Cache: bypass` confirms the cache was skipped).
+**Console shows something older than the API has:** the read cache (KV) serves a storm for up to 30 minutes before refreshing, and every cycle run refreshes it. To check what the API itself returns, request it signed in (an API key) with `Cache-Control: no-cache` (`X-Anemoi-Cache: bypass` confirms the cache was skipped; an anonymous request is always served from the cache).
 
 ### The skew audit is alerting
 

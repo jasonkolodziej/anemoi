@@ -18,6 +18,7 @@ src/anemoi/
 │   ├── demo_state.py     synthetic storms + seeded registry/drift/skew
 │   ├── real_state.py     real HURDAT2 archive + live NHC storms, real cycles, monitoring
 │   ├── cycle_store.py    served CycleResults + drift window persisted to R2 (#175)
+│   ├── cycle_policy.py   who may run which cycle: scheduled vs manual, 409 codes, one run per label (#212)
 │   ├── schemas.py        Pydantic request/response models; CyclePayload is a persisted shape
 │   ├── convert.py        dataclass -> Pydantic conversion
 │   ├── docs.py           Anemoi-themed /redoc
@@ -110,10 +111,12 @@ docker/
 ├── api/                   anemoi-api-real: Cloudflare Worker + Container (wrangler.jsonc)
 │   └── src/
 │       ├── index.ts         front door: API-key/console auth, rate limit, KV read-through, cron
-│       ├── readCache.ts     KV read cache for storms, storm detail and cycle results (#206)
+│       ├── routing.ts       decoded-path route matching; the Workflow's reading of API answers (#212)
+│       ├── readCache.ts     KV read cache: storms, cycles, health, schedule, skew (#206, #212)
 │       ├── cycleWorkflow.ts anemoi-cycle Workflow: one durable step per storm's cycle (#208)
 │       ├── auth.ts          console-issued API key verification against D1
-│       └── metering.ts      cycle_runs audit rows
+│       ├── metering.ts      cycle_runs audit rows
+│       └── ../test/         `pnpm test`: routing and read-cache rules under plain Node
 ├── cloud-run-training/    Cloud Run job + Workflows definition for real training runs
 └── mlflow/                MLflow tracking server (Postgres backend, R2 artifacts)
 console/                   SvelteKit console on Cloudflare Workers (anemoi.systems)
@@ -186,6 +189,8 @@ Also at the repo root: `configs/` (three YAML files read at runtime, see [Config
 | `DemoState`, `RealState`, `RealStormState` | `api.demo_state`, `api.real_state` | The API's state behind every route: synthetic, or real archive + live storms |
 | `CycleHistory` | `api.cycle_store` | A storm's cycles: run in this process, or stored in R2 and loaded on first read |
 | `CycleResult`, `CyclePayload`, `CycleProducts` | `api.schemas` | The served (and persisted) cycle shape |
+| `RunInfo` / `RunInfoOut` | `inference.cycle` / `api.schemas` | Who ran a cycle (`scheduled` or `manual`) and which inputs they overrode (#212) |
+| `RunRequest`, `InFlight`, `check_run()` | `api.cycle_policy` | The cycle-run rules and the one-run-per-label guard |
 | `CalibrationSample`, `LeadProductCalibration` | `monitoring.calibration_audit` | Served-product containment samples and per-lead verdicts |
 | `AnemoiRealApi` | `docker/api/src/index.ts` | Container class: sleep timing persisted across Durable Object restarts (#172) |
 | `CycleWorkflow` | `docker/api/src/cycleWorkflow.ts` | The `anemoi-cycle` Workflow the cron starts per cycle label |
@@ -199,6 +204,7 @@ Every one names the section it enforces, so a stack trace points at the policy.
 
 | Exception | Module | Raised when |
 |---|---|---|
+| `CycleConflict` | `api.cycle_policy` | A cycle run refused by the run rules; served as `409` with `code` `exists`, `in_progress` or `not_scheduled_yet` |
 | `ConfigError` | `config` | A config directory, file or key is missing, a value has the wrong type, a fixed key was changed, or a derived value disagrees with its inputs |
 | `NWPUnavailableError` | `time_utils` | No NWP cycle within the staleness budget |
 | `OperationalUseError` | `data.sources` | A non-operational source was requested in the cycle |
