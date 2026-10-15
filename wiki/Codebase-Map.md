@@ -128,7 +128,8 @@ wiki/                      source of the GitHub wiki, published on merge by .git
 .github/
 ├── workflows/             ci · deploy (tests + one-approval production deploy) · wiki ·
 │                          publish-cloud-run-training · sync-issue-to-project
-└── scripts/               deploy-plan.sh (what to test/deploy), publish-wiki.sh
+└── scripts/               deploy-plan.sh (what to test/deploy), publish-wiki.sh,
+                           smoke-test-image.sh (start an image before it ships)
 ```
 
 Also at the repo root: `configs/` (three YAML files read at runtime, see [Configuration Reference](Configuration-Reference)), `tests/` (68 files, see [Testing](Testing)), `docs/`, `slurm/` (SLURM-equivalent job scripts for data-ingest and real training jobs -- `#SBATCH`-headered, `sbatch`-submittable on a real cluster; `run_local.sh` emulates `sbatch` via `tmux` on the current single-VM setup, see `slurm/README.md`), `README.md`, `PLAN.md`, `PROJECT.md`.

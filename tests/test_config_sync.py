@@ -272,6 +272,21 @@ def test_both_images_copy_the_configs():
     )
 
 
+def test_every_image_build_is_smoke_tested_before_it_ships():
+    """The images are built in three places; each must start the image and
+    find /app/configs before anything is deployed or pushed."""
+    script = ROOT / ".github" / "scripts" / "smoke-test-image.sh"
+    assert os.access(script, os.X_OK), "smoke-test-image.sh must be executable"
+    deploy = (ROOT / ".github" / "workflows" / "deploy.yml").read_text()
+    assert "--target api" in deploy and "smoke-test-image.sh anemoi-api:ci api" in deploy
+    publish = (ROOT / ".github" / "workflows" / "publish-cloud-run-training.yml").read_text()
+    assert publish.index("smoke-test-image.sh") < publish.index("push: true"), (
+        "the GHCR training image is pushed before it is smoke-tested"
+    )
+    cloudbuild = (ROOT / "docker" / "cloud-run-training" / "cloudbuild.yaml").read_text()
+    assert "smoke-test-image.sh" in cloudbuild
+
+
 def test_a_config_change_redeploys_the_api():
     plan = (ROOT / ".github" / "scripts" / "deploy-plan.sh").read_text()
     api_re = re.search(r"^API_RE='([^']+)'", plan, re.MULTILINE).group(1)

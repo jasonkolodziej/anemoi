@@ -174,7 +174,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.test_api == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The image build below adds most of this (torch-cpu wheels).
+    timeout-minutes: 40
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -211,10 +212,28 @@ jobs:
         # because the wider suite currently has failures unrelated to the
         # API (torch/gridded tests missing skip markers, and an
         # order-dependent native crash) that would block every deploy.
+        #
+        # test_config_sync.py too: since #211 configs/ is read at runtime and
+        # counts as an API change, so its loader/validation tests gate the
+        # API like its routes do.
         run: >-
           uv run --frozen --extra dev --extra api --extra tracking
           --extra storage --extra gridded
           pytest -q tests/test_api_docs.py tests/test_api_real_state.py tests/test_api_smoke.py
+          tests/test_config_sync.py
+
+      # The first build of the API image used to happen inside `wrangler
+      # deploy`, in production -- so an image that couldn't start (since
+      # #211: one missing /app/configs) was found live. Build the same
+      # target here, on every PR and before every deploy, and start it.
+      - name: Build the API image
+        # The same target `wrangler deploy` builds (docker/api/wrangler.jsonc
+        # `image`). BuildKit is the runner's default builder, so the
+        # Dockerfile's uv cache mounts work as they do locally.
+        run: docker build -f docker/multistage.Dockerfile --target api -t anemoi-api:ci .
+
+      - name: Smoke-test the API image
+        run: .github/scripts/smoke-test-image.sh anemoi-api:ci api
 
   deploy:
     name: "Deploy to production: ${{ needs.changes.outputs.plan }}"
