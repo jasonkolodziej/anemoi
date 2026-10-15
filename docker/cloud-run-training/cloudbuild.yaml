@@ -25,6 +25,12 @@ steps:
       - -t
       - $_IMAGE:latest
       - .
+  # `images:` below only pushes once every step has succeeded, so a training
+  # image that can't find its configs (read at import since #211) never
+  # reaches Artifact Registry.
+  - name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args: [.github/scripts/smoke-test-image.sh, $_IMAGE:$_TAG, training]
 images:
   - $_IMAGE:$_TAG
   - $_IMAGE:latest

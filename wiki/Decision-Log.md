@@ -516,6 +516,28 @@ Even with entry 44, a cache miss still meant waiting on a cold container, behind
 
 **Enforced by** `console/e2e/cycle-context.spec.ts`, which pins the clock to 07:00Z with a storm whose latest fix is 06Z and newest cycle 00Z, and checks the stated cycle, the scheduled/running/overdue line, and the older-cycle callout.
 
+### 48. The configs were never read -- every value is now loaded at runtime (#211) — *enhancement*
+
+**Asked to validate that `configs/*.yaml` are used by the code.** They weren't: nothing loaded them. `pyyaml` was a declared core dependency nothing under `src/` imported, every value lived as a module constant or function default, and the files' own comments said "kept in sync by hand, there is no loader". The only enforcement was a test checking 3 values of about 70 -- added after #188 left `ensemble.members` at 20 for a release.
+
+**What the audit found**, checking every key against what the code actually ran (including callers -- none of `plan_cycle`, `build_products`, `build_cone`, `landfall_probability` or the curriculum stages was called with an override, so their defaults were what ran):
+
+- **All ~70 values matched.** No runtime behaviour was wrong.
+- **Missing parameters:** the calibration audit's four constants had no config entry; the load-shed ensemble size (25) existed only in prose; the cone percentile (67) and landfall radius (60 nm) that define two served products were undocumented; and the production run offset (t+1:30), hand-copied into the Worker's cron and the console, appeared nowhere.
+- **Duplication:** the 12 h max NWP lag was a literal default in four places (`time_utils`, `scheduler`, twice in `availability`); the vitals timeout was hardcoded as `ADVISORY_OFFSET − 70 min − margin` beside the function that derives it.
+- **Wiki mismatch:** [Configuration Reference](Configuration-Reference) showed Stage B's `season_range` as `[2015, 2019]` -- a range with no real GDAS data -- while the YAML and code said `[2021, 2023]`.
+- **Stale comments:** `inference.scheduler` gave the vitals timeout as t+1:30 (it is t+1:20, entry 11) and the load-shed ensemble as "10 instead of 20-50" (25 instead of 50 since #188).
+
+**Fix: a runtime loader.** `anemoi.config` reads the files at import into the same constants and defaults, so no call site changed and every value is written once. The missing parameters were added; the four lag defaults and the hardcoded timeout now come from one place.
+
+- **No built-in fallbacks.** A missing directory, file or key is a `ConfigError` naming the file and key. A fallback would let a misdeployed config run on numbers nobody can see -- the same silent drift, moved.
+- **Fixed keys are refused if changed**, with the reason: synoptic hours, the t−6 lag, product lead times (the models' output heads), stage names and flavors, the drift reference flavor, promotion's split and flavor, nightly-refresh suppression during active storms. `vitals_timeout_minutes` is refused unless it equals the value derived from the budgets.
+- **Deployment.** `configs/` was excluded from the image build context and copied by neither runtime stage, so the API container would have failed at import. Both images now ship it at `/app/configs`; and since a config edit is now a behaviour change, `configs/` counts as an API change in the deploy plan.
+- **Images are built and started before they ship.** No workflow built the API image before production: the first build was inside `wrangler deploy`, so an image that couldn't start would have been found live. "Test: docker/api" now builds the `api` target and runs `.github/scripts/smoke-test-image.sh` -- the image's own `CMD`, no env, until `/v1/health` answers in real mode -- on every PR touching the API or `configs/` and before every deploy. The two training-image paths (GHCR workflow, Cloud Build) run the same script's training check before pushing.
+- **Behaviour unchanged.** Every loaded value equals the constant it replaced; `cone_nominal_rate` is written as `0.6666666666666666` (exactly 2/3) rather than `0.667` so loading it shifted nothing. The full suite passes unchanged apart from the sync test itself.
+
+**Enforced by** `tests/test_config_sync.py`: every key in the files is read by some module (a key nothing reads fails -- it is a setting someone would edit expecting an effect); edited values reach the code in a fresh interpreter; 16 kinds of invalid file are each refused with their message (fixed keys, a budget change without re-deriving the timeout, wrong types including `true` for a number, a missing key, an impossible date, a labels-only source as an input, …); a copy of the image layout (`/app/src` + `/app/configs`) imports with no env var and fails clearly without `configs/`; both Dockerfile stages copy it and `.dockerignore` admits it; `deploy-plan.sh` redeploys on it; and the Worker's cron and the console's `CYCLE_RUN_DELAY_MIN` match `scheduled_run_offset_minutes`. Each was confirmed to fail on the drift it guards against.
+
 ---
 
 ## Implementation → rebrand

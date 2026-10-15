@@ -292,6 +292,13 @@ archive at build time and sets it via `ENV` (see the Dockerfile). Pass
 
 ## Deploying
 
+Since #211 the image must carry `configs/` (the code reads it at import), so
+CI builds the `api` target and starts it before anything ships:
+`.github/scripts/smoke-test-image.sh` runs the image's own `CMD` and waits for
+`/v1/health`. That runs in the "Test: docker/api" job on every PR touching the
+API or `configs/`, and before every production deploy. A config-only change
+redeploys the API.
+
 ```bash
 cd docker/api
 pnpm install

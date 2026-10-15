@@ -36,7 +36,28 @@ jobs:
         id: vars
         run: echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push image
+      # Build and load locally first: an image that can't find its configs
+      # (read at import since #211) must fail here, not in a Cloud Run job.
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/multistage.Dockerfile
+          target: training
+          load: true
+          push: false
+          tags: anemoi-train:smoke
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_DATE=${{ steps.vars.outputs.build_date }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ github.ref_name }}
+            REPO_URL=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Smoke-test the training image
+        run: .github/scripts/smoke-test-image.sh anemoi-train:smoke training
+
+      - name: Push image
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -50,3 +71,5 @@ jobs:
             VCS_REF=${{ github.sha }}
             VERSION=${{ github.ref_name }}
             REPO_URL=${{ github.server_url }}/${{ github.repository }}
+          # Same inputs as the build above, so every layer comes from the
+          # runner's local cache: a push of the tested image, not a rebuild.

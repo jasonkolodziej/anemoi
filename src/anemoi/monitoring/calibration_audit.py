@@ -39,6 +39,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .. import config
 from ..geo import haversine_nm
 from ..time_utils import parse_cycle_label
 
@@ -60,12 +61,14 @@ AUDITED_LEADS_KEY = "monitoring/calibration_audited_leads.json"
 #: (`inference.postprocess.build_cone`'s own docstring, and
 #: `training.spread_backtest.ConeOutcome`'s docstring says the same) --
 #: a calibrated cone contains the truth about 67% of the time.
-CONE_NOMINAL_RATE = 2.0 / 3.0
+CONE_NOMINAL_RATE: float = config.get("monitoring", "calibration_audit.cone_nominal_rate", float)
 
 #: The intensity band is the p10-p90 spread by construction -- a
 #: calibrated band contains the truth 80% of the time, definitionally,
 #: not a measured/assumed constant the way the cone's is.
-INTENSITY_NOMINAL_RATE = 0.8
+INTENSITY_NOMINAL_RATE: float = config.get(
+    "monitoring", "calibration_audit.intensity_nominal_rate", float
+)
 
 #: How far a real containment rate may sit from its nominal value and
 #: still read as "calibrated" -- an absolute margin (containment rate
@@ -76,13 +79,13 @@ INTENSITY_NOMINAL_RATE = 0.8
 #: 33% nominal, an 16-point gap, was reported as real progress but not
 #: yet fully calibrated) without being so tight that ordinary sampling
 #: noise at low real sample counts reads as miscalibration.
-_VERDICT_MARGIN = 0.15
+_VERDICT_MARGIN: float = config.get("monitoring", "calibration_audit.verdict_margin", float)
 
 #: A rate computed from fewer real samples than this is real but not
 #: reportable as a verdict -- the same "n_live=0"/"reasons" honesty
 #: `RealState.drift_report`/`skew_report` already use for "too little
 #: real data yet," not a fabricated verdict from a handful of samples.
-MIN_CASES = 5
+MIN_CASES: int = config.get("monitoring", "calibration_audit.min_cases", int)
 
 
 @dataclass(frozen=True, slots=True)

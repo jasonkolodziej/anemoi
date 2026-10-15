@@ -1,11 +1,17 @@
 # Two-stage training curriculum (Scope v2.1 §4.6.1).
 #
+# Read at runtime by anemoi.config (#211): editing a value here changes what
+# runs, once deployed (a change under configs/ redeploys the API). A value the
+# code can't honour -- a fixed key changed, a wrong type, a derived number
+# that disagrees with its inputs -- is refused at import with the file and key
+# named. $ANEMOI_CONFIG_DIR points the code at a different copy.
+#
 # The hard rule: the final stage is always the operational flavor. A run that
 # stops after Stage A cannot be registered or promoted.
 
 stage_a:
-  name: A
-  flavor: era5_pretrain
+  name: A  # fixed: recorded in run tags
+  flavor: era5_pretrain  # fixed: the stage defines it
   input_sources: [era5, besttrack_working]
   label_source: besttrack_final
   season_range: [1980, 2019]
@@ -13,8 +19,8 @@ stage_a:
   learning_rate: 1.0e-3
 
 stage_b:
-  name: B
-  flavor: gdas_finetune
+  name: B  # fixed: recorded in run tags
+  flavor: gdas_finetune  # fixed: the stage defines it
   input_sources: [gdas_gfs, besttrack_working, goes, sst_ohc]
   label_source: besttrack_final
   # 2021 is GDAS's verified real archive start in noaa-gfs-bdp-pds (no data

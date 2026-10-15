@@ -17,17 +17,24 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
+from .. import config
 from ..data.sources import get as get_source
 from ..geo import haversine_nm
 from ..time_utils import require_synoptic
 
 #: Alert threshold from §4.6.3: rolling 2-week mean delta above this at 48h.
-SKEW_ALERT_TRACK_NM = 15.0
-SKEW_ALERT_INTENSITY_KT = 4.0
-SKEW_WINDOW = timedelta(days=14)
+SKEW_ALERT_TRACK_NM: float = config.get("monitoring", "skew_audit.alert_track_delta_nm", float)
+SKEW_ALERT_INTENSITY_KT: float = config.get(
+    "monitoring", "skew_audit.alert_intensity_delta_kt", float
+)
+SKEW_WINDOW = timedelta(days=config.get("monitoring", "skew_audit.window_days", int))
+#: Fewer paired samples than this in the window, and no report is made.
+SKEW_MIN_SAMPLES: int = config.get("monitoring", "skew_audit.min_samples", int)
+#: The lead the audit compares at.
+SKEW_LEAD_HOURS: int = config.get("monitoring", "skew_audit.lead_hours", int)
 
 #: Audit lead: how long after a cycle ERA5T is expected to be usable.
-AUDIT_DELAY = timedelta(days=5)
+AUDIT_DELAY = timedelta(days=config.get("monitoring", "skew_audit.audit_delay_days", int))
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +103,7 @@ class SkewMonitor:
     window: timedelta = SKEW_WINDOW
     track_threshold_nm: float = SKEW_ALERT_TRACK_NM
     intensity_threshold_kt: float = SKEW_ALERT_INTENSITY_KT
-    min_samples: int = 8
+    min_samples: int = SKEW_MIN_SAMPLES
     samples: list[SkewSample] = field(default_factory=list)
 
     def record(self, sample: SkewSample) -> None:
@@ -110,7 +117,7 @@ class SkewMonitor:
             if s.lead_hours == lead_hours and start <= s.target_time <= now
         ]
 
-    def report(self, now: datetime, lead_hours: int = 48) -> SkewReport | None:
+    def report(self, now: datetime, lead_hours: int = SKEW_LEAD_HOURS) -> SkewReport | None:
         """Summarise the rolling window, or None if too few samples.
 
         Returning None rather than a noisy estimate matters: with a handful of

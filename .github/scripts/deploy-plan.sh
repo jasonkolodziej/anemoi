@@ -18,7 +18,9 @@
 set -euo pipefail
 
 CONSOLE_RE='^console/'
-API_RE='^(docker/api/|docker/multistage\.Dockerfile|src/|pyproject\.toml$|uv\.lock$)'
+# configs/ is read at runtime by anemoi.config (#211): an edited value only
+# takes effect once the image carrying it is deployed.
+API_RE='^(docker/api/|docker/multistage\.Dockerfile|src/|configs/|pyproject\.toml$|uv\.lock$)'
 DOCS_RE='\.md$'
 # The workflow and this script: changing them re-runs both test suites (so
 # the pipeline change itself gets exercised) but doesn't by itself deploy.
