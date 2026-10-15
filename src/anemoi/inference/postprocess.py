@@ -17,8 +17,20 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .. import config
 from ..geo import haversine_nm
 from ..metrics.probabilistic import ensemble_percentiles
+from ..models.base import DEFAULT_LEADS
+
+#: Product lead times. Fixed, not tunable: they are the trained models'
+#: output heads (models.base.DEFAULT_LEADS), so a different list would ask
+#: every checkpoint for leads it doesn't produce.
+LEAD_HOURS: tuple[int, ...] = tuple(
+    config.fixed(
+        "inference", "products.lead_hours", list(DEFAULT_LEADS),
+        "these are the trained models' output leads (models.base.DEFAULT_LEADS)",
+    )
+)
 
 #: NHC-style 2/3-probability circle radii (nm) by lead time, current-season
 #: Atlantic basin values (https://www.nhc.noaa.gov/aboutcone.shtml).
@@ -27,11 +39,8 @@ from ..metrics.probabilistic import ensemble_percentiles
 #: previous five years fall within it, and re-derives the table annually --
 #: these are the 2026 radii (based on 2021-2025 error statistics; NHC's page
 #: also lists 60h, which this module's ``products.lead_hours`` does not use).
-#: Documented alongside the same values in ``configs/inference.yaml`` under
-#: ``ensemble.climatological_cone_nm``; there is no config loader yet (see
-#: Roadmap "Config loader"), so the two must be kept in sync by hand like every
-#: other module constant here. Re-baseline this table every season rather than
-#: assuming it stays reasonable.
+#: Read from ``configs/inference.yaml`` (``ensemble.climatological_cone_nm``).
+#: Re-baseline it there every season rather than assuming it stays reasonable.
 #:
 #: Note for the 2026 season NHC is trialling a cone built from **ellipses** rather
 #: than circles, separating the along-track (speed) and cross-track (directional)
@@ -39,14 +48,14 @@ from ..metrics.probabilistic import ensemble_percentiles
 #: already computes, so an elliptical ConeSegment -- semi-major, semi-minor and
 #: orientation in place of a single radius -- is a natural extension here.
 CLIMATOLOGICAL_CONE_NM: dict[int, float] = {
-    12: 25.0,
-    24: 39.0,
-    36: 49.0,
-    48: 62.0,
-    72: 95.0,
-    96: 134.0,
-    120: 200.0,
+    int(lead): float(radius)
+    for lead, radius in config.get("inference", "ensemble.climatological_cone_nm", dict).items()
 }
+if set(CLIMATOLOGICAL_CONE_NM) != set(LEAD_HOURS):
+    raise config.ConfigError(
+        "inference.yaml: ensemble.climatological_cone_nm needs exactly one radius per "
+        f"product lead {list(LEAD_HOURS)}, got {sorted(CLIMATOLOGICAL_CONE_NM)}"
+    )
 
 #: Rapid intensification: >=30 kt increase in 24 h.
 #:
@@ -56,8 +65,24 @@ CLIMATOLOGICAL_CONE_NM: dict[int, float] = {
 #: percentile of a continuous distribution, not a physical discontinuity -- later
 #: work finds no gap in the distribution near 30 kt. Treat both this and the
 #: alert probability in build_products() as tunable conventions, not physics.
-RI_THRESHOLD_KT = 30.0
-RI_WINDOW_HOURS = 24
+RI_THRESHOLD_KT: float = config.get("inference", "products.ri_threshold_kt", float)
+RI_WINDOW_HOURS: int = config.get("inference", "products.ri_window_hours", int)
+#: Ensemble fraction at or above which the RI flag is raised.
+RI_ALERT_PROBABILITY: float = config.get("inference", "products.ri_alert_probability", float)
+
+#: Ensemble cone radius: this percentile of member distance from the mean.
+CONE_PERCENTILE: float = config.get("inference", "products.cone_percentile", float)
+#: Landfall: members passing within this many nm of the coastal point.
+LANDFALL_THRESHOLD_NM: float = config.get("inference", "products.landfall_threshold_nm", float)
+#: Fewer members than this, and the cone falls back to climatology.
+MIN_MEMBERS_FOR_ENSEMBLE_CONE: int = config.get(
+    "inference", "ensemble.min_members_for_ensemble_cone", int
+)
+#: Below this fraction of the climatological radius at the longest lead, the
+#: ensemble is judged underdispersed and the cone falls back to climatology.
+UNDERDISPERSION_FRACTION: float = config.get(
+    "inference", "ensemble.underdispersion_fraction", float
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +143,7 @@ def deterministic_center(members: list[EnsembleMember], lead: int) -> tuple[floa
 
 
 def cone_radius_from_spread(
-    members: list[EnsembleMember], lead: int, percentile: float = 67.0
+    members: list[EnsembleMember], lead: int, percentile: float = CONE_PERCENTILE
 ) -> float:
     """Radius containing ``percentile``% of members around the ensemble mean."""
     clat, clon = deterministic_center(members, lead)
@@ -132,8 +157,8 @@ def build_cone(
     members: list[EnsembleMember],
     lead_times: tuple[int, ...] | None = None,
     *,
-    min_members: int = 10,
-    underdispersion_fraction: float = 0.5,
+    min_members: int = MIN_MEMBERS_FOR_ENSEMBLE_CONE,
+    underdispersion_fraction: float = UNDERDISPERSION_FRACTION,
 ) -> tuple[tuple[ConeSegment, ...], tuple[str, ...]]:
     """Build the cone, falling back to climatology when spread is untrustworthy.
 
@@ -205,7 +230,7 @@ def landfall_probability(
     members: list[EnsembleMember],
     coastline_lat: float,
     coastline_lon: float,
-    threshold_nm: float = 60.0,
+    threshold_nm: float = LANDFALL_THRESHOLD_NM,
     lead: int | None = None,
 ) -> float:
     """Fraction of members passing within ``threshold_nm`` of a coastal point."""
@@ -294,7 +319,7 @@ def build_products(
     members: list[EnsembleMember],
     *,
     coastline: tuple[float, float] | None = None,
-    ri_alert_threshold: float = 0.3,
+    ri_alert_threshold: float = RI_ALERT_PROBABILITY,
     degraded: bool = False,
 ) -> ForecastProducts:
     """Assemble the §6.1 product suite from an ensemble."""

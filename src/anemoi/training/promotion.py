@@ -18,6 +18,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 
+from .. import config
 from ..data.sources import Flavor
 from .curriculum import CurriculumRun, assert_deployable
 
@@ -106,17 +107,43 @@ class Threshold:
 #: lead time here has a verified current-season source behind it yet. Do not
 #: extrapolate a lead-time curve from a single verified point; pull the
 #: lead-time breakdown from the full spring Verification Report instead.
-TRACK_THRESHOLDS: tuple[Threshold, ...] = (
-    Threshold("track_error_48h_nm", 70.0),
-    Threshold("track_error_72h_nm", 150.0),
-    Threshold("track_error_120h_nm", 250.0),
-    Threshold("nhc_consensus_beat_rate_48h", 0.50, lower_is_better=False),
+#:
+#: The values live in monitoring.yaml ``promotion.thresholds``; an
+#: ``intensity_*`` metric goes in the intensity table, anything else in track.
+def _thresholds() -> tuple[Threshold, ...]:
+    out = []
+    for metric in config.get("monitoring", "promotion.thresholds", dict):
+        out.append(
+            Threshold(
+                metric,
+                config.get("monitoring", f"promotion.thresholds.{metric}.limit", float),
+                lower_is_better=config.get(
+                    "monitoring", f"promotion.thresholds.{metric}.lower_is_better", bool
+                ),
+            )
+        )
+    return tuple(out)
+
+
+_ALL_THRESHOLDS = _thresholds()
+TRACK_THRESHOLDS: tuple[Threshold, ...] = tuple(
+    t for t in _ALL_THRESHOLDS if not t.metric.startswith("intensity_")
 )
-INTENSITY_THRESHOLDS: tuple[Threshold, ...] = (
-    Threshold("intensity_error_48h_kt", 15.0),
-    Threshold("intensity_error_72h_kt", 20.0),
+INTENSITY_THRESHOLDS: tuple[Threshold, ...] = tuple(
+    t for t in _ALL_THRESHOLDS if t.metric.startswith("intensity_")
 )
 DEFAULT_THRESHOLDS: tuple[Threshold, ...] = TRACK_THRESHOLDS + INTENSITY_THRESHOLDS
+
+config.fixed(
+    "monitoring", "promotion.split", "val",
+    "promotion is decided on validation; the test set is never a criterion (§5.3)",
+)
+config.fixed(
+    "monitoring", "promotion.flavor", Flavor.GDAS_FINETUNE.value,
+    "only a model fine-tuned on the operational flavor can be promoted (§4.6.1)",
+)
+PRIMARY_METRIC: str = config.get("monitoring", "promotion.primary_metric", str)
+REQUIRE_MANUAL_GATE: bool = config.get("monitoring", "promotion.require_manual_gate", bool)
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,8 +165,8 @@ def evaluate_promotion(
     *,
     incumbent_val_metrics: MetricSet | None = None,
     thresholds: tuple[Threshold, ...] = DEFAULT_THRESHOLDS,
-    primary_metric: str = "track_error_48h_nm",
-    require_manual_gate: bool = True,
+    primary_metric: str = PRIMARY_METRIC,
+    require_manual_gate: bool = REQUIRE_MANUAL_GATE,
 ) -> PromotionDecision:
     """Decide staging and production promotion for a candidate.
 
@@ -218,7 +245,9 @@ class TestSetBudget:
     on every candidate.
     """
 
-    max_evaluations_per_season: int = 4
+    max_evaluations_per_season: int = config.get(
+        "monitoring", "test_set_budget.max_evaluations_per_season", int
+    )
     log: list[tuple[date, str, str]] = field(default_factory=list)
 
     def evaluations_in(self, season: int) -> int:

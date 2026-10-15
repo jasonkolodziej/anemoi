@@ -54,7 +54,7 @@ rather than `test_select_nwp_cycle_2`. When one fails, the name should tell you 
 | `test_satellite.py` | Synthetic GOES crop shape/channels; intensity-dependent structure; CNN integration |
 | `test_real_gridded.py` | ERA5/GDAS unit conversion and cropping (synthetic-schema); real endpoints behind `ANEMOI_RUN_NETWORK_TESTS=1` |
 | `test_models.py` | Architecture shapes and latent contracts (**needs torch**) |
-| `test_config_sync.py` | Every key in `configs/*.yaml` against the constant, default or behaviour it documents; unchecked or duplicate keys; the Worker cron and console copy of the run offset |
+| `test_config_sync.py` | The runtime config loader: every key is read by some module; edited values take effect; each kind of invalid file is refused; the image layout finds `configs/`; the Worker cron and console copy of the run offset agree |
 
 ---
 

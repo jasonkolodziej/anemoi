@@ -13,18 +13,27 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 
+from .. import config
 from ..data.availability import (
     AvailabilityOracle,
     CycleInputs,
     resolve_cycle_inputs,
 )
-from ..time_utils import ADVISORY_OFFSET, advisory_time, cycle_label, require_synoptic
+from ..time_utils import (
+    ADVISORY_OFFSET,
+    MAX_NWP_LAG_HOURS,
+    advisory_time,
+    cycle_label,
+    require_synoptic,
+)
 
 #: Nominal working-fix arrival.
-NOMINAL_VITALS_OFFSET = timedelta(minutes=45)
+NOMINAL_VITALS_OFFSET = timedelta(
+    minutes=config.get("inference", "cycle.nominal_vitals_offset_minutes", int)
+)
 
 #: Safety margin required between product delivery and the advisory.
-ADVISORY_MARGIN = timedelta(minutes=30)
+ADVISORY_MARGIN = timedelta(minutes=config.get("inference", "cycle.advisory_margin_minutes", int))
 
 
 class Stage(str, Enum):
@@ -47,35 +56,39 @@ class StageBudget:
             raise ValueError(f"{self.stage.value}: max budget below target")
 
 
-#: The §6.2.2 table, as code. Durations are measured from cycle start.
-DEFAULT_BUDGETS: tuple[StageBudget, ...] = (
-    StageBudget(Stage.ASSEMBLY, timedelta(minutes=10), timedelta(minutes=20)),
-    StageBudget(Stage.PREPROCESS, timedelta(minutes=15), timedelta(minutes=25)),
-    StageBudget(Stage.DETERMINISTIC, timedelta(minutes=10), timedelta(minutes=18)),
-    StageBudget(Stage.FUSION, timedelta(minutes=2), timedelta(minutes=4)),
-    StageBudget(Stage.DIFFUSION, timedelta(minutes=13), timedelta(minutes=25)),
-    StageBudget(Stage.POSTPROCESS, timedelta(minutes=5), timedelta(minutes=10)),
-)
+def _budgets(profile: str) -> tuple[StageBudget, ...]:
+    """inference.yaml ``budgets.<profile>``: every stage, in pipeline order."""
+    out = []
+    for stage in Stage:
+        target = config.get("inference", f"budgets.{profile}.{stage.value}.target", int)
+        maximum = config.get("inference", f"budgets.{profile}.{stage.value}.max", int)
+        try:
+            out.append(StageBudget(stage, timedelta(minutes=target), timedelta(minutes=maximum)))
+        except ValueError as exc:
+            where = f"inference.yaml: budgets.{profile}.{stage.value}"
+            raise config.ConfigError(f"{where}: {exc}") from exc
+    extra = set(config.get("inference", f"budgets.{profile}", dict)) - {s.value for s in Stage}
+    if extra:
+        raise config.ConfigError(
+            f"inference.yaml: budgets.{profile} has unknown stages {sorted(extra)}"
+        )
+    return tuple(out)
 
 
-#: Load-shedding profile. Used when the standard profile would not clear the
-#: advisory -- typically after a late working fix. The saving comes almost
-#: entirely from Anemoi-Spread: REDUCED_ENSEMBLE_MEMBERS (25) instead of
-#: DEFAULT_ENSEMBLE_MEMBERS (50). A smaller ensemble is a real loss of tail
-#: resolution, but it is a smaller loss than delivering nothing before the
-#: advisory goes out.
-REDUCED_BUDGETS: tuple[StageBudget, ...] = (
-    StageBudget(Stage.ASSEMBLY, timedelta(minutes=8), timedelta(minutes=14)),
-    StageBudget(Stage.PREPROCESS, timedelta(minutes=12), timedelta(minutes=18)),
-    StageBudget(Stage.DETERMINISTIC, timedelta(minutes=10), timedelta(minutes=16)),
-    StageBudget(Stage.FUSION, timedelta(minutes=2), timedelta(minutes=4)),
-    StageBudget(Stage.DIFFUSION, timedelta(minutes=6), timedelta(minutes=10)),
-    StageBudget(Stage.POSTPROCESS, timedelta(minutes=4), timedelta(minutes=8)),
-)
+#: The §6.2.2 table (inference.yaml ``budgets.standard``). Durations are
+#: measured from cycle start.
+DEFAULT_BUDGETS: tuple[StageBudget, ...] = _budgets("standard")
 
+#: Load-shedding profile (inference.yaml ``budgets.reduced``). Used when the
+#: standard profile would not clear the advisory -- typically after a late
+#: working fix. The saving comes almost entirely from Anemoi-Spread:
+#: REDUCED_ENSEMBLE_MEMBERS instead of DEFAULT_ENSEMBLE_MEMBERS. A smaller
+#: ensemble is a real loss of tail resolution, but it is a smaller loss than
+#: delivering nothing before the advisory goes out.
+REDUCED_BUDGETS: tuple[StageBudget, ...] = _budgets("reduced")
 
-#: Ensemble member counts by profile (configs/inference.yaml: ensemble.members /
-#: ensemble.min_members_for_ensemble_cone).
+#: Ensemble member counts by profile (inference.yaml ``ensemble.members`` /
+#: ``ensemble.reduced_members``).
 #:
 #: 50, not 20 (#188). Every §6.1 product is a quantile or a fraction estimated
 #: from these draws -- the cone radius is the 67th percentile of member
@@ -100,11 +113,16 @@ REDUCED_BUDGETS: tuple[StageBudget, ...] = (
 #: diffusion budget. The budget is spent on Group 1 forward passes and input
 #: fetches, not on ensemble size. `Inference-Cycle`'s own stage table already
 #: contemplated "20 members; 50 relaxed".
-DEFAULT_ENSEMBLE_MEMBERS = 50
+DEFAULT_ENSEMBLE_MEMBERS: int = config.get("inference", "ensemble.members", int)
 #: Scaled with the default to preserve the 2:1 shed ratio the original design
 #: chose (#8). Note this lever buys far less wall time than it appears to --
 #: see the batching note above -- which is worth revisiting on its own.
-REDUCED_ENSEMBLE_MEMBERS = 25
+REDUCED_ENSEMBLE_MEMBERS: int = config.get("inference", "ensemble.reduced_members", int)
+if not 0 < REDUCED_ENSEMBLE_MEMBERS <= DEFAULT_ENSEMBLE_MEMBERS:
+    raise config.ConfigError(
+        "inference.yaml: ensemble.reduced_members must be between 1 and "
+        f"ensemble.members ({DEFAULT_ENSEMBLE_MEMBERS}), got {REDUCED_ENSEMBLE_MEMBERS}"
+    )
 
 
 def total_budget(budgets=DEFAULT_BUDGETS, *, worst_case: bool = False) -> timedelta:
@@ -132,7 +150,32 @@ def derive_vitals_timeout(
 
 
 #: The point past which we stop waiting for the working fix (t+1:20).
-VITALS_TIMEOUT = ADVISORY_OFFSET - timedelta(minutes=70) - ADVISORY_MARGIN
+VITALS_TIMEOUT = derive_vitals_timeout()
+
+# inference.yaml writes the timeout down so a reader sees it, but it is
+# derived, never chosen: a file whose number disagrees with its own budgets
+# is refused rather than trusted -- hardcoding it is how the original
+# 10-minute shortfall got in (Decision Log #11).
+_configured_timeout = config.get("inference", "cycle.vitals_timeout_minutes", int)
+if _configured_timeout != VITALS_TIMEOUT / timedelta(minutes=1):
+    raise config.ConfigError(
+        "inference.yaml: cycle.vitals_timeout_minutes must equal advisory_offset - "
+        "reduced worst case - advisory_margin = "
+        f"{VITALS_TIMEOUT / timedelta(minutes=1):g} for these budgets"
+    )
+
+#: When production actually runs each cycle (inference.yaml
+#: ``cycle.scheduled_run_offset_minutes``): anemoi-api-real's cron, which the
+#: Python side doesn't schedule but must not contradict -- a run before the
+#: vitals timeout could start on vitals that were still on their way.
+SCHEDULED_RUN_OFFSET = timedelta(
+    minutes=config.get("inference", "cycle.scheduled_run_offset_minutes", int)
+)
+if SCHEDULED_RUN_OFFSET <= VITALS_TIMEOUT:
+    raise config.ConfigError(
+        "inference.yaml: cycle.scheduled_run_offset_minutes must be after the "
+        f"vitals timeout ({VITALS_TIMEOUT / timedelta(minutes=1):g} min)"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,9 +284,9 @@ def plan_cycle(
     *,
     budgets: tuple[StageBudget, ...] = DEFAULT_BUDGETS,
     vitals_timeout: timedelta = VITALS_TIMEOUT,
-    allow_estimated_vitals: bool = True,
-    allow_load_shedding: bool = True,
-    max_nwp_lag_hours: int = 12,
+    allow_estimated_vitals: bool = config.get("inference", "cycle.allow_estimated_vitals", bool),
+    allow_load_shedding: bool = config.get("inference", "cycle.allow_load_shedding", bool),
+    max_nwp_lag_hours: int = MAX_NWP_LAG_HOURS,
 ) -> CyclePlan:
     """Build the plan for forecast cycle ``t``.
 

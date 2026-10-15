@@ -1,19 +1,20 @@
 # Operational cycle configuration (Scope v2.1 §6.2).
 #
-# Documentation of what the code does, not something it reads: there is no
-# config loader yet (wiki Roadmap, "Config loader"). Every value here mirrors
-# a Python constant or default, and tests/test_config_sync.py fails if any of
-# them disagree, or if a key is added here that nothing checks.
+# Read at runtime by anemoi.config (#211): editing a value here changes what
+# runs, once deployed (a change under configs/ redeploys the API). A value the
+# code can't honour -- a fixed key changed, a wrong type, a derived number
+# that disagrees with its inputs -- is refused at import with the file and key
+# named. $ANEMOI_CONFIG_DIR points the code at a different copy.
 
 cycle:
-  synoptic_hours: [0, 6, 12, 18]
+  synoptic_hours: [0, 6, 12, 18]  # fixed: every cycle label is keyed on these
   # Cycle t consumes the t-6 NWP cycle. Never the cycle named t: it publishes
   # ~3.5-4h after its own valid time.
-  nwp_lag_hours: 6
+  nwp_lag_hours: 6  # fixed: one cycle interval
   max_nwp_lag_hours: 12
   nominal_vitals_offset_minutes: 45
   # Derived, not asserted: advisory_offset - reduced_worst_case - margin.
-  vitals_timeout_minutes: 80
+  vitals_timeout_minutes: 80  # fixed: derived; must equal the budgets
   advisory_offset_minutes: 180
   advisory_margin_minutes: 30
   allow_estimated_vitals: true
@@ -67,7 +68,7 @@ ensemble:
     120: 200
 
 products:
-  lead_hours: [12, 24, 36, 48, 72, 96, 120]
+  lead_hours: [12, 24, 36, 48, 72, 96, 120]  # fixed: the trained models' output leads
   # Ensemble-spread cone radius: this percentile of member distance from the
   # ensemble mean (a 2/3-probability circle, like NHC's).
   cone_percentile: 67

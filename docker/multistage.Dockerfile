@@ -141,6 +141,9 @@ ENV IMAGE_TAG=latest
 COPY --from=training-builder /app/.venv /app/.venv
 COPY --from=training-builder /app/src /app/src
 COPY --from=training-builder /app/data /app/data
+# Read at import by anemoi.config (#211): curriculum, schedule and monitoring
+# settings. Without it every anemoi import fails with a ConfigError.
+COPY --from=training-builder /app/configs /app/configs
 COPY docker/cloud-run-training/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
@@ -173,6 +176,8 @@ ENV ANEMOI_API_CORS_ORIGINS="https://anemoi.systems,https://anemoi-console.jason
 COPY --from=api-builder /app/.venv /app/.venv
 COPY --from=api-builder --chown=app:app /app/src /app/src
 COPY --from=api-builder --chown=app:app /app/data /app/data
+# Read at import by anemoi.config (#211); the API won't start without it.
+COPY --from=api-builder --chown=app:app /app/configs /app/configs
 
 USER app
 

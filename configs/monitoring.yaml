@@ -1,9 +1,10 @@
 # Skew, drift, calibration and promotion gates (Scope v2.1 §4.6.3, §5.3, §5.5).
 #
-# Documentation of what the code does, not something it reads: there is no
-# config loader yet (wiki Roadmap, "Config loader"). Every value here mirrors
-# a Python constant or default, and tests/test_config_sync.py fails if any of
-# them disagree, or if a key is added here that nothing checks.
+# Read at runtime by anemoi.config (#211): editing a value here changes what
+# runs, once deployed (a change under configs/ redeploys the API). A value the
+# code can't honour -- a fixed key changed, a wrong type, a derived number
+# that disagrees with its inputs -- is refused at import with the file and key
+# named. $ANEMOI_CONFIG_DIR points the code at a different copy.
 
 skew_audit:
   # ERA5T lands ~5 days after the cycle; re-run and compare against operational.
@@ -17,7 +18,7 @@ skew_audit:
 drift:
   # Reference is the Stage B distribution, never Stage A. Comparing live GDAS
   # features to ERA5 statistics shows a constant offset that is not drift.
-  reference_flavor: gdas_finetune
+  reference_flavor: gdas_finetune  # fixed: never era5_pretrain
   shift_sigma: 2.0
   variance_ratio_limit: 3.0
   min_samples: 30
@@ -29,15 +30,15 @@ calibration_audit:
   # Was the served cone / intensity band right once truth arrived (#184)?
   # monitoring/calibration_audit.py. Runs once per synoptic cycle, after the
   # anemoi-cycle Workflow's runs.
-  cone_nominal_rate: 0.667          # the served cone is a 2/3-probability circle
+  cone_nominal_rate: 0.6666666666666666  # 2/3: the served cone is a 2/3-probability circle
   intensity_nominal_rate: 0.8       # p10-p90 band
   verdict_margin: 0.15              # +/- around nominal before "too narrow/wide"
   min_cases: 5                      # below this: "not enough data"
 
 promotion:
   # Decided on validation. The test set is not a promotion criterion.
-  split: val
-  flavor: gdas_finetune
+  split: val  # fixed: never test
+  flavor: gdas_finetune  # fixed: operational flavor only
   primary_metric: track_error_48h_nm
   require_manual_gate: true
   # track_error_48h_nm re-baselined against NHC's GPRA performance-measures
@@ -59,4 +60,4 @@ triggers:
   preseason_date: "05-01"
   data_volume_threshold: 500
   nightly_latent_hour_utc: 2
-  suppress_nightly_latent_during_active_storms: true
+  suppress_nightly_latent_during_active_storms: true  # fixed: safety rule

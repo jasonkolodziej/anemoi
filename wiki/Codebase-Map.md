@@ -5,6 +5,7 @@ Reference implementation `anemoi` v2.2.0. Roughly 22,000 lines of Python under `
 ```
 src/anemoi/
 ├── __init__.py           version, Flavor, Role, cycle_label, select_nwp_cycle
+├── config.py             reads configs/*.yaml at import (#211): typed get(), fixed keys, no fallbacks
 ├── time_utils.py         synoptic arithmetic; the t−6 NWP selection rule
 ├── geo.py                great-circle distance, bearings, cross/along-track
 ├── branding.py           wind-god registry: god <-> architecture, colours, modules
@@ -130,7 +131,7 @@ wiki/                      source of the GitHub wiki, published on merge by .git
 └── scripts/               deploy-plan.sh (what to test/deploy), publish-wiki.sh
 ```
 
-Also at the repo root: `configs/` (three YAML files, see [Configuration Reference](Configuration-Reference)), `tests/` (68 files, see [Testing](Testing)), `docs/`, `slurm/` (SLURM-equivalent job scripts for data-ingest and real training jobs -- `#SBATCH`-headered, `sbatch`-submittable on a real cluster; `run_local.sh` emulates `sbatch` via `tmux` on the current single-VM setup, see `slurm/README.md`), `README.md`, `PLAN.md`, `PROJECT.md`.
+Also at the repo root: `configs/` (three YAML files read at runtime, see [Configuration Reference](Configuration-Reference)), `tests/` (68 files, see [Testing](Testing)), `docs/`, `slurm/` (SLURM-equivalent job scripts for data-ingest and real training jobs -- `#SBATCH`-headered, `sbatch`-submittable on a real cluster; `run_local.sh` emulates `sbatch` via `tmux` on the current single-VM setup, see `slurm/README.md`), `README.md`, `PLAN.md`, `PROJECT.md`.
 
 ---
 
@@ -197,6 +198,7 @@ Every one names the section it enforces, so a stack trace points at the policy.
 
 | Exception | Module | Raised when |
 |---|---|---|
+| `ConfigError` | `config` | A config directory, file or key is missing, a value has the wrong type, a fixed key was changed, or a derived value disagrees with its inputs |
 | `NWPUnavailableError` | `time_utils` | No NWP cycle within the staleness budget |
 | `OperationalUseError` | `data.sources` | A non-operational source was requested in the cycle |
 | `FlavorMismatchError` | `data.features` | ERA5-derived features reached the operational path |
@@ -222,7 +224,7 @@ Every one names the section it enforces, so a stack trace points at the policy.
 
 ## Import cost
 
-`import anemoi` pulls in numpy and pyyaml only. `models/__init__.py` uses lazy `__getattr__`, so torch is imported only when you actually call a builder:
+`import anemoi` pulls in numpy and pyyaml only, and reads `configs/inference.yaml` and `configs/curriculum.yaml` for the synoptic-time and working-track settings it needs at import (so it raises `ConfigError` if no `configs/` can be found -- see [Configuration Reference](Configuration-Reference#how-the-files-are-loaded)). `models/__init__.py` uses lazy `__getattr__`, so torch is imported only when you actually call a builder:
 
 ```python
 import anemoi                       # no torch

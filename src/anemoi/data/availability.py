@@ -12,7 +12,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Protocol
 
-from ..time_utils import NWPCycleSelection, require_synoptic, select_nwp_cycle
+from ..time_utils import (
+    MAX_NWP_LAG_HOURS,
+    NWP_LAG_HOURS,
+    NWPCycleSelection,
+    require_synoptic,
+    select_nwp_cycle,
+)
 from . import sources
 from .sources import Role
 
@@ -129,7 +135,7 @@ def resolve_cycle_inputs(
     as_of: datetime,
     oracle: AvailabilityOracle,
     *,
-    max_nwp_lag_hours: int = 12,
+    max_nwp_lag_hours: int = MAX_NWP_LAG_HOURS,
 ) -> CycleInputs:
     """Determine the input set for forecast cycle ``t`` as of wall-clock ``as_of``.
 
@@ -142,7 +148,7 @@ def resolve_cycle_inputs(
 
     available_nwp = {
         cycle
-        for lag in range(6, max_nwp_lag_hours + 1, 6)
+        for lag in range(NWP_LAG_HOURS, max_nwp_lag_hours + 1, NWP_LAG_HOURS)
         if (cycle := t - timedelta(hours=lag))
         and (pub := oracle.published_at("gdas_gfs", cycle)) is not None
         and pub <= as_of
@@ -206,7 +212,7 @@ def earliest_ready_time(
     t: datetime,
     oracle: AvailabilityOracle,
     *,
-    max_nwp_lag_hours: int = 12,
+    max_nwp_lag_hours: int = MAX_NWP_LAG_HOURS,
 ) -> datetime | None:
     """Wall-clock time at which every *required* input for cycle ``t`` has landed.
 
@@ -223,7 +229,7 @@ def earliest_ready_time(
 
     nwp_pubs = [
         pub
-        for lag in range(6, max_nwp_lag_hours + 1, 6)
+        for lag in range(NWP_LAG_HOURS, max_nwp_lag_hours + 1, NWP_LAG_HOURS)
         if (pub := oracle.published_at("gdas_gfs", t - timedelta(hours=lag))) is not None
     ]
     if not nwp_pubs:
