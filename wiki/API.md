@@ -225,8 +225,34 @@ as a sibling `products` field on the same response:
 
 See [docs/api.md](https://github.com/jasonkolodziej/anemoi/blob/main/docs/api.md#the-flag-vocabulary)
 for the full table — `vitals=estimated`, `nwp_stale={n}h`, `missing:{source}`,
-`spread_fallback:{type}`, plus two ensemble-quality notes. Treat an
-unrecognised flag as "degraded, reason opaque," not as an error.
+`spread_fallback:{type}`, `load_shed:members={n}`, and since #214
+`deterministic_fallback:synthetic`, `input:final_best_track`,
+`vitals_source:persisted` and `basin_untrained:{basin}`, plus two
+ensemble-quality notes. Treat an unrecognised flag as "degraded, reason
+opaque," not as an error.
+
+### Provenance
+
+Since #214 every real cycle result carries `provenance` — what the cycle actually ran on, stored with it in R2:
+
+```json
+{
+  "fix_source": "extrapolated",
+  "fix": {"valid_time": "2026-10-15T06:00:00Z", "lat": 21.8, "lon": -63.0, "max_wind_kt": 65.0, "min_pressure_mb": 985.0, "quality": "estimated"},
+  "model_versions": {"lstm": 7, "cnn": 6, "transformer": 5, "gnn": 5},
+  "fusion": "inverse_error",
+  "gridded_source": "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.20261015/06/atmos/gfs.t06z.pgrb2.0p25.anl",
+  "basin": "AL", "trained_basin": true,
+  "started_at": "2026-10-15T07:30:04Z",
+  "git_sha": "3dbfc98…", "config_sha256": "9f2c…"
+}
+```
+
+- **`fix_source`**: the storm's own fix at the cycle time (`tcvitals`), an archive storm's `final_best_track`, `extrapolated` from the last motion vector, or `persisted`. Before #214 every cycle used the storm's *latest* fix relabelled as the cycle time — for a past label, a position from later — and said `vitals: observed` regardless.
+- **`fusion`**: `learned` (all five models and the learned fusion), `inverse_error` (fewer than five), `synthetic` (no model ran), `demo`.
+- **`issued_at`/`on_time`** in the payload are now when the cycle really finished, not the plan's target.
+
+`provenance` is `null` on cycles stored before #214 and on demo cycles.
 
 ---
 

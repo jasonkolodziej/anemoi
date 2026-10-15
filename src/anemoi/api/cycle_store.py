@@ -24,11 +24,17 @@ import numpy as np
 from . import schemas
 
 if TYPE_CHECKING:
+    from ..data.besttrack import Track
     from ..inference.cycle import CycleOutput
     from ..tracking.checkpoint_store import CheckpointStore
 
 CYCLES_PREFIX = "api/cycles/"
 DRIFT_LIVE_KEY = "api/drift_live.json"
+#: One record per cycle *run* (#214) -- a replaced manual run keeps its own.
+CYCLE_INPUTS_PREFIX = "archive/cycles/"
+#: How many fixes up to the cycle time the input record keeps: the LSTM's
+#: window (`capacity_ablation.SEQUENCE_LENGTH` + 1 = 9) with room to spare.
+FIX_WINDOW = 12
 
 
 def cycle_key(storm_id: str, label: str) -> str:
@@ -66,6 +72,61 @@ def list_cycle_labels(store: CheckpointStore) -> dict[str, set[str]]:
         if storm_id and filename.endswith(".json") and "/" not in filename:
             index.setdefault(storm_id, set()).add(filename[: -len(".json")])
     return index
+
+
+def cycle_inputs_prefix(result: schemas.CycleResult) -> str:
+    label = result.payload.cycle
+    started = result.provenance.started_at if result.provenance else result.payload.issued_at
+    return (
+        f"{CYCLE_INPUTS_PREFIX}{label[:4]}/{result.storm_id}/{label}/"
+        f"{started:%Y%m%dT%H%M%SZ}/"
+    )
+
+
+def save_cycle_inputs(
+    store: CheckpointStore, result: schemas.CycleResult, track: Track, fields: object | None,
+) -> str:
+    """What one cycle run ran on (#214), under ``archive/cycles/{year}/
+    {storm}/{label}/{started}/``:
+
+    * ``manifest.json`` -- the served result (with its ``run`` and
+      ``provenance``: fix source, model versions, fusion, gridded source,
+      commit, config digest) and the storm's fixes up to the cycle time, as
+      known when it ran;
+    * ``fields.npz`` -- the storm-centred gridded fields the models read,
+      when there were any (`data.gridded_cache`'s format).
+
+    With the commit, these are enough to rebuild every model's input
+    tensor. Returns the prefix written.
+    """
+    from ..data.gridded_cache import FetchTask, save_cached_fields
+
+    prefix = cycle_inputs_prefix(result)
+    target = result.provenance.fix.valid_time if result.provenance else None
+    window = [f for f in track.fixes if target is None or f.valid_time <= target][-FIX_WINDOW:]
+    manifest = {
+        "result": result.model_dump(mode="json"),
+        "fix_window": [
+            {
+                "valid_time": f.valid_time.isoformat(), "lat": f.lat, "lon": f.lon,
+                "max_wind_kt": f.max_wind_kt, "min_pressure_mb": f.min_pressure_mb,
+                "quality": f.quality.value,
+            }
+            for f in window
+        ],
+        "fields": "fields.npz" if fields is not None else None,
+    }
+    if fields is not None and result.provenance is not None:
+        fix = result.provenance.fix
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fields.npz"
+            save_cached_fields(
+                path, fields,  # type: ignore[arg-type]
+                FetchTask(result.storm_id, fix.valid_time, fix.lat, fix.lon),
+            )
+            store.upload(path, prefix + "fields.npz")
+    _put_text(store, prefix + "manifest.json", json.dumps(manifest, indent=1))
+    return prefix
 
 
 def save_drift_live(store: CheckpointStore, features: list[np.ndarray], models: set[str]) -> None:

@@ -15,6 +15,9 @@
 !configs/
 !configs/**
 !docker/cloud-run-training/entrypoint.sh
+# Written by CI before each build: the commit the image is built from
+# (anemoi.provenance, #214). Absent locally; the builders write `{}`.
+!build-info.json
 
 # Exclude the project virtual environment from image builds
 .venv

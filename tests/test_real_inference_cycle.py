@@ -169,6 +169,11 @@ def test_build_real_deterministic_fn_combines_all_four_real_models(tmp_path):
     assert np.all(np.isfinite(forecast.winds_kt))
     assert set(forecast.contributors) == {"lstm", "cnn", "transformer", "gnn"}
     assert pytest.approx(sum(forecast.contributors.values()), abs=1e-6) == 1.0
+    # #214: which versions ran, and how they were combined (four models:
+    # the non-learned consensus), are recorded on the forecast.
+    assert set(forecast.model_versions) == set(forecast.contributors)
+    assert forecast.fusion == "inverse_error"
+    assert forecast.gridded_source is not None and forecast.gridded_source.endswith(".anl")
 
     # #92-adjacent real console request: each model's own track, not just
     # the fused one, must be real and available -- not derived after the
@@ -233,6 +238,7 @@ def test_env_features_is_none_without_a_real_cached_field(tmp_path):
     forecast = deterministic_fn(plan, current)
     assert set(forecast.contributors) == {"lstm"}
     assert forecast.env_features is None
+    assert forecast.gridded_source is None  # no fields were available
 
 
 @pytest.mark.torch
@@ -328,6 +334,8 @@ def test_build_real_deterministic_fn_uses_the_real_learned_fusion_with_all_five(
     assert np.all(np.isfinite(forecast.winds_kt))
     assert set(forecast.contributors) == {"lstm", "cnn", "transformer", "gnn", "pinn"}
     assert pytest.approx(sum(forecast.contributors.values()), abs=1e-4) == 1.0
+    assert forecast.fusion == "learned"
+    assert set(forecast.model_versions) == {"lstm", "cnn", "transformer", "gnn", "pinn", "fusion"}
 
 
 @pytest.mark.torch

@@ -224,11 +224,16 @@ jobs:
           --extra storage --extra gridded
           pytest -q tests/test_api_docs.py tests/test_api_real_state.py tests/test_api_smoke.py
           tests/test_config_sync.py tests/test_cycle_policy.py tests/test_atcf_archive.py
+          tests/test_cycle_provenance.py
 
       # The first build of the API image used to happen inside `wrangler
       # deploy`, in production -- so an image that couldn't start (since
       # #211: one missing /app/configs) was found live. Build the same
       # target here, on every PR and before every deploy, and start it.
+      - name: Record the commit for the image
+        # anemoi.provenance (#214): the image has no .git.
+        run: .github/scripts/write-build-info.sh "$GITHUB_SHA"
+
       - name: Build the API image
         # The same target `wrangler deploy` builds (docker/api/wrangler.jsonc
         # `image`). BuildKit is the runner's default builder, so the
@@ -236,6 +241,8 @@ jobs:
         run: docker build -f docker/multistage.Dockerfile --target api -t anemoi-api:ci .
 
       - name: Smoke-test the API image
+        env:
+          EXPECT_GIT_SHA: ${{ github.sha }}
         run: .github/scripts/smoke-test-image.sh anemoi-api:ci api
 
   deploy:
@@ -357,6 +364,11 @@ jobs:
         if: steps.fresh.outputs.current == 'true' && env.DEPLOY_API == 'true'
         working-directory: docker/api
         run: pnpm install --frozen-lockfile
+
+      - name: "docker/api: record the commit for the image"
+        if: steps.fresh.outputs.current == 'true' && env.DEPLOY_API == 'true'
+        # anemoi.provenance (#214): every served cycle records the commit.
+        run: .github/scripts/write-build-info.sh "$GITHUB_SHA"
 
       - name: "docker/api: wrangler deploy (builds + pushes the container image)"
         if: steps.fresh.outputs.current == 'true' && env.DEPLOY_API == 'true'

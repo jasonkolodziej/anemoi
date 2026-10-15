@@ -237,7 +237,7 @@ def _real_fusion_forecast(
     registry: ModelRegistry, checkpoint_store: CheckpointStore,
     track: Track, current: Fix, per_model_abs: dict[str, np.ndarray],
     used_versions: dict[str, int],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, float]] | None:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, float], int] | None:
     """The real, learned `ConsensusFusion` combination -- only possible
     when all five real Group 1 predictions are present, `fusion` itself
     has a registered version, there's enough real history for its context
@@ -296,7 +296,7 @@ def _real_fusion_forecast(
         per_lead_weights = model.weights(ctx_t)[0].cpu().numpy()
     mean_weights = per_lead_weights.mean(axis=0)
     contributors = dict(zip(_GROUP1_LIVE_MODELS, (float(w) for w in mean_weights), strict=True))
-    return out[:, 0], out[:, 1], out[:, 2], contributors
+    return out[:, 0], out[:, 1], out[:, 2], contributors, version.version
 
 
 def build_real_deterministic_fn(
@@ -357,15 +357,28 @@ def build_real_deterministic_fn(
         # produce the exact same "didn't contribute" outcome, and told apart
         # only by which reason each model actually got.
         reasons: dict[str, str] = {}
+        # Every gridded-field consumer below shares one fetch (#214): the
+        # same fields for each model, read once, and a record of whether
+        # any were available at all -- the cycle's provenance.
+        from .real_inference_live import _current_fields, live_gridded_source
+
+        fetch = fields_fetcher or _current_fields
+        fetched: dict[str, object] = {}
+
+        def shared_fetcher(track_, current_, cache_dir_):
+            if "fields" not in fetched:
+                fetched["fields"] = fetch(track_, current_, cache_dir_)
+            return fetched["fields"]
+
         env_features = _compute_env_features(
-            track, current, cache_dir, fields_fetcher=fields_fetcher,
+            track, current, cache_dir, fields_fetcher=shared_fetcher,
         )
 
         for name in _GROUP1_LIVE_MODELS:
             if name == "pinn":
                 abs_pred = _run_pinn(
                     registry, checkpoint_store, track, current, cache_dir,
-                    fields_fetcher=fields_fetcher,
+                    fields_fetcher=shared_fetcher,
                 )
                 version = registry.production("pinn") or registry.in_stage("pinn", Stage.STAGING)
                 if version is None:
@@ -382,7 +395,7 @@ def build_real_deterministic_fn(
                     reasons[name] = "no registered staging/production version"
                 else:
                     raw = _build_live_x(
-                        name, track, current, cache_dir, fields_fetcher=fields_fetcher,
+                        name, track, current, cache_dir, fields_fetcher=shared_fetcher,
                     )
                     if raw is None:
                         if _gdas_likely_unpublished(current.valid_time):
@@ -420,9 +433,13 @@ def build_real_deterministic_fn(
         real_fusion = _real_fusion_forecast(
             registry, checkpoint_store, track, current, per_model_abs, used_versions,
         )
+        model_versions = dict(used_versions)
         if real_fusion is not None:
-            lats, lons, winds, contributors = real_fusion
+            lats, lons, winds, contributors, fusion_version = real_fusion
+            model_versions["fusion"] = fusion_version
+            fusion = "learned"
         else:
+            fusion = "inverse_error"
             weights = fusion_weights(recent_errors)
             lats = np.zeros(n_leads)
             lons = np.zeros(n_leads)
@@ -439,6 +456,12 @@ def build_real_deterministic_fn(
             lats=lats, lons=lons, winds_kt=winds, contributors=contributors,
             per_model_tracks=dict(per_model_abs), missing_model_reasons=dict(reasons),
             env_features=env_features,
+            model_versions=model_versions, fusion=fusion,
+            gridded_source=(
+                None if fetched.get("fields") is None
+                else live_gridded_source(current.valid_time) if fields_fetcher is None
+                else getattr(fields_fetcher, "source_name", "custom")
+            ),
         )
 
     return deterministic_fn

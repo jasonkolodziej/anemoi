@@ -51,10 +51,15 @@ the same flags the CLI's JSON output already carries:
 
 | Pattern | Meaning |
 |---|---|
-| `vitals=estimated` | Cycle ran on an extrapolated fix past the derived vitals timeout |
+| `vitals=estimated` | Cycle ran on an extrapolated fix: the storm had no fix at the cycle time yet (or `worst_case` withheld it) |
 | `nwp_stale={n}h` | Selected NWP cycle is staler than the nominal t-6 |
 | `missing:{source_key}` | A source the plan expected was unexpectedly absent |
 | `spread_fallback:{ExceptionType}` | Anemoi-Spread failed; climatological ensemble substituted |
+| `load_shed:members={n}` | Reduced ensemble to hold the deadline |
+| `deterministic_fallback:synthetic` | No trained model could run; the track is a straight-line placeholder (#214) |
+| `input:final_best_track` | An archive storm: its inputs are the final best track (training labels), not as-issued vitals (#214) |
+| `vitals_source:persisted` | Too little history to extrapolate; the last earlier fix was held in place (#214) |
+| `basin_untrained:{basin}` | The storm's basin isn't one the models were trained on (#214) |
 | *(in `notes`)* ensemble below minimum members | Cone drawn from climatological radii |
 | *(in `notes`)* ensemble underdispersion guard | Cone drawn from climatological radii instead |
 

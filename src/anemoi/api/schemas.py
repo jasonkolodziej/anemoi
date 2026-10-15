@@ -170,6 +170,40 @@ class RunInfoOut(BaseModel):
     overrides: list[str] = Field(default_factory=list)
 
 
+class FixOut(BaseModel):
+    valid_time: datetime
+    lat: float
+    lon: float
+    max_wind_kt: float
+    min_pressure_mb: float
+    quality: str
+
+
+class ProvenanceOut(BaseModel):
+    """What a cycle actually ran on, and with what (#214). Stored with the
+    result, so a later comparison or a retrain can slice by any of it."""
+
+    #: Where the initial fix came from: ``tcvitals`` (the storm's own
+    #: working fix at the cycle time), ``final_best_track`` (an archive
+    #: storm's label standing in for vitals), ``extrapolated`` (last motion
+    #: vector, vitals late or withheld) or ``persisted`` (too little history
+    #: to extrapolate). Overrides are on ``run``.
+    fix_source: Literal["tcvitals", "final_best_track", "extrapolated", "persisted"]
+    fix: FixOut
+    #: Registered version of each contributing model (``fusion`` included
+    #: when learned fusion ran).
+    model_versions: dict[str, int] = Field(default_factory=dict)
+    #: ``learned``, ``inverse_error``, ``synthetic`` (no real model ran) or ``demo``.
+    fusion: str
+    #: The gridded analysis the models read; ``None`` when none was available.
+    gridded_source: str | None = None
+    basin: str
+    trained_basin: bool
+    started_at: datetime
+    git_sha: str | None = None
+    config_sha256: str
+
+
 class CycleResult(BaseModel):
     storm_id: str
     payload: CyclePayload
@@ -179,15 +213,8 @@ class CycleResult(BaseModel):
     #: run before manual runs were restricted, so nothing says which they
     #: were; `api.cycle_policy` treats them as official.
     run: RunInfoOut | None = None
-
-
-class FixOut(BaseModel):
-    valid_time: datetime
-    lat: float
-    lon: float
-    max_wind_kt: float
-    min_pressure_mb: float
-    quality: str
+    #: `None` for a cycle stored before #214, or run outside the real state.
+    provenance: ProvenanceOut | None = None
 
 
 class StormSummary(BaseModel):

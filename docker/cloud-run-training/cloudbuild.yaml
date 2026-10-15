@@ -6,6 +6,12 @@
 #   gcloud builds submit --config docker/cloud-run-training/cloudbuild.yaml \
 #     --substitutions _IMAGE=us-central1-docker.pkg.dev/${PROJECT_ID}/anemoi/anemoi-train,_TAG=$(git rev-parse --short=12 HEAD) .
 steps:
+  # The commit the image is built from (anemoi.provenance, #214). Not from
+  # the uploaded source: build-info.json is gitignored, so gcloud never
+  # uploads one. _TAG is the commit when submitted as documented above.
+  - name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args: [.github/scripts/write-build-info.sh, $_TAG]
   - name: gcr.io/cloud-builders/docker
     # BuildKit rather than this builder's default legacy engine.
     env:

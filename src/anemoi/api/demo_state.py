@@ -154,6 +154,7 @@ class DemoState:
                 lons=fix_.lon - 1.1 * steps,
                 winds_kt=np.clip(fix_.max_wind_kt + 4.0 * steps - 0.4 * steps**2, 15.0, None),
                 contributors={"lstm": 0.2, "transformer": 0.35, "gnn": 0.25, "cnn": 0.2},
+                fusion="demo",
             )
 
         output = run_cycle(

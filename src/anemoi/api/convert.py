@@ -129,6 +129,30 @@ def cycle_result_out(storm_id: str, output: CycleOutput | s.CycleResult) -> s.Cy
             if output.run is not None
             else None
         ),
+        provenance=provenance_out(output),
+    )
+
+
+def provenance_out(output: CycleOutput) -> s.ProvenanceOut | None:
+    p = output.provenance
+    if p is None:
+        return None
+    fix = p["fix"]
+    det = output.deterministic
+    return s.ProvenanceOut(
+        fix_source=p["fix_source"],
+        fix=s.FixOut(
+            valid_time=fix.valid_time, lat=fix.lat, lon=fix.lon, max_wind_kt=fix.max_wind_kt,
+            min_pressure_mb=fix.min_pressure_mb, quality=fix.quality.value,
+        ),
+        model_versions=dict(det.model_versions),
+        fusion=det.fusion,
+        gridded_source=det.gridded_source,
+        basin=p["basin"],
+        trained_basin=p["trained_basin"],
+        started_at=p["started_at"],
+        git_sha=p.get("git_sha"),
+        config_sha256=p["config_sha256"],
     )
 
 

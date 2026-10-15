@@ -41,7 +41,14 @@ if TYPE_CHECKING:
 
 from ..data.availability import LatencyOracle
 from ..data.besttrack import Fix, Track, TrackQuality
-from ..inference.cycle import CycleError, CycleOutput, DeterministicForecast, run_cycle
+from .. import provenance
+from ..inference.cycle import (
+    CycleError,
+    CycleOutput,
+    DeterministicForecast,
+    extrapolate_fix,
+    run_cycle,
+)
 from ..inference.scheduler import plan_cycle
 from ..monitoring.calibration_audit import CalibrationSample, LeadProductCalibration
 from ..monitoring.drift import DriftError, DriftReport, ReferenceDistribution, detect_feature_drift
@@ -129,7 +136,63 @@ def _synthetic_fallback_deterministic(plan, fix) -> DeterministicForecast:
         lats=fix.lat + 0.9 * steps, lons=fix.lon - 1.1 * steps,
         winds_kt=np.clip(fix.max_wind_kt + 4.0 * steps - 0.4 * steps**2, 15.0, None),
         contributors={},
+        fusion="synthetic",
     )
+
+
+#: Where a cycle's initial fix came from (#214), recorded in its provenance.
+#: Before, every cycle used the storm's *latest* fix relabelled as the
+#: target time -- for a past label, a position from days later -- and
+#: reported `vitals: observed` whatever happened.
+FIX_SOURCES = ("tcvitals", "final_best_track", "extrapolated", "persisted")
+
+
+def initial_fix(
+    track: Track,
+    target: datetime,
+    *,
+    lat: float | None = None,
+    lon: float | None = None,
+    wind_kt: float | None = None,
+    withhold_vitals: bool = False,
+) -> tuple[Fix, str]:
+    """The cycle's initial fix, and where it came from.
+
+    * The storm's own fix at ``target``, as a WORKING fix (a live storm's
+      TC-Vitals, or -- for an archive storm -- its final best-track fix,
+      which is a label standing in for vitals nobody kept).
+    * Otherwise the last motion vector extrapolated to ``target``
+      (`inference.cycle.extrapolate_fix`, §6.2.2), ESTIMATED.
+    * Otherwise, with fewer than two earlier fixes, the latest earlier fix
+      held at its position, ESTIMATED.
+
+    ``withhold_vitals`` (the API's ``worst_case``) skips the first, as if
+    TC-Vitals hadn't landed. ``lat``/``lon``/``wind_kt`` override the
+    result (recorded on the run as overrides).
+    """
+    prior = tuple(f for f in track.fixes if f.valid_time <= target)
+    if not prior:
+        raise CycleError(f"{track.storm_id} has no fix at or before {target:%Y-%m-%d %HZ}")
+    at = prior[-1] if prior[-1].valid_time == target and not withhold_vitals else None
+    if at is not None:
+        base, quality = at, TrackQuality.WORKING
+        source = "final_best_track" if at.quality is TrackQuality.FINAL else "tcvitals"
+    else:
+        history = tuple(f for f in prior if f.valid_time < target)
+        if len(history) >= 2:
+            base, source = extrapolate_fix(history, target), "extrapolated"
+        else:
+            base, source = history[-1] if history else prior[-1], "persisted"
+        quality = TrackQuality.ESTIMATED
+    return Fix(
+        storm_id=track.storm_id,
+        valid_time=target,
+        lat=lat if lat is not None else base.lat,
+        lon=lon if lon is not None else base.lon,
+        max_wind_kt=wind_kt if wind_kt is not None else base.max_wind_kt,
+        min_pressure_mb=base.min_pressure_mb,
+        quality=quality,
+    ), source
 
 
 class RealState:
@@ -544,32 +607,51 @@ class RealState:
         coastline: tuple[float, float] | None,
         run: RunRequest,
     ) -> CycleOutput:
+        from ..data.atcf import TRAINED_BASINS, storm_basin
         from ..training.real_inference_cycle import build_real_deterministic_fn
         from ..training.real_inference_ensemble import build_real_ensemble_fn
+        from ..training.real_inference_live import _current_fields, live_gridded_source
 
+        started_at = datetime.now(UTC)
         self.refresh_registry_if_stale()
         self._ensure_drift_restored()
         storm_id = storm.storm_id
         oracle = LatencyOracle(use_max_latency=worst_case)
-        plan = plan_cycle(target, oracle)
-
-        base = storm.latest_fix
-        fix = Fix(
-            storm_id=storm_id,
-            valid_time=target,
-            lat=lat if lat is not None else base.lat,
-            lon=lon if lon is not None else base.lon,
-            max_wind_kt=wind_kt if wind_kt is not None else base.max_wind_kt,
-            min_pressure_mb=base.min_pressure_mb,
-            # A FINAL-quality archive fix is never a model input (§4.6.2) --
-            # mint a fresh WORKING/ESTIMATED fix at the same position.
-            quality=TrackQuality.ESTIMATED if plan.vitals_estimated else TrackQuality.WORKING,
+        fix, fix_source = initial_fix(
+            storm.track, target, lat=lat, lon=lon, wind_kt=wind_kt, withhold_vitals=worst_case,
         )
+        # The plan's `vitals_estimated` comes from a latency model; whether
+        # this cycle's vitals were really estimated is known here (#214).
+        plan = replace(
+            plan_cycle(target, oracle),
+            vitals_estimated=fix.quality is TrackQuality.ESTIMATED,
+        )
+        extra_flags = []
+        if storm.track.quality is TrackQuality.FINAL:
+            # An archive storm: its fixes are the final best track -- the
+            # training *labels* -- standing in for vitals that were never
+            # kept. Fine for a demonstration, never an as-issued forecast.
+            extra_flags.append("input:final_best_track")
+        if fix_source == "persisted":
+            extra_flags.append("vitals_source:persisted")
+        basin = storm_basin(storm_id)
+        if basin not in TRAINED_BASINS:
+            extra_flags.append(f"basin_untrained:{basin}")
+
+        fields: dict[str, object] = {}
+
+        def live_fields(track_, current_, cache_dir_):
+            # Kept for the cycle's input record (`_persist_inputs`).
+            fields["fields"] = _current_fields(track_, current_, cache_dir_)
+            return fields["fields"]
+
+        live_fields.source_name = live_gridded_source(target)  # type: ignore[attr-defined]
 
         def deterministic(plan_, fix_):
             try:
                 real_deterministic = build_real_deterministic_fn(
                     storm.track, self.registry, self._checkpoint_store, self._cache_dir,
+                    fields_fetcher=live_fields,
                 )
                 return real_deterministic(plan_, fix_)
             except Exception as exc:  # noqa: BLE001 - no real model contributing must degrade
@@ -592,12 +674,32 @@ class RealState:
             )
             return real_ensemble(det, n)
 
+        output = run_cycle(
+            plan, fix, deterministic, ensemble,
+            coastline=coastline, requested_members=members,
+            extra_flags=tuple(extra_flags),
+            # The real time it finished, so `issued_at`/`on_time` are what
+            # happened rather than the plan's target (#214).
+            now=datetime.now(UTC),
+        )
+        if output.deterministic.fusion == "synthetic":
+            # No real model ran: say so on the cycle, not only in a debug field.
+            output = replace(
+                output,
+                flags=(*output.flags, "deterministic_fallback:synthetic"),
+                products=replace(output.products, degraded=True),
+            )
         output = replace(
-            run_cycle(
-                plan, fix, deterministic, ensemble,
-                coastline=coastline, requested_members=members,
-            ),
+            output,
             run=run.info(),
+            provenance={
+                "fix_source": fix_source,
+                "fix": fix,
+                "basin": basin,
+                "trained_basin": basin in TRAINED_BASINS,
+                "started_at": started_at,
+                **provenance.summary(),
+            },
         )
         with self._lock:
             storm.cycles[output.label] = output
@@ -613,8 +715,24 @@ class RealState:
         # storage, not to any dict this class guards.
         self._record_skew_sample(storm, fix, output)
         self._persist_cycle(storm_id, output)
+        self._persist_inputs(storm, output, fields.get("fields"))
         self._persist_drift_live()
         return output
+
+    def _persist_inputs(self, storm: RealStormState, output: CycleOutput, fields) -> None:
+        """Best-effort durable record of what this cycle ran on (#214,
+        `api.cycle_store.save_cycle_inputs`): written for every run, real
+        model or synthetic fallback, scheduled or manual."""
+        from . import convert
+        from .cycle_store import save_cycle_inputs
+
+        try:
+            save_cycle_inputs(
+                self._checkpoint_store, convert.cycle_result_out(storm.storm_id, output),
+                storm.track, fields,
+            )
+        except Exception:  # noqa: BLE001 - best-effort, never fail a cycle over this
+            pass
 
     def _persist_cycle(self, storm_id: str, output: CycleOutput) -> None:
         """Best-effort durable copy of the served result (#175), outside the

@@ -72,6 +72,19 @@ class DeterministicForecast:
     #: `per_model_tracks` empty). Never set for the synthetic fallback or
     #: `DemoState`.
     env_features: np.ndarray | None = None
+    #: Provenance (#214). Which registered version of each contributing
+    #: model produced its track, the fusion fused with it (``fusion``
+    #: included when learned fusion ran), how the tracks were combined, and
+    #: the gridded analysis the models read -- what a later comparison or a
+    #: retrain needs to know about this forecast, and none of which was
+    #: recorded before.
+    model_versions: dict[str, int] = field(default_factory=dict)
+    #: ``learned`` (ConsensusFusion), ``inverse_error`` (the non-learned
+    #: consensus, any time fewer than all five models contribute),
+    #: ``synthetic`` (no real model: linear extrapolation), ``demo``, or
+    #: ``unknown`` for a forecast built outside these paths.
+    fusion: str = "unknown"
+    gridded_source: str | None = None
 
     def at(self, lead: int) -> tuple[float, float, float]:
         i = self.lead_hours.index(lead)
@@ -113,6 +126,11 @@ class CycleOutput:
     #: Set by the API state that ran the cycle; `None` for a cycle run
     #: outside the API (tests, replay harnesses).
     run: RunInfo | None = None
+    #: Set by the API state that ran the cycle (#214): where the initial fix
+    #: came from, the fix itself, basin, start time, commit and config
+    #: digest. Model versions, fusion and gridded source live on
+    #: ``deterministic``. `None` outside the API.
+    provenance: dict | None = None
 
     @property
     def label(self) -> str:
@@ -214,6 +232,7 @@ def run_cycle(
     coastline: tuple[float, float] | None = None,
     ensemble_seed: int = 0,
     requested_members: int | None = None,
+    extra_flags: tuple[str, ...] = (),
 ) -> CycleOutput:
     """Run one forecast cycle end to end.
 
@@ -237,8 +256,13 @@ def run_cycle(
     the moment Anemoi-Spread failed and climatology substituted (the
     common case today, see #100/PINN's live-ensemble gap), even though
     the cycle's own ``flags``/``payload`` never signalled anything wrong.
+
+    ``extra_flags`` are degradations only the caller knows about (#214):
+    where the initial fix came from, a synthetic deterministic fallback, an
+    untrained basin. They are recorded like the cycle's own, so they also
+    mark the products degraded.
     """
-    flags: list[str] = []
+    flags: list[str] = list(extra_flags)
 
     assert_input_safe([initial_fix])
     if initial_fix.valid_time != plan.target_time:
