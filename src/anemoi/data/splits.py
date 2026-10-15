@@ -61,6 +61,9 @@ STAGE_B_BOUNDARIES: dict[Split, tuple[int, int]] = {
 
 #: The first season of real GDAS data (`data.gdas_cache.GDAS_ARCHIVE_START`).
 GDAS_FIRST_SEASON = 2021
+#: The newest season an archive must reach for `season_boundaries` to cut a
+#: Stage B train/val/test split from it (one season each, at the least).
+MIN_LATEST_SEASON = GDAS_FIRST_SEASON + 2
 
 
 def latest_final_season(tracks: list[Track]) -> int:
@@ -97,9 +100,9 @@ def season_boundaries(latest_season: int) -> tuple[Boundaries, Boundaries]:
     way. As each spring's HURDAT2 adds a season, it becomes the test season
     and last year's test season becomes validation, then training.
     """
-    if latest_season < GDAS_FIRST_SEASON + 2:
+    if latest_season < MIN_LATEST_SEASON:
         raise ValueError(
-            f"need final labels through at least {GDAS_FIRST_SEASON + 2} for a Stage B "
+            f"need final labels through at least {MIN_LATEST_SEASON} for a Stage B "
             f"train/val/test split; the archive ends at {latest_season}"
         )
     operational = (latest_season + 1, 2100)

@@ -542,7 +542,6 @@ def cmd_retrain_check(args: argparse.Namespace) -> int:
     from .tracking.checkpoint_store import CheckpointStore, S3Config
     from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ALL_MODELS, GROUP1_MODELS, ModelRegistry
-    from .tracking.tags import Trigger
     from .training.orchestrator import Mode, build_schedule, run_schedule
     from .training.real_orchestrator import RealOrchestratorRunner
     from .training.triggers import Reason, SeasonState, evaluate_all
@@ -621,13 +620,10 @@ def cmd_retrain_check(args: argparse.Namespace) -> int:
     schedule = build_schedule(Mode.PARALLEL, models=GROUP1_MODELS)
     # The tag says why this run happened (#216): it said `manual_sweep`
     # for every run, whatever fired.
-    reason = next(j.reason for j in jobs if j.reason in dispatchable)
+    # `RetrainJob.trigger_tag` is the one Reason -> Trigger table.
+    fired = next(j for j in jobs if j.reason in dispatchable)
     runner = RealOrchestratorRunner(
-        trigger={
-            Reason.SCHEDULED_MONTHLY: Trigger.SCHEDULED_MONTHLY,
-            Reason.PRESEASON: Trigger.SEASONAL,
-            Reason.DATA_VOLUME: Trigger.DATA_VOLUME,
-        }[reason],
+        trigger=fired.trigger_tag,
         hurdat2_path=args.hurdat2,
         tracks=tracks,
         checkpoint_store=store,

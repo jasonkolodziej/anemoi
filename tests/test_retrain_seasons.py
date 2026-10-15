@@ -109,8 +109,15 @@ def test_stage_bs_validation_season_is_never_seen_by_stage_a(latest):
 
 
 def test_too_short_an_archive_is_refused():
+    from anemoi.data.splits import MIN_LATEST_SEASON
+    from anemoi.training.real_run import boundaries_for_tracks
+
     with pytest.raises(ValueError, match="through at least 2023"):
-        season_boundaries(2022)
+        season_boundaries(MIN_LATEST_SEASON - 1)
+    # boundaries_for_tracks uses the same threshold: an archive just short of
+    # it gets the fixed tables instead of season_boundaries' ValueError.
+    short = [_track("AL012022", MIN_LATEST_SEASON - 1)]
+    assert boundaries_for_tracks(Flavor.GDAS_FINETUNE, short)
 
 
 def _track(storm_id, season, n=4, quality=TrackQuality.FINAL, start_hour=0):

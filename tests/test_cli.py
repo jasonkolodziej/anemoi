@@ -505,6 +505,8 @@ def test_retrain_check_dispatches_the_real_schedule_when_a_trigger_fires(
     args = _retrain_check_args(tmp_path, now="2026-09-15T00:00:00+00:00", dry_run=False)
     assert cli.cmd_retrain_check(args) == 0
     assert captured["schedule_models"] == ["cnn", "gnn", "lstm", "pinn", "transformer"]
+    # Tagged with what fired (#216), via RetrainJob.trigger_tag.
+    assert captured["runner_kwargs"]["trigger"].value == "data_volume"
     out = capsys.readouterr().out
     assert "succeeded:" in out
 

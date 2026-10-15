@@ -34,6 +34,7 @@ from ..data.besttrack import Track, WorkingTrackNoise, augment_track
 from ..data.sources import Flavor
 from ..data.splits import (
     DEFAULT_BOUNDARIES,
+    MIN_LATEST_SEASON,
     STAGE_B_BOUNDARIES,
     Split,
     assign_splits,
@@ -76,10 +77,11 @@ def boundaries_for_flavor(
 def boundaries_for_tracks(flavor: Flavor, tracks: list[Track]) -> dict[Split, tuple[int, int]]:
     """`boundaries_for_flavor` for the archive actually being trained on:
     derived from its newest season (#216) whenever it reaches the first
-    season a Stage B split can be cut from (2023); the fixed tables only for
+    season a Stage B split can be cut from (`MIN_LATEST_SEASON`, the same
+    threshold `season_boundaries` enforces); the fixed tables only for
     small synthetic archives that don't."""
     latest = latest_final_season(tracks) if tracks else None
-    if latest is None or latest < 2023:
+    if latest is None or latest < MIN_LATEST_SEASON:
         return boundaries_for_flavor(flavor)
     return boundaries_for_flavor(flavor, latest)
 
