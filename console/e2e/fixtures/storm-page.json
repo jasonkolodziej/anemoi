@@ -1,0 +1,323 @@
+{
+ "_comment": "A demo-API storm and one of its cycles (AL012026, 20260810_06Z), captured as shape templates for e2e specs that mock the API -- storm-state-sync.spec.ts rewrites ids, times and cycle lists per test.",
+ "storm": {
+  "storm_id": "AL012026",
+  "name": null,
+  "season": 2026,
+  "active": true,
+  "latest_fix": {
+   "valid_time": "2026-08-10T06:00:00Z",
+   "lat": 16.68,
+   "lon": -41.96,
+   "max_wind_kt": 25.0,
+   "min_pressure_mb": 1010.0,
+   "quality": "final"
+  },
+  "peak_wind_kt": 141.7,
+  "last_cycle": null,
+  "basin": "AL",
+  "trained_basin": true,
+  "history": [
+   {
+    "valid_time": "2026-08-07T06:00:00Z",
+    "lat": 10.64,
+    "lon": -29.9,
+    "max_wind_kt": 25.0,
+    "min_pressure_mb": 1010.0,
+    "quality": "final"
+   },
+   {
+    "valid_time": "2026-08-07T12:00:00Z",
+    "lat": 10.84,
+    "lon": -30.74,
+    "max_wind_kt": 70.3,
+    "min_pressure_mb": 965.1,
+    "quality": "final"
+   },
+   {
+    "valid_time": "2026-08-07T18:00:00Z",
+    "lat": 11.06,
+    "lon": -31.63,
+    "max_wind_kt": 96.8,
+    "min_pressure_mb": 935.0,
+    "quality": "final"
+   },
+   {
+    "valid_time": "2026-08-08T00:00:00Z",
+    "lat": 11.32,
+    "lon": -32.56,
+    "max_wind_kt": 116.5,
+    "min_pressure_mb": 910.8,
+    "quality": "final"
+   },
+   {
+    "valid_time": "2026-08-08T06:00:00Z",
+    "lat": 11.59,
+    "lon": -33.54,
+    "max_wind_kt": 130.5,
+    "min_pressure_mb": 892.8,
+    "quality": "final"
+   },
+   {
+    "valid_time": "2026-08-08T12:00:00Z",
+    "lat": 11.86,
+    "lon": -34.58,
+    "max_wind_kt": 138.9,
+    "min_pressure_mb": 881.6,
+    "quality": "final"
+   },
+   {
+    "valid_time": "2026-08-08T18:00:00Z",
+    "lat": 12.24,
+    "lon": -35.63,
+    "max_wind_kt": 141.7,
+    "min_pressure_mb": 877.8,
+    "quality": "final"
+   },
+   {
+    "valid_time": "2026-08-09T00:00:00Z",
+    "lat": 12.7,
+    "lon": -36.71,
+    "max_wind_kt": 138.9,
+    "min_pressure_mb": 881.6,
+    "quality": "final"
+   },
+   {
+    "valid_time": "2026-08-09T06:00:00Z",
+    "lat": 13.29,
+    "lon": -37.79,
+    "max_wind_kt": 130.5,
+    "min_pressure_mb": 892.8,
+    "quality": "final"
+   },
+   {
+    "valid_time": "2026-08-09T12:00:00Z",
+    "lat": 13.97,
+    "lon": -38.86,
+    "max_wind_kt": 116.5,
+    "min_pressure_mb": 910.8,
+    "quality": "final"
+   },
+   {
+    "valid_time": "2026-08-09T18:00:00Z",
+    "lat": 14.74,
+    "lon": -39.94,
+    "max_wind_kt": 96.8,
+    "min_pressure_mb": 935.0,
+    "quality": "final"
+   },
+   {
+    "valid_time": "2026-08-10T00:00:00Z",
+    "lat": 15.64,
+    "lon": -40.98,
+    "max_wind_kt": 70.3,
+    "min_pressure_mb": 965.1,
+    "quality": "final"
+   },
+   {
+    "valid_time": "2026-08-10T06:00:00Z",
+    "lat": 16.68,
+    "lon": -41.96,
+    "max_wind_kt": 25.0,
+    "min_pressure_mb": 1010.0,
+    "quality": "final"
+   }
+  ],
+  "cycles": []
+ },
+ "cycle": {
+  "storm_id": "AL012026",
+  "payload": {
+   "cycle": "20260810_06Z",
+   "issued_at": "2026-08-10T07:40:00Z",
+   "advisory_deadline": "2026-08-10T09:00:00Z",
+   "nwp_cycle_lag_hours": 6,
+   "vitals": "observed",
+   "ensemble_size": 5,
+   "rapid_intensification": false,
+   "ri_probability": 0.0,
+   "ri_probability_lo": 0.0,
+   "ri_probability_hi": 0.434,
+   "ri_uncertain": true,
+   "cone": [
+    {
+     "lead_hours": 12,
+     "lat": 17.572,
+     "lon": -43.022,
+     "radius_nm": 25.0,
+     "basis": "climatology"
+    },
+    {
+     "lead_hours": 24,
+     "lat": 18.65,
+     "lon": -43.987,
+     "radius_nm": 39.0,
+     "basis": "climatology"
+    },
+    {
+     "lead_hours": 36,
+     "lat": 19.48,
+     "lon": -45.249,
+     "radius_nm": 49.0,
+     "basis": "climatology"
+    },
+    {
+     "lead_hours": 48,
+     "lat": 20.151,
+     "lon": -46.485,
+     "radius_nm": 62.0,
+     "basis": "climatology"
+    },
+    {
+     "lead_hours": 72,
+     "lat": 21.445,
+     "lon": -47.225,
+     "radius_nm": 95.0,
+     "basis": "climatology"
+    },
+    {
+     "lead_hours": 96,
+     "lat": 21.707,
+     "lon": -49.697,
+     "radius_nm": 134.0,
+     "basis": "climatology"
+    },
+    {
+     "lead_hours": 120,
+     "lat": 23.586,
+     "lon": -50.156,
+     "radius_nm": 200.0,
+     "basis": "climatology"
+    }
+   ],
+   "flags": [],
+   "coastline_lat": null,
+   "coastline_lon": null
+  },
+  "products": {
+   "deterministic_track": [
+    {
+     "lead_hours": 12,
+     "lat": 17.58,
+     "lon": -43.06,
+     "wind_kt": 28.6
+    },
+    {
+     "lead_hours": 24,
+     "lat": 18.48,
+     "lon": -44.16,
+     "wind_kt": 31.4
+    },
+    {
+     "lead_hours": 36,
+     "lat": 19.38,
+     "lon": -45.26,
+     "wind_kt": 33.4
+    },
+    {
+     "lead_hours": 48,
+     "lat": 20.28,
+     "lon": -46.36,
+     "wind_kt": 34.6
+    },
+    {
+     "lead_hours": 72,
+     "lat": 21.18,
+     "lon": -47.46,
+     "wind_kt": 35.0
+    },
+    {
+     "lead_hours": 96,
+     "lat": 22.08,
+     "lon": -48.56,
+     "wind_kt": 34.6
+    },
+    {
+     "lead_hours": 120,
+     "lat": 22.98,
+     "lon": -49.66,
+     "wind_kt": 33.4
+    }
+   ],
+   "contributors": {
+    "lstm": 0.2,
+    "transformer": 0.35,
+    "gnn": 0.25,
+    "cnn": 0.2
+   },
+   "per_model_tracks": {},
+   "missing_model_reasons": {},
+   "intensity_pdf": [
+    {
+     "lead_hours": 12,
+     "p10": 22.5,
+     "p25": 25.6,
+     "p50": 29.1,
+     "p75": 33.2,
+     "p90": 39.9
+    },
+    {
+     "lead_hours": 24,
+     "p10": 23.0,
+     "p25": 24.3,
+     "p50": 27.5,
+     "p75": 30.1,
+     "p90": 36.7
+    },
+    {
+     "lead_hours": 36,
+     "p10": 22.7,
+     "p25": 24.5,
+     "p50": 26.5,
+     "p75": 31.7,
+     "p90": 35.1
+    },
+    {
+     "lead_hours": 48,
+     "p10": 26.5,
+     "p25": 27.7,
+     "p50": 37.6,
+     "p75": 38.1,
+     "p90": 41.8
+    },
+    {
+     "lead_hours": 72,
+     "p10": 26.9,
+     "p25": 34.1,
+     "p50": 34.1,
+     "p75": 39.7,
+     "p90": 42.6
+    },
+    {
+     "lead_hours": 96,
+     "p10": 23.1,
+     "p25": 24.4,
+     "p50": 30.5,
+     "p75": 32.7,
+     "p90": 37.0
+    },
+    {
+     "lead_hours": 120,
+     "p10": 24.0,
+     "p25": 24.3,
+     "p50": 33.7,
+     "p75": 42.9,
+     "p90": 43.1
+    }
+   ],
+   "landfall_probability": null,
+   "notes": [
+    "ensemble of 5 below the 10-member minimum; cone drawn from climatological radii"
+   ],
+   "degraded": true
+  },
+  "on_time": true,
+  "run": {
+   "source": "manual",
+   "overrides": [
+    "members"
+   ]
+  },
+  "provenance": null
+ }
+}
