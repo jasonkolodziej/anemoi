@@ -36,6 +36,10 @@ jobs:
         id: vars
         run: echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
+      - name: Record the commit for the image
+        # anemoi.provenance (#214): registered models record the commit.
+        run: .github/scripts/write-build-info.sh "$GITHUB_SHA"
+
       # Build and load locally first: an image that can't find its configs
       # (read at import since #211) must fail here, not in a Cloud Run job.
       - name: Build image
@@ -55,6 +59,8 @@ jobs:
             REPO_URL=${{ github.server_url }}/${{ github.repository }}
 
       - name: Smoke-test the training image
+        env:
+          EXPECT_GIT_SHA: ${{ github.sha }}
         run: .github/scripts/smoke-test-image.sh anemoi-train:smoke training
 
       - name: Push image

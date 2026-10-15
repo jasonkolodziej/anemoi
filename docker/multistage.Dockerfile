@@ -50,6 +50,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --extra gridded
 
 COPY . /app
+# build-info.json: the commit this image was built from, written by CI
+# before every build (anemoi.provenance, #214). `{}` for a local build, so
+# the runtime COPY below always has a file and provenance says "unknown"
+# rather than inventing one.
+RUN test -f /app/build-info.json || echo '{}' > /app/build-info.json
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked \
@@ -80,6 +85,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --extra torch-cpu
 
 COPY . /app
+# See training-builder.
+RUN test -f /app/build-info.json || echo '{}' > /app/build-info.json
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked \
@@ -144,6 +151,8 @@ COPY --from=training-builder /app/data /app/data
 # Read at import by anemoi.config (#211): curriculum, schedule and monitoring
 # settings. Without it every anemoi import fails with a ConfigError.
 COPY --from=training-builder /app/configs /app/configs
+# The commit this image was built from (anemoi.provenance, #214).
+COPY --from=training-builder /app/build-info.json /app/build-info.json
 COPY docker/cloud-run-training/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
@@ -181,6 +190,8 @@ COPY --from=api-builder --chown=app:app /app/src /app/src
 COPY --from=api-builder --chown=app:app /app/data /app/data
 # Read at import by anemoi.config (#211); the API won't start without it.
 COPY --from=api-builder --chown=app:app /app/configs /app/configs
+# The commit this image was built from (anemoi.provenance, #214).
+COPY --from=api-builder /app/build-info.json /app/build-info.json
 
 USER app
 

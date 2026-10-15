@@ -583,6 +583,27 @@ Even with entry 44, a cache miss still meant waiting on a cold container, behind
 
 **Enforced by** `tests/test_atcf_archive.py`: verbatim bytes for every product and basin; identical content not rewritten and nothing overwritten; the 3-day window; per-file failure isolation; an unreachable index raising; revisions read back in issue order; the live track taking the corrected position; the internal route and Workflow step existing.
 
+### 51. A served cycle didn't say what it ran on -- and some of what it said wasn't true (#214) — *bugfix, provenance*
+
+**Found in the same review (training/serving skew).**
+
+- **The initial fix was the storm's latest, relabelled.** `RealState.run_cycle` built every cycle's fix from `storm.latest_fix` with the target time stamped on it. For a past label that was a position from later in the storm's life -- a manual 06Z run on a storm last fixed at 18Z started from the 18Z position. `extrapolate_fix` (§6.2.2) existed and was never called.
+- **`vitals: observed`, `nwp_cycle_lag_hours: 6`, `issued_at` and `on_time` came from the plan, not from what happened.** The plan uses a static latency model, so every cycle reported observed vitals and an on-time issue at the plan's target, whatever the clock said.
+- **A cycle no trained model ran on carried no flag.** Only `contributors: {}` gave the straight-line placeholder away.
+- **Nothing recorded which model versions ran, how they were combined, which gridded analysis they read, the commit or the config** -- so no later comparison (skew, calibration, a retrain's evaluation) could be sliced by any of it. Neither image carries `.git`, so even training runs had no commit.
+- **EP/CP/WP storms ran through AL-trained models** with nothing on the cycle saying so.
+
+**Fix.**
+
+- `initial_fix()`: the storm's own fix at the cycle time (WORKING; `final_best_track` for an archive storm, whose fixes are labels), else the last motion vector extrapolated (`extrapolate_fix`, ESTIMATED), else the last earlier fix held. `vitals_estimated` follows what happened; `worst_case` withholds the fix.
+- `issued_at`/`on_time` are when the cycle finished (`nwp_cycle_lag_hours` is entry 52's). New flags: `deterministic_fallback:synthetic`, `input:final_best_track`, `vitals_source:persisted`, `basin_untrained:<basin>`.
+- The real deterministic path records `model_versions` (with `fusion` when learned fusion ran), `fusion` (`learned`/`inverse_error`/`synthetic`/`demo`) and `gridded_source`; it now reads the gridded fields once per cycle and shares them across models.
+- Every result carries `provenance` (fix source and the fix itself, model versions, fusion, gridded source, basin, start time, commit, configs digest), served and stored. The console says in a line what the cycle started from and how it was combined.
+- **A record per run** at `archive/cycles/{year}/{storm}/{label}/{started}/`: `manifest.json` (the result and the storm's fixes up to the cycle time) and `fields.npz` (the gridded fields the models read). With the commit, enough to rebuild every model's input. Written for every run, real model or not -- the skew record only covered cycles a real model ran on.
+- **`anemoi.provenance`**: the commit from `ANEMOI_GIT_SHA`, else `build-info.json` (written by CI before every image build -- test, deploy, GHCR, Cloud Build -- and copied into both images), else `git rev-parse`, else `None`; and a sha256 over `configs/*.yaml`. The smoke test checks the image reports the commit CI built it from.
+
+**Enforced by** `tests/test_cycle_provenance.py` (the fix at the cycle time not the latest; each fix source; overrides; the commit from env and from `build-info.json`; through the API: provenance, flags, a real `issued_at`, `on_time` false for a late cycle, the input record with and without gridded fields, an extrapolated EP storm flagged untrained) and new assertions in `tests/test_real_inference_cycle.py` (versions and fusion recorded for four models and for the learned five).
+
 ---
 
 ## Implementation → rebrand

@@ -99,6 +99,20 @@
     return { label, due, status };
   });
 
+  // #214: what the cycle actually ran on, in words.
+  const FIX_SOURCE_TEXT: Record<string, string> = {
+    tcvitals: "the storm's TC-Vitals fix at the cycle time",
+    final_best_track: "the final best-track fix (an archive storm — not an as-issued forecast)",
+    extrapolated: "a fix extrapolated from earlier ones (vitals hadn't landed)",
+    persisted: "the last earlier fix, held in place (too little history to extrapolate)",
+  };
+  const FUSION_TEXT: Record<string, string> = {
+    learned: "all five models, combined by the learned fusion",
+    inverse_error: "the models available, combined by their validation error",
+    synthetic: "no trained model could run — a straight-line placeholder",
+    demo: "demo models",
+  };
+
   function formatHourMinute(d: Date): string {
     const pad = (n: number) => String(n).padStart(2, "0");
     const local = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
@@ -321,6 +335,12 @@
                 A manual run{cycle.run.overrides.length > 0
                   ? ` (changed: ${cycle.run.overrides.join(", ")})`
                   : ""}, not the scheduled one — the scheduled run replaces it.
+              </p>
+            {/if}
+            {#if cycle.provenance}
+              <p class="mt-1 text-xs text-text-muted" data-testid="cycle-provenance">
+                Started from {FIX_SOURCE_TEXT[cycle.provenance.fix_source]};
+                {FUSION_TEXT[cycle.provenance.fusion] ?? cycle.provenance.fusion}.
               </p>
             {/if}
             <p class="mt-1 text-xs text-text-muted">

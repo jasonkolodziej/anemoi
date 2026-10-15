@@ -22,12 +22,18 @@ image=${1:?usage: smoke-test-image.sh <image> <api|training>}
 target=${2:?usage: smoke-test-image.sh <image> <api|training>}
 
 check_configs() {
-	docker run --rm --entrypoint python "$image" -c '
+	docker run --rm --entrypoint python -e EXPECT_GIT_SHA="${EXPECT_GIT_SHA:-}" "$image" -c '
+import os
 import anemoi.config as c
+import anemoi.provenance as prov
 import anemoi.inference.scheduler as s
 import anemoi.training.curriculum as cu
 import anemoi.training.promotion as p
 assert str(c.config_dir()) == "/app/configs", c.config_dir()
+# The commit the image was built from (#214): CI passes the one it wrote.
+expected = os.environ.get("EXPECT_GIT_SHA")
+assert not expected or prov.git_sha() == expected, (prov.git_sha(), expected)
+print("git sha:", prov.git_sha(), "| config sha256:", prov.config_digest()[:12])
 print("configs:", c.config_dir(), "| members:", s.DEFAULT_ENSEMBLE_MEMBERS,
       "| stage B epochs:", cu.stage_b().epochs, "| thresholds:", len(p.DEFAULT_THRESHOLDS))
 '

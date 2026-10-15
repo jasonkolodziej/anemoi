@@ -67,6 +67,14 @@ def gdas_likely_unpublished(valid_time: datetime, now: datetime | None = None) -
     return valid_time + latency > now
 
 
+def live_gridded_source(valid_time: datetime) -> str:
+    """Where `_current_fields` reads a cycle's gridded analysis from, as
+    recorded in the cycle's provenance (#214)."""
+    from ..data.real_gridded import _gdas_analysis_url
+
+    return _gdas_analysis_url(valid_time)
+
+
 def _current_window(track: Track, current: Fix, length: int) -> tuple[Fix, ...] | None:
     return track.window_ending(current.valid_time, length)
 
@@ -137,6 +145,9 @@ def era5t_fields(track: Track, current: Fix, cache_dir: Path | str) -> GriddedFi
         return fetch_era5t_one(current.valid_time, current.lat, current.lon)
     except Exception:  # noqa: BLE001 - no real field available must degrade, never crash
         return None
+
+
+era5t_fields.source_name = "era5t"  # type: ignore[attr-defined] - read by the cycle's provenance
 
 
 def build_live_lstm_x(track: Track, current: Fix) -> np.ndarray | None:

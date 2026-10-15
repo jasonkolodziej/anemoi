@@ -82,6 +82,7 @@ The hierarchy above is the plan. What the deployed system actually writes to the
 | `api/drift_live.json` | the API, every cycle | Rolling window of live environment-feature vectors |
 | `monitoring/skew_operational/…` | the API, every real-model cycle | Replay inputs for the ERA5T skew audit |
 | `monitoring/calibration_samples.json` | the calibration audit | Cone and intensity-band hit/miss samples |
+| `archive/cycles/{year}/{storm}/{label}/{started}/` | the API, every cycle run | `manifest.json` (the served result with `run` and `provenance`, and the storm's fixes up to the cycle time) and `fields.npz` (the gridded fields the models read, when there were any). One per *run*, so a replaced manual run keeps its record (#214) |
 | `archive/atcf/{year}/…` | the cycle Workflow's **archive atcf** step, `anemoi atcf-archive` | NHC's as-issued files, verbatim: `_currentstorms/`, and per storm `tcvitals/`, `bdeck/`, `adeck/` -- one object per distinct content, keyed `{fetched}_{sha12}`, never overwritten (#213) |
 
 `archive/atcf/` is the only copy of the working fixes anyone keeps: NHC overwrites the working b-deck with the final best track after the season. It is the working half of the (working, final) pairs that calibrate the Stage B noise emulator ([Decision Log #50](Decision-Log#50-the-as-issued-working-fixes-were-never-kept-213--data)). Keep it permanently; it is a few MB a season.

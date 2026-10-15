@@ -13,6 +13,10 @@ The cycle is written around its failure modes, because a hurricane forecast that
 | Condition | Behaviour | Flag |
 |---|---|---|
 | Working fix late past the timeout | Extrapolate from the last two fixes | `vitals=estimated` |
+| Fewer than two earlier fixes to extrapolate from | Hold the last fix in place | `vitals=estimated`, `vitals_source:persisted` |
+| No trained model can run | Straight-line placeholder track | `deterministic_fallback:synthetic` |
+| Archive storm (final best track as input) | Runs, but it is not an as-issued forecast | `input:final_best_track` |
+| Storm outside the trained basins | Runs out of distribution | `basin_untrained:<basin>` |
 | `t−6` NWP missing | Fall back to `t−12` | `nwp_stale=12h` |
 | All NWP missing within 12 h | Abandon the cycle; LSTM + climatology mode | `CycleAbandoned` raised |
 | Diffusion crash or empty ensemble | Climatological-spread ensemble | `spread_fallback:<ExcType>` |
