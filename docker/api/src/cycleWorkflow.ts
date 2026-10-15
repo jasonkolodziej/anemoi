@@ -10,7 +10,8 @@
  * its own, a finished step is never re-run, and one storm's failure never
  * stops the others.
  *
- *   find active storms -> run cycle {storm} (one step each) -> refresh read cache -> calibration audit
+ *   find active storms -> run cycle {storm} (one step each) -> refresh read cache
+ *     -> calibration audit -> archive atcf
  *
  * The cron starts one instance per cycle label (`index.ts`'s `scheduled`),
  * with the label as the instance id, so an at-least-once duplicate cron
@@ -116,7 +117,24 @@ export class CycleWorkflow extends WorkflowEntrypoint<Env, CycleParams> {
 			/* retries exhausted; recorded in the output below */
 		}
 
-		return { cycleLabel, outcomes, snapshot, audit };
+		// Last, so it never delays a cycle: NHC's as-issued files (TC-Vitals,
+		// b-deck, a-deck, CurrentStorms.json) copied to R2 before NHC
+		// overwrites or drops them -- the working half of the (working, final)
+		// pairs retraining needs (#213, `data.atcf_archive`).
+		let archive = 'failed';
+		try {
+			archive = await step.do('archive atcf', LIGHT_STEP, async () => {
+				const res = await fetchContainer(new Request('https://internal/v1/internal/archive-atcf', { method: 'POST' }));
+				const body = await res.text();
+				log(`archive atcf -> ${res.status} ${body.slice(0, 300)}`);
+				if (!res.ok) throw new Error(`archive atcf -> ${res.status}`);
+				return body;
+			});
+		} catch {
+			/* retries exhausted; recorded in the output below */
+		}
+
+		return { cycleLabel, outcomes, snapshot, audit, archive };
 	}
 }
 

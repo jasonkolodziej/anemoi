@@ -53,11 +53,12 @@ The deployed `anemoi-api-real` Worker's cron (`30 1,7,13,19 * * *`, UTC) fires a
 1. **find due storms** -- every active storm (since #212 the API, not this step, decides whether the label has already run);
 2. **run cycle {storm}** -- one step per storm, marked as the scheduled run and with the API's full ensemble (it sent `members: 20` until #212). The API answers `409` `exists` if the scheduled run already happened (`already run`), replaces a manual run of the label, and answers `409` `in_progress` if the label is running (retried). A 5xx or an unreachable container is retried twice; any other 4xx is recorded as `refused`;
 3. **refresh read cache** -- the KV snapshot the console reads;
-4. **calibration audit** -- see [Monitoring](Monitoring#calibration-audit).
+4. **calibration audit** -- see [Monitoring](Monitoring#calibration-audit);
+5. **archive atcf** -- copies NHC's as-issued TC-Vitals, b-deck, a-deck and `CurrentStorms.json` to R2 `archive/atcf/` (#213). Its output lists the storms covered and how many files were new; `not_published` (e.g. no a-deck yet) is normal, `error` means NHC's index or the store was unreachable and the next cycle retries. Run it by hand with `anemoi atcf-archive` (needs `S3_ARTIFACT_*`); `anemoi atcf-archive --list 2026` summarises a season's archived TC-Vitals.
 
 So between t+0:00 and t+1:30 the newest forecast on a storm is still the previous cycle's. The console's storm page says so ("The 20261008_06Z cycle hasn't run yet — it's scheduled for 07:30Z").
 
-**Where to look:** Cloudflare dashboard → **Workers & Pages → Workflows → anemoi-cycle** (its own sidebar entry, not a tab on the Worker). Instances are named `cycle-<label>`, e.g. `cycle-20261008_06Z`; each shows per-step outcomes and retries, and its output lists every storm as `ran`, `refused`, `already run` or `failed`. Or: `wrangler workflows instances list anemoi-cycle`. Step logs appear in `wrangler tail` as `cycle workflow <label>: ...`.
+**Where to look:** Cloudflare dashboard → **Workers & Pages → Workflows → anemoi-cycle** (its own sidebar entry, not a tab on the Worker). Instances are named `cycle-<label>`, e.g. `cycle-20261008_06Z`; each shows per-step outcomes and retries, and its output lists every storm as `ran`, `refused`, `already run` or `failed`, plus the `archive` step's report. Or: `wrangler workflows instances list anemoi-cycle`. Step logs appear in `wrangler tail` as `cycle workflow <label>: ...`.
 
 ---
 

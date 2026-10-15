@@ -561,6 +561,28 @@ Even with entry 44, a cache miss still meant waiting on a cold container, behind
 
 **Enforced by** `tests/test_cycle_policy.py` (each rule, through the real API too: run info stored in R2, the scheduled run replacing a manual one, an operator replace, the `not_scheduled_yet` window, a concurrent run refused, the image's caller requirement, the real-mode WebSocket) and `docker/api/test/*.test.ts` under `pnpm test` (encoded-slash and encoded-letter cycle paths, undecodable paths, the Workflow's reading of each API answer, cache keys for the new routes, anonymous vs signed-in bypass), now run by "Test: docker/api".
 
+### 50. The as-issued working fixes were never kept (#213) — *data*
+
+**Found reviewing whether current-year storms are collected well enough to retrain on.** Training builds its inputs from final best-track positions plus noise (`besttrack.emulate_working_track`) whose sizes -- 15 nm, 5 kt, 3 mb -- are placeholders. The fix the code already has, `recalibrate_from_pairs`, needs (working, final) pairs for the same storm and time. The final half arrives in HURDAT2 each spring. The working half was not being kept by anyone in a form we can rely on:
+
+- the live feed was held in memory for 30 minutes; only the last 20 fixes of cycles a *real model* contributed to reached R2 (`monitoring/skew_operational/`);
+- NHC overwrites the working b-deck (`atcf/btk/`) with the final best track after the season, and documents no retention for `atcf/com/*-tcvitals-arch.dat` or `CurrentStorms.json`;
+- `fetch_live_track` kept the *first* bulletin per valid time, so NHC's own corrections never reached the live track either.
+
+**Fix.** `data.atcf_archive` copies NHC's files verbatim to R2 `archive/atcf/{year}/` after every synoptic cycle -- a new last step of the cycle Workflow (`archive atcf`, via `POST /v1/internal/archive-atcf`), so it never delays a forecast -- and by hand with `anemoi atcf-archive`:
+
+- `CurrentStorms.json`, and per storm its TC-Vitals archive, working b-deck and public a-deck (whose CARQ lines carry the as-issued initial conditions);
+- **every basin** NHC lists, not only the trained one -- an EP storm's pairs estimate the same noise, and choosing later is free;
+- **only new content is written**, keyed `{fetched}_{sha12}`; nothing is overwritten, so every revision NHC served is kept exactly once;
+- a storm stays on the list for 3 days after it leaves `CurrentStorms.json`, so its last bulletins and the post-storm b-deck are caught;
+- best-effort per file: a missing a-deck is `not_published`, one failed fetch doesn't stop the rest; only an unreachable index fails the step (retried, and the next cycle tries again).
+
+`archived_tcvitals(store, season)` reads a season back: every bulletin once, in issue order, revisions included -- the first is what was used at the time, the last is NHC's correction. The live track now uses the latest revision per valid time.
+
+**Not in this change:** using the archive. Pairing it against HURDAT2 to recalibrate the noise, and counting it toward the data-volume trigger, need a HURDAT2 newer than the pinned 2023 file -- entry 53. `data.sources`' `besttrack_working.retention` said "permanent"; it now says what's true.
+
+**Enforced by** `tests/test_atcf_archive.py`: verbatim bytes for every product and basin; identical content not rewritten and nothing overwritten; the 3-day window; per-file failure isolation; an unreachable index raising; revisions read back in issue order; the live track taking the corrected position; the internal route and Workflow step existing.
+
 ---
 
 ## Implementation → rebrand

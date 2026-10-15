@@ -65,7 +65,12 @@ REGISTRY: dict[str, DataSource] = {
             typical_latency=45 * _M,
             max_latency=90 * _M,
             fmt="ATCF text",
-            retention="permanent",
+            retention=(
+                "not kept upstream as issued: the working b-deck is overwritten with "
+                "the final best track after the season, and TC-Vitals/CurrentStorms "
+                "have no documented retention -- archived verbatim to durable storage "
+                "after every cycle (data.atcf_archive, #213)"
+            ),
             notes="Gating input for the cycle. Noisy real-time fixes.",
         ),
         DataSource(
