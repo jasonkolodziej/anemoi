@@ -230,7 +230,8 @@ def test_the_gridded_fields_a_cycle_read_are_kept(client, s3, monkeypatch):
     assert client.post(
         "/v1/storms/AL012026/cycles", json={"cycle": "20260901_18Z"}, headers=SCHED,
     ).status_code == 201
-    keys = sorted(k for k in s3.objects if k.startswith("archive/cycles/2026/AL012026/20260901_18Z/"))
+    prefix = "archive/cycles/2026/AL012026/20260901_18Z/"
+    keys = sorted(k for k in s3.objects if k.startswith(prefix))
     assert [k.rsplit("/", 1)[1] for k in keys] == ["fields.npz", "manifest.json"]
     assert json.loads(s3.objects[keys[1]])["fields"] == "fields.npz"
 
@@ -238,8 +239,9 @@ def test_the_gridded_fields_a_cycle_read_are_kept(client, s3, monkeypatch):
 def test_late_vitals_on_a_live_storm_read_as_estimated(client, monkeypatch):
     now_start = floor_synoptic(datetime.now(UTC))
     live = Track(storm_id="EP972026", fixes=tuple(
-        Fix(storm_id="EP972026", valid_time=now_start - timedelta(hours=h), lat=15.0, lon=-100.0 - h / 6,
-            max_wind_kt=50.0, min_pressure_mb=995.0, quality=TrackQuality.WORKING)
+        Fix(storm_id="EP972026", valid_time=now_start - timedelta(hours=h), lat=15.0,
+            lon=-100.0 - h / 6, max_wind_kt=50.0, min_pressure_mb=995.0,
+            quality=TrackQuality.WORKING)
         for h in (12, 6)
     ))
     monkeypatch.setattr("anemoi.data.live_atcf.fetch_live_tracks", lambda: [live])

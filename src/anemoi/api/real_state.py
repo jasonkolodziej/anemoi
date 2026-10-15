@@ -39,9 +39,9 @@ import numpy as np
 if TYPE_CHECKING:
     from ..training.triggers import RetrainJob
 
+from .. import provenance
 from ..data.availability import LatencyOracle
 from ..data.besttrack import Fix, Track, TrackQuality
-from .. import provenance
 from ..inference.cycle import (
     CycleError,
     CycleOutput,
