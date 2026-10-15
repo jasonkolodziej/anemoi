@@ -17,7 +17,8 @@ name: Deploy
 #               run instead of being dropped.
 # test-console  typecheck, build, auth e2e against the built Worker on workerd
 #               with better-auth's schema check on (D1 built from
-#               console/migrations/). Uploads the tested build for deploy.
+#               console/migrations/), and the storm page's state-sync e2e
+#               (API mocked in the browser). Uploads the tested build.
 # test-api      docker/api's TypeScript check, plus the Python tests for the
 #               API the container serves (tests/test_api_*.py) with the
 #               image's own extras except torch-cpu.
@@ -137,9 +138,10 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Auth e2e against the built Worker (workerd)
+      - name: Auth + storm page e2e against the built Worker (workerd)
         # global-setup.ts applies console/migrations/ to a fresh local D1;
-        # the config turns better-auth's schema check on.
+        # the config turns better-auth's schema check on. The storm page
+        # suite mocks the API in the browser, so needs no backend.
         run: pnpm run test:e2e:workerd
 
       - name: Upload Playwright traces

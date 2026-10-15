@@ -1,15 +1,19 @@
 import { test, expect } from '@playwright/test';
+import { runFreshCycle, signIn } from './helpers/storm';
 
 // Model Pantheon (ModelStatusPanel.svelte): real branding data
 // (direction/persona from $lib/branding, weights from the real cycle
 // response), not fabricated -- hovering a row reveals its persona and
 // highlights it in the model's own brand color.
 
+// Running a cycle needs an account (#171).
+test.beforeEach(async ({ page }) => signIn(page));
+
 test('model pantheon reveals persona on hover', async ({ page }) => {
 	await page.goto('/');
 	await page.locator('a[href^="/storms/"]').first().click();
 	await page.waitForSelector('#cycle-input');
-	await page.getByRole('button', { name: 'Run cycle' }).click();
+	await runFreshCycle(page);
 	await page.waitForSelector('text=Model Pantheon');
 
 	const firstRow = page.locator('[role="group"]').first();
@@ -34,7 +38,7 @@ test('model pantheon has no "not weighing in" section without real skip reasons'
 	await page.goto('/');
 	await page.locator('a[href^="/storms/"]').first().click();
 	await page.waitForSelector('#cycle-input');
-	await page.getByRole('button', { name: 'Run cycle' }).click();
+	await runFreshCycle(page);
 	await page.waitForSelector('text=Model Pantheon');
 
 	await expect(page.getByText('Not weighing in')).toHaveCount(0);

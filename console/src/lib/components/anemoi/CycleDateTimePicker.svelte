@@ -35,6 +35,14 @@
 	let open = $state(false);
 
 	const parsed = $derived(parseCycleLabel(value));
+	// A label at an hour no cycle starts at (e.g. `_07Z`, typed into the
+	// text field) has no option here: without the blank one, the select
+	// fell back to showing 00Z while the field said 07Z.
+	const hour = $derived(
+		parsed && (SYNOPTIC_HOURS as readonly number[]).includes(parsed.getUTCHours())
+			? parsed.getUTCHours()
+			: null,
+	);
 	const calendarValue = $derived<CalendarDate | undefined>(
 		parsed
 			? new CalendarDate(parsed.getUTCFullYear(), parsed.getUTCMonth() + 1, parsed.getUTCDate())
@@ -61,6 +69,7 @@
 		<span class="mb-1 block text-[11px] text-text-faint">date</span>
 		<Popover.Root bind:open>
 			<Popover.Trigger
+				data-testid="cycle-date-trigger"
 				class={cn(
 					'font-data flex h-7.5 w-32 items-center justify-center rounded-md border',
 					'border-border-strong bg-bg px-2.5 text-xs text-text hover:bg-surface-raised',
@@ -78,11 +87,11 @@
 		<label for="cycle-hour-select" class="mb-1 block text-[11px] text-text-faint">time (UTC)</label>
 		<select
 			id="cycle-hour-select"
-			value={parsed?.getUTCHours() ?? ''}
+			value={hour ?? ''}
 			onchange={(e) => onHourChange(Number(e.currentTarget.value))}
 			class="font-data h-7.5 w-20 rounded-md border border-border-strong bg-bg px-2 text-xs text-text"
 		>
-			{#if parsed === null}
+			{#if hour === null}
 				<option value="" disabled selected>—</option>
 			{/if}
 			{#each SYNOPTIC_HOURS as h (h)}

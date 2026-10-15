@@ -20,6 +20,8 @@
 	import { superForm, type SuperValidated, type Infer } from "sveltekit-superforms";
 	import { arktype } from "sveltekit-superforms/adapters";
 	import { goto } from "$app/navigation";
+	import { page } from "$app/state";
+	import { safeNext } from "$lib/auth-return";
 	import { authClient } from "$lib/auth-client";
 	import { Button } from "$lib/components/ui/button/index";
 	import * as Form from "$lib/components/ui/form/index";
@@ -31,6 +33,10 @@
 		form: SuperValidated<Infer<LoginSchema>>;
 	}
 	let { form: formProp }: Props = $props();
+
+	// Back to the page that asked for a sign-in (e.g. a storm whose "Run
+	// cycle" needs one), not always /profile.
+	const next = $derived(safeNext(page.url.searchParams.get("next")));
 
 	let loading = $state(false);
 	let errorMsg = $state("");
@@ -69,7 +75,7 @@
 			// otherwise keep showing "Sign in" after a passkey login until a
 			// full page reload (magic link/OAuth redirect through the browser
 			// instead, so they don't need this).
-			await goto("/profile", { invalidateAll: true });
+			await goto(next, { invalidateAll: true });
 		} catch (err) {
 			console.error("[auth:passkey] unexpected error:", err);
 			errorMsg = err instanceof Error ? err.message : "An unexpected error occurred";
@@ -85,7 +91,7 @@
 		try {
 			const { error } = await authClient.signIn.magicLink({
 				email: email.trim(),
-				callbackURL: "/profile",
+				callbackURL: next,
 			});
 			if (error) {
 				console.error("[auth:magic-link] sign-in error:", error);
@@ -110,7 +116,7 @@
 		try {
 			await authClient.signIn.social({
 				provider,
-				callbackURL: "/profile",
+				callbackURL: next,
 			});
 		} catch (err) {
 			console.error(`[auth:oauth:${provider}] unexpected error:`, err);
