@@ -50,7 +50,7 @@ from ..models.base import DEFAULT_LEADS, require_torch
 from .device import get_device
 from .real_run import (
     RunArtifacts,
-    boundaries_for_flavor,
+    boundaries_for_tracks,
     displacement_to_latlon,
     iter_stage_windows,
 )
@@ -376,7 +376,7 @@ def extract_joint_latents(
     if missing:
         raise ValueError(f"missing trained Group 1 model(s): {missing}")
 
-    boundaries = boundaries_for_flavor(Flavor.GDAS_FINETUNE)
+    boundaries = boundaries_for_tracks(Flavor.GDAS_FINETUNE, tracks)
     assignment = assign_splits(tracks, boundaries)
     train_tracks = filter_tracks(tracks, assignment, Split.TRAIN)
     val_tracks = filter_tracks(tracks, assignment, Split.VAL)

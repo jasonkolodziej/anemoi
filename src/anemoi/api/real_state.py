@@ -384,6 +384,28 @@ class RealState:
         self._refresh_live_storms()
         return self._audit_calibration_due()
 
+    def run_skew_audit(self, max_records: int = 6) -> dict:
+        """One bounded skew-audit pass (§4.6.3, #216): replay up to
+        ``max_records`` recorded cycles that ERA5T has caught up with, in this
+        same image and code that served them. The Worker's cycle Workflow
+        calls it (`POST /v1/internal/skew-audit`) after each synoptic cycle;
+        nothing scheduled `anemoi skew-audit` before, so the skew monitor
+        never had samples. Reports, rather than raises, a missing store."""
+        from ..monitoring.skew_audit import audit_run
+
+        try:
+            store = self._checkpoint_store
+        except Exception as exc:  # noqa: BLE001 - no durable store configured
+            return {"error": f"no durable store: {exc}"}
+        self.refresh_registry_if_stale()
+        summary = audit_run(
+            self.registry, store, Path(self.registry.root) / "skew_cache", self.registry.root,
+            max_records=max_records,
+        )
+        if summary.get("n_samples_added"):
+            self._skew_samples = None  # re-read the corpus on the next report
+        return summary
+
     def archive_atcf(self) -> dict:
         """Copy NHC's as-issued storm files to durable storage (#213,
         `data.atcf_archive`). The Worker's cycle Workflow calls this

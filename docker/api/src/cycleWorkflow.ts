@@ -11,7 +11,7 @@
  * stops the others.
  *
  *   find active storms -> run cycle {storm} (one step each) -> refresh read cache
- *     -> calibration audit -> archive atcf
+ *     -> calibration audit -> archive atcf -> skew audit
  *
  * The cron starts one instance per cycle label (`index.ts`'s `scheduled`),
  * with the label as the instance id, so an at-least-once duplicate cron
@@ -41,6 +41,13 @@ export const cycleInstanceId = (cycleLabel: string) => `cycle-${cycleLabel}`;
 const CYCLE_STEP = {
 	retries: { limit: 2, delay: '2 minutes', backoff: 'exponential' },
 	timeout: '20 minutes',
+} as const;
+
+/** Replays a handful of cycles through every model on ERA5T fields: heavier
+ * than the light steps, far lighter than a full ensemble cycle. */
+const SKEW_STEP = {
+	retries: { limit: 1, delay: '2 minutes', backoff: 'exponential' },
+	timeout: '15 minutes',
 } as const;
 
 const LIGHT_STEP = {
@@ -134,7 +141,26 @@ export class CycleWorkflow extends WorkflowEntrypoint<Env, CycleParams> {
 			/* retries exhausted; recorded in the output below */
 		}
 
-		return { cycleLabel, outcomes, snapshot, audit, archive };
+		// The §4.6.3 ERA5T skew audit (#216), in the same container and code
+		// that served the cycles it replays. Bounded per pass so the step
+		// stays short; whatever's left is taken by the next cycle's pass.
+		// Nothing ran `anemoi skew-audit` on a schedule before.
+		let skew = 'failed';
+		try {
+			skew = await step.do('skew audit', SKEW_STEP, async () => {
+				const res = await fetchContainer(
+					new Request('https://internal/v1/internal/skew-audit?max_records=6', { method: 'POST' }),
+				);
+				const body = await res.text();
+				log(`skew audit -> ${res.status} ${body.slice(0, 300)}`);
+				if (!res.ok) throw new Error(`skew audit -> ${res.status}`);
+				return body;
+			});
+		} catch {
+			/* retries exhausted; recorded in the output below */
+		}
+
+		return { cycleLabel, outcomes, snapshot, audit, archive, skew };
 	}
 }
 

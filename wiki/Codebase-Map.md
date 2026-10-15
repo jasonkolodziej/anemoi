@@ -31,6 +31,8 @@ src/anemoi/
 │   ├── besttrack.py      working vs final tracks; Stage B noise emulator
 │   ├── hurdat2.py        real HURDAT2 archive parser -> FINAL-quality Track
 │   ├── atcf.py           real b-deck/TC-Vitals parsers -> WORKING-quality Fix/Track
+│   ├── hurdat2_source.py newest Atlantic HURDAT2 from NHC's listing, with a manifest (#216)
+│   ├── noise_calibration.py working-track noise from archived as-issued fixes vs HURDAT2 (#216)
 │   ├── atcf_archive.py   NHC's as-issued TC-Vitals/b-deck/a-deck archived verbatim to R2 (#213)
 │   ├── live_atcf.py      live NHC feed: CurrentStorms.json + per-storm TC-Vitals (fetched concurrently; latest revision per time)
 │   ├── availability.py   what has actually published at cycle time t

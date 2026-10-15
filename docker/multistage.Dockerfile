@@ -65,7 +65,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Baked in at build time under the filename docker/cloud-run-training's
 # entrypoint.sh expects (HURDAT2_PATH default).
-RUN mkdir -p /app/data && python3 -c "import urllib.request; urllib.request.urlretrieve('https://www.nhc.noaa.gov/data/hurdat/hurdat2-atl-1851-2023-042624.txt', '/app/data/hurdat2-atl.txt')"
+# The newest Atlantic HURDAT2 NHC has published, with a manifest
+# (hurdat2-atl.json: file, sha256, last season) beside it -- not a pinned
+# 2023 file every training run re-read (#216). Training jobs refresh it again
+# at start (entrypoint.sh).
+RUN mkdir -p /app/data && ANEMOI_CONFIG_DIR=/app/configs /app/.venv/bin/anemoi hurdat2-fetch --out /app/data/hurdat2-atl.txt
 
 # ---------------------------------------------------------------------------
 # api-builder: CPU-only torch -- Cloudflare Containers has no GPUs, and real
@@ -96,7 +100,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --extra gridded \
       --extra torch-cpu
 
-RUN mkdir -p /app/data && python3 -c "import urllib.request; urllib.request.urlretrieve('https://www.nhc.noaa.gov/data/hurdat/hurdat2-atl-1851-2023-042624.txt', '/app/data/hurdat2.txt')"
+# See training-builder: the newest HURDAT2, for the archive storms served.
+RUN mkdir -p /app/data && ANEMOI_CONFIG_DIR=/app/configs /app/.venv/bin/anemoi hurdat2-fetch --out /app/data/hurdat2.txt
 
 # ---------------------------------------------------------------------------
 # runtime-base: apt packages common to both final images. libeccodes0 is the

@@ -459,6 +459,7 @@ def audit_run(
     local_root: Path | str,
     *,
     now: datetime | None = None,
+    max_records: int | None = None,
 ) -> dict[str, int]:
     """Full real audit pass: every durably-recorded real operational cycle
     that's `monitoring.skew.audit_due` and not yet audited gets replayed
@@ -472,6 +473,11 @@ def audit_run(
     unreachable cycle would be re-fetched from durable storage and
     re-attempted forever.
 
+    ``max_records`` bounds one pass to the oldest that many due records
+    (#216): the cycle Workflow runs this after every synoptic cycle, and a
+    bounded batch keeps one step short and retryable; the rest are picked up
+    by the next pass (``n_remaining``).
+
     Returns a small, real progress summary (not fabricated) for the CLI
     to print.
     """
@@ -483,11 +489,18 @@ def audit_run(
     samples_path = Path(local_root) / "skew" / "skew_samples.json"
     samples = load_skew_samples(samples_path, checkpoint_store)
 
-    due = [
-        r
-        for r in records
-        if audit_due(r.target_time, now) and f"{r.storm_id}:{r.label}" not in audited
-    ]
+    due = sorted(
+        (
+            r
+            for r in records
+            if audit_due(r.target_time, now) and f"{r.storm_id}:{r.label}" not in audited
+        ),
+        key=lambda r: r.target_time,
+    )
+    n_remaining = 0
+    if max_records is not None and len(due) > max_records:
+        n_remaining = len(due) - max_records
+        due = due[:max_records]
 
     era5_store = None
     if due:
@@ -530,4 +543,5 @@ def audit_run(
         "n_due": len(due),
         "n_audited": n_audited,
         "n_samples_added": n_new_samples,
+        "n_remaining": n_remaining,
     }
