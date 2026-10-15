@@ -60,6 +60,8 @@ the same flags the CLI's JSON output already carries:
 | `input:final_best_track` | An archive storm: its inputs are the final best track (training labels), not as-issued vitals (#214) |
 | `vitals_source:persisted` | Too little history to extrapolate; the last earlier fix was held in place (#214) |
 | `basin_untrained:{basin}` | The storm's basin isn't one the models were trained on (#214) |
+| `nwp_unavailable` | No GFS cycle within 12 h had fields for this time; gridded models sat out (#215) |
+| `input_skew:{models}` | These gridded models were fed a GFS forecast hour other than the one they trained on (#215) |
 | *(in `notes`)* ensemble below minimum members | Cone drawn from climatological radii |
 | *(in `notes`)* ensemble underdispersion guard | Cone drawn from climatological radii instead |
 

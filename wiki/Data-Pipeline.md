@@ -112,6 +112,8 @@ These are `data.splits.DEFAULT_BOUNDARIES` — **Stage A (ERA5 pretrain) only.**
 
 Reusing `DEFAULT_BOUNDARIES` for Stage B was a real bug: its `train` range (1980–2019) has zero overlap with real GDAS data at all, so `--split train` always returned 0 real samples — masked by requests that 404'd anyway until `gdas-cache`'s season-range fix (#22) made the 0 explicit. Every real Stage B model-registry tag (`storm_split: train-2021-2022_val-2023-2023`) reflects this table, not the one above it — that's expected, not a discrepancy.
 
+**Which GFS file Stage B caches (#215).** `anemoi gdas-cache` fetches, for each fix, the GFS forecast valid at the fix time from the cycle `stage_b.nwp_lead_hours` (6) earlier -- the same `f006` a live cycle reads -- not the analysis. A cache directory holds one lead (`_meta.json`), and the run's registered versions carry it as the `nwp_lead_hours` tag. Build an `f006` cache in a new directory; the existing analysis cache stays valid for the versions trained on it (`--nwp-lead-hours 0` extends it).
+
 Two properties are enforced mechanically because both were ambiguous in v2:
 
 1. **Storm-wise disjointness.** No storm contributes fixes to more than one split. Splitting on individual synoptic times would let a model see a storm's 24 h fix in training and its 36 h fix in test — leakage of nearly the entire signal. A storm straddling a year boundary is assigned by the season of its *first* fix so it lands wholly in one split.

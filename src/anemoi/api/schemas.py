@@ -195,8 +195,15 @@ class ProvenanceOut(BaseModel):
     model_versions: dict[str, int] = Field(default_factory=dict)
     #: ``learned``, ``inverse_error``, ``synthetic`` (no real model ran) or ``demo``.
     fusion: str
-    #: The gridded analysis the models read; ``None`` when none was available.
+    #: The gridded fields the models read (a GFS object URL); ``None`` when
+    #: none were available.
     gridded_source: str | None = None
+    #: The GFS cycle and forecast hour those came from (#215): normally the
+    #: ``t-6`` cycle's ``f006``; ``t-12``/``f012`` when that was missing.
+    nwp_cycle: datetime | None = None
+    nwp_forecast_hour: int | None = None
+    #: Gridded models fed a different forecast hour than they trained on.
+    input_skew: dict[str, str] = Field(default_factory=dict)
     basin: str
     trained_basin: bool
     started_at: datetime

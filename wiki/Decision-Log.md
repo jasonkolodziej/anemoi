@@ -604,6 +604,21 @@ Even with entry 44, a cache miss still meant waiting on a cold container, behind
 
 **Enforced by** `tests/test_cycle_provenance.py` (the fix at the cycle time not the latest; each fix source; overrides; the commit from env and from `build-info.json`; through the API: provenance, flags, a real `issued_at`, `on_time` false for a late cycle, the input record with and without gridded fields, an extrapolated EP storm flagged untrained) and new assertions in `tests/test_real_inference_cycle.py` (versions and fusion recorded for four models and for the learned five).
 
+### 52. The gridded models couldn't join a scheduled cycle (#215) — *bugfix, train/serve consistency*
+
+**Found in the skew review.** §6.2.1 says cycle `t` consumes the `t−6` NWP cycle; `select_nwp_cycle` plans it and the payload reported `nwp_cycle_lag_hours: 6`. No feature builder read it. `_current_fields` fetched the GFS **analysis valid at `t`** -- published around t+3:30, while the scheduled cycle runs at t+1:30. So the CNN, Transformer, GNN and PINN almost never contributed to a scheduled cycle; learned fusion and diffusion need all five, so scheduled cycles were LSTM-only with a climatological cone. Stage B trained on analyses too, so even where a live fetch succeeded it matched training only by accident of timing. And the live cache was keyed by storm and time alone: a run with a position override reused a patch centred somewhere else.
+
+**Fix.**
+
+- **Live:** `fetch_live_nwp` reads the `t−6` cycle's `f006` (`gfs_url(t, 6)`), else `t−12`/`f012`, else nothing -- once per cycle, shared by every gridded model, cached by storm, time, forecast hour and position. `RealState` fetches it before anything runs, so the plan, `nwp_cycle_lag_hours`, `nwp_stale` and `provenance.nwp_cycle`/`nwp_forecast_hour` describe the NWP actually used; none at all is `nwp_unavailable`.
+- **Training:** `curriculum.yaml` `stage_b.nwp_lead_hours: 6` is what `anemoi gdas-cache` fetches by default (`--nwp-lead-hours` to override; `0` for analyses). A cache directory records its lead in `_meta.json` and refuses another (`CacheLeadMismatch`) -- a pre-#215 directory, which has no `_meta.json`, holds analyses. Forecast caches archive under `gdas_archive_f006/`. Registered versions carry an `nwp_lead_hours` tag.
+- **Mismatch is visible, not refused:** a gridded model fed a forecast hour other than its tag still runs -- a 6 h forecast is close to an analysis, and refusing would leave no gridded model at all until the next retrain -- but `input_skew:<models>` and `provenance.input_skew` say so. Every version registered before #215 has no tag (= analyses), so live cycles are flagged until Stage B is retrained on an `f006` cache (entry 53's retrain picks this up).
+- `GriddedFields` records `nwp_lead_hours` and `source` (cached with the fields); `gdas_likely_unpublished` judges the `f006`.
+
+**Not changed:** the skew audit still replays on ERA5T analyses -- that difference is what it measures. Patch centring in *training* (patches centred on the final best-track position, fixes noised around it) is unchanged; the noise calibration in entry 53 is the first step.
+
+**Enforced by** `tests/test_nwp_lead.py` (URLs across a day boundary; `f006` first, `f012` fallback, none; the cache keyed by position; lead and source surviving the cache and a pre-#215 cache reading as analyses; one lead per cache directory; the training tag; through the API, the payload and provenance reporting a `t−12` fallback and `nwp_unavailable`), the refusal case for a non-synoptic `nwp_lead_hours` in `tests/test_config_sync.py`, and `input_skew` assertions in `tests/test_real_inference_cycle.py`.
+
 ---
 
 ## Implementation → rebrand

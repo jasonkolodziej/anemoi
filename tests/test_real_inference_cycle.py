@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -11,12 +12,13 @@ import pytest
 
 from anemoi.data.besttrack import Fix, Track, TrackQuality
 from anemoi.data.features import GriddedFields
-from anemoi.data.gridded_cache import FetchTask, cache_path, save_cached_fields
+from anemoi.data.gridded_cache import FetchTask, save_cached_fields
 from anemoi.data.sources import Flavor
 from anemoi.tracking.checkpoint_store import CheckpointStore, S3Config
 from anemoi.tracking.registry import ModelRegistry, Stage
 from anemoi.training.capacity_ablation import SEQUENCE_LENGTH
 from anemoi.training.real_inference_cycle import InferenceCycleError, build_real_deterministic_fn
+from anemoi.training.real_inference_live import live_cache_path
 from anemoi.training.real_run_cnn import CNN_FIELD_NAMES
 from anemoi.training.real_run_gnn import NODE_FEATURES
 from anemoi.training.real_run_transformer import GRID_SIZE, TRANSFORMER_FIELD_NAMES
@@ -76,7 +78,10 @@ def cache_current_fix(cache_dir, track: Track, fix: Fix, shape=(41, 41)) -> None
         sst=grid(28.0), ohc=grid(60.0),
     )
     task = FetchTask(storm_id=track.storm_id, valid_time=fix.valid_time, lat=fix.lat, lon=fix.lon)
-    save_cached_fields(cache_path(cache_dir, task), fields, task)
+    # The live path reads the t-6 forecast, cached by position (#215).
+    save_cached_fields(
+        live_cache_path(cache_dir, track.storm_id, fix, 6), replace(fields, nwp_lead_hours=6), task,
+    )
 
 
 def _upload_state_dict(model, name, store, tmp_path, suffix=""):
@@ -173,7 +178,10 @@ def test_build_real_deterministic_fn_combines_all_four_real_models(tmp_path):
     # the non-learned consensus), are recorded on the forecast.
     assert set(forecast.model_versions) == set(forecast.contributors)
     assert forecast.fusion == "inverse_error"
-    assert forecast.gridded_source is not None and forecast.gridded_source.endswith(".anl")
+    assert forecast.gridded_source is not None
+    # Models registered here carry no nwp_lead_hours tag (= trained on
+    # analyses); fed the live t-6 forecast, each gridded one is flagged.
+    assert set(forecast.input_skew) == {"cnn", "transformer", "gnn"}
 
     # #92-adjacent real console request: each model's own track, not just
     # the fused one, must be real and available -- not derived after the
@@ -482,5 +490,5 @@ def test_missing_reason_flags_likely_unpublished_gdas_for_a_live_valid_time(tmp_
     with pytest.raises(InferenceCycleError) as excinfo:
         deterministic_fn(plan, current)
 
-    assert "cnn: no real live feature -- real GDAS analysis" in str(excinfo.value)
+    assert "cnn: no real live feature -- the t-6 GFS forecast" in str(excinfo.value)
     assert "likely hasn't published yet" in str(excinfo.value)

@@ -152,7 +152,7 @@ def test_default_fetch_fn_wires_a_shared_session(monkeypatch):
 
     received_sessions = []
 
-    def fake_fetch_gdas_grib2_fields(valid_time, *, session=None, timeout=60.0):
+    def fake_fetch_gdas_grib2_fields(valid_time, *, session=None, timeout=60.0, lead_hours=0):
         received_sessions.append(session)
         return {}
 
@@ -183,7 +183,7 @@ def test_fetch_one_fetches_exactly_one_real_sample(monkeypatch):
 
     calls: list[tuple] = []
 
-    def fake_fetch_gdas_grib2_fields(valid_time, *, session=None, timeout=60.0):
+    def fake_fetch_gdas_grib2_fields(valid_time, *, session=None, timeout=60.0, lead_hours=0):
         calls.append(("fetch", valid_time))
         return {}
 

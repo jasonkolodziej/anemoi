@@ -160,7 +160,7 @@ def client(tmp_path, monkeypatch, s3):
     monkeypatch.setattr("anemoi.data.live_atcf.fetch_live_tracks", lambda: [])
     # No network: no gridded analysis unless a test supplies one.
     monkeypatch.setattr(
-        "anemoi.training.real_inference_live._current_fields", lambda *a, **k: None,
+        "anemoi.training.real_inference_live.fetch_live_nwp", lambda *a, **k: (None, None),
     )
     store = CheckpointStore(
         S3Config(endpoint_url="https://example.r2.cloudflarestorage.com", bucket="t",
@@ -224,8 +224,15 @@ def test_the_gridded_fields_a_cycle_read_are_kept(client, s3, monkeypatch):
         u200=grid, v200=grid, u850=grid, v850=grid, z500=grid * 5750, rh700=grid * 60,
         t700=grid * 280, mslp=grid * 1010, sst=grid * 28, ohc=grid * 60,
     )
+    from anemoi.time_utils import NWPCycleSelection
+
+    target = T0 + timedelta(hours=18)
+    selection = NWPCycleSelection(
+        target_time=target, nwp_cycle=target - timedelta(hours=6),
+        lag_hours=6, forecast_hour=6, degraded=False,
+    )
     monkeypatch.setattr(
-        "anemoi.training.real_inference_live._current_fields", lambda *a, **k: fields,
+        "anemoi.training.real_inference_live.fetch_live_nwp", lambda *a, **k: (fields, selection),
     )
     assert client.post(
         "/v1/storms/AL012026/cycles", json={"cycle": "20260901_18Z"}, headers=SCHED,

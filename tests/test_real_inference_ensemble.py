@@ -11,7 +11,7 @@ import pytest
 
 from anemoi.data.besttrack import Fix, Track, TrackQuality
 from anemoi.data.features import FEATURE_NAMES, GriddedFields
-from anemoi.data.gridded_cache import FetchTask, cache_path, save_cached_fields
+from anemoi.data.gridded_cache import FetchTask, save_cached_fields
 from anemoi.data.sources import Flavor
 from anemoi.data.storm_relative import STORM_RELATIVE_COLUMNS
 from anemoi.tracking.checkpoint_store import CheckpointStore, S3Config
@@ -19,6 +19,7 @@ from anemoi.tracking.registry import GROUP1_MODELS, ModelRegistry, Stage, latent
 from anemoi.training.capacity_ablation import SEQUENCE_LENGTH
 from anemoi.training.real_inference_cycle import build_real_deterministic_fn
 from anemoi.training.real_inference_ensemble import InferenceEnsembleError, build_real_ensemble_fn
+from anemoi.training.real_inference_live import live_cache_path
 from anemoi.training.real_run_cnn import CNN_FIELD_NAMES
 from anemoi.training.real_run_gnn import NODE_FEATURES
 from anemoi.training.real_run_transformer import GRID_SIZE, TRANSFORMER_FIELD_NAMES
@@ -80,7 +81,8 @@ def cache_current_fix(cache_dir, track: Track, fix: Fix, shape=(41, 41)) -> None
         sst=grid(28.0), ohc=grid(60.0),
     )
     task = FetchTask(storm_id=track.storm_id, valid_time=fix.valid_time, lat=fix.lat, lon=fix.lon)
-    save_cached_fields(cache_path(cache_dir, task), fields, task)
+    # The live path reads the t-6 forecast, cached by position (#215).
+    save_cached_fields(live_cache_path(cache_dir, track.storm_id, fix, 6), fields, task)
 
 
 def _upload_state_dict(model, name, store, tmp_path, suffix=""):

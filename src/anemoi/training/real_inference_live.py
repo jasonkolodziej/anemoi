@@ -33,6 +33,7 @@ import numpy as np
 if TYPE_CHECKING:
     from ..data.besttrack import Fix, Track
     from ..data.features import GriddedFields
+    from ..time_utils import NWPCycleSelection
     from .real_run_gnn import MeshTopology
 
 #: A `(track, current, cache_dir) -> GriddedFields | None` field source --
@@ -45,82 +46,114 @@ if TYPE_CHECKING:
 FieldsFetcher = Callable[["Track", "Fix", "Path | str"], "GriddedFields | None"]
 
 
-def gdas_likely_unpublished(valid_time: datetime, now: datetime | None = None) -> bool:
-    """True if ``valid_time``'s real GDAS analysis is still inside its own
-    typical real publish latency (``data.sources.get("gdas_gfs")``, ~3.5h)
-    as of wall-clock ``now`` (defaults to the real current time).
+def gdas_likely_unpublished(
+    valid_time: datetime, now: datetime | None = None, *, lead_hours: int | None = None,
+) -> bool:
+    """True if the GFS file a live cycle at ``valid_time`` reads is still
+    inside its typical publish latency (``data.sources.get("gdas_gfs")``,
+    ~3.5h) as of ``now``. Since #215 that file is the ``t-6`` cycle's
+    ``f006`` (``lead_hours`` defaults to ``NWP_LAG_HOURS``), published
+    around t-2:30 -- so for a cycle run at t+1:30 this is normally False.
 
     Purely diagnostic -- used only to give a `missing_model_reasons` entry
-    a more specific, honest explanation when `_current_fields`'s on-demand
-    fetch comes back empty for a genuinely live/recent cycle. Deliberately
-    NOT used to skip the fetch attempt itself: real GDAS publication timing
-    has genuine variance around its typical latency, and giving up a real
-    chance to contribute for a marginal hygiene win (avoiding one fetch
-    that fails fast) would be a real capability regression, not a hygiene
-    improvement.
+    a more specific, honest explanation when the fetch comes back empty.
+    Deliberately NOT used to skip the fetch attempt itself: real GDAS
+    publication timing has genuine variance around its typical latency.
     """
+    from datetime import timedelta
+
     from ..data import sources
+    from ..time_utils import NWP_LAG_HOURS
 
     if now is None:
         now = datetime.now(UTC)
+    lead = NWP_LAG_HOURS if lead_hours is None else lead_hours
     latency = sources.get("gdas_gfs").typical_latency
-    return valid_time + latency > now
+    return valid_time - timedelta(hours=lead) + latency > now
 
 
-def live_gridded_source(valid_time: datetime) -> str:
-    """Where `_current_fields` reads a cycle's gridded analysis from, as
-    recorded in the cycle's provenance (#214)."""
-    from ..data.real_gridded import _gdas_analysis_url
+def live_gridded_source(valid_time: datetime, lead_hours: int | None = None) -> str:
+    """The GFS file a live cycle at ``valid_time`` reads first (#214/#215)."""
+    from ..data.real_gridded import gfs_url
+    from ..time_utils import NWP_LAG_HOURS
 
-    return _gdas_analysis_url(valid_time)
+    return gfs_url(valid_time, NWP_LAG_HOURS if lead_hours is None else lead_hours)
 
 
 def _current_window(track: Track, current: Fix, length: int) -> tuple[Fix, ...] | None:
     return track.window_ending(current.valid_time, length)
 
 
-def _current_fields(track: Track, current: Fix, cache_dir: Path | str) -> GriddedFields | None:
-    """The current fix's `GriddedFields` -- the same real cache lookup
-    CNN/Transformer/GNN/PINN's training builders already use, falling back
-    to a real, on-demand GDAS fetch (#98) on a cache miss instead of giving
-    up. GDAS, not ERA5: live/operational inference is always the
-    operational flavor (every real registered version already requires
-    `Flavor.GDAS_FINETUNE`, see `tracking.registry.ModelRegistry.register`),
-    and GDAS's real archive covers any storm from 2021 onward
-    (`data.gdas_cache.GDAS_ARCHIVE_START`) -- including any real HURDAT2
-    storm `RealState` can serve today, not just a genuinely live one.
-
-    Fetched fields are saved to `cache_dir` (same real on-disk format
-    `run_fetch_cache` writes), so a repeat cycle for the same storm/time
-    doesn't re-fetch. Any failure here (network, an eccodes/libeccodes
-    install gap -- see `real_gridded.require_gdas_deps`'s docstring --
-    before GDAS_ARCHIVE_START, or GDAS simply not having this exact
-    synoptic hour) degrades to `None`, the same "this model can't
-    contribute to this cycle" contract every caller here already has to
-    handle regardless of the reason.
-    """
-    from ..data.gridded_cache import FetchTask, cache_path, load_cached_fields, save_cached_fields
-
-    task = FetchTask(
-        storm_id=track.storm_id, valid_time=current.valid_time, lat=current.lat, lon=current.lon,
+def live_cache_path(cache_dir: Path | str, storm_id: str, current: Fix, lead_hours: int) -> Path:
+    """Where a live cycle's fetched fields are kept: by storm, time, forecast
+    hour *and* position (#215). Keyed by storm and time alone, a cycle run
+    with a position override -- or after NHC corrected the fix -- reused the
+    patch centred on the first position it saw."""
+    name = (
+        f"{current.valid_time:%Y%m%d%H}_f{lead_hours:03d}"
+        f"_{current.lat:+.2f}_{current.lon:+.2f}.npz"
     )
-    path = cache_path(cache_dir, task)
-    if path.exists():
-        return load_cached_fields(path)
+    return Path(cache_dir) / "live" / storm_id / name
 
-    from ..data.gdas_cache import GDAS_ARCHIVE_START
+
+def fetch_live_nwp(
+    track: Track, current: Fix, cache_dir: Path | str,
+) -> tuple[GriddedFields | None, NWPCycleSelection | None]:
+    """The gridded fields a live cycle at ``current.valid_time`` runs on,
+    and which NWP cycle they came from (#215).
+
+    The forecast valid at the cycle time from the ``t-6`` GFS cycle
+    (``f006``) -- §6.2.1's rule, which until #215 was planned and reported
+    but never applied: the live path fetched the ``t`` *analysis*, which
+    isn't published until ~t+3:30, two hours after the cycle runs, so the
+    gridded models almost never contributed to a scheduled cycle. If the
+    ``t-6`` cycle isn't there, the ``t-12`` cycle's ``f012`` (degraded,
+    ``nwp_stale=12h``); if neither, ``(None, None)`` -- §4.6.4's LSTM +
+    climatology mode.
+
+    Fetched fields are cached under ``cache_dir/live`` (`live_cache_path`).
+    Before `GDAS_ARCHIVE_START` there is nothing to fetch.
+    """
+    from datetime import timedelta
+
+    from ..data.gdas_cache import GDAS_ARCHIVE_START, fetch_one
+    from ..data.gridded_cache import FetchTask, load_cached_fields, save_cached_fields
+    from ..time_utils import MAX_NWP_LAG_HOURS, NWP_LAG_HOURS, NWPCycleSelection
 
     if current.valid_time < GDAS_ARCHIVE_START:
-        return None
+        return None, None
+    for lag in range(NWP_LAG_HOURS, MAX_NWP_LAG_HOURS + 1, NWP_LAG_HOURS):
+        path = live_cache_path(cache_dir, track.storm_id, current, lag)
+        fields = None
+        if path.exists():
+            try:
+                fields = load_cached_fields(path)
+            except Exception:  # noqa: BLE001 - a corrupt cache entry is re-fetched
+                fields = None
+        if fields is None:
+            try:
+                fields = fetch_one(current.valid_time, current.lat, current.lon, lead_hours=lag)
+            except Exception:  # noqa: BLE001 - this cycle not published (yet); try the older one
+                continue
+            save_cached_fields(
+                path, fields,
+                FetchTask(track.storm_id, current.valid_time, current.lat, current.lon),
+            )
+        return fields, NWPCycleSelection(
+            target_time=current.valid_time,
+            nwp_cycle=current.valid_time - timedelta(hours=lag),
+            lag_hours=lag, forecast_hour=lag, degraded=lag > NWP_LAG_HOURS,
+        )
+    return None, None
 
-    try:
-        from ..data.gdas_cache import fetch_one
 
-        fields = fetch_one(current.valid_time, current.lat, current.lon)
-    except Exception:  # noqa: BLE001 - no real field available must degrade, never crash a cycle
-        return None
-    save_cached_fields(path, fields, task)
-    return fields
+def _current_fields(track: Track, current: Fix, cache_dir: Path | str) -> GriddedFields | None:
+    """The live cycle's `GriddedFields` (`fetch_live_nwp`), or ``None`` when
+    no NWP cycle within the staleness budget has them -- the `FieldsFetcher`
+    every `build_live_*_x` builder defaults to. Any failure degrades to
+    ``None``, the same "this model can't contribute to this cycle" contract
+    every caller here already handles."""
+    return fetch_live_nwp(track, current, cache_dir)[0]
 
 
 def era5t_fields(track: Track, current: Fix, cache_dir: Path | str) -> GriddedFields | None:
@@ -138,13 +171,16 @@ def era5t_fields(track: Track, current: Fix, cache_dir: Path | str) -> GriddedFi
     `audit_due` saying it should have -- real-world latency has variance
     around the typical figure, same reasoning as `gdas_likely_unpublished`'s
     own docstring)."""
+    from dataclasses import replace
+
     from ..data.real_gridded import fetch_era5t_one
 
     del cache_dir
     try:
-        return fetch_era5t_one(current.valid_time, current.lat, current.lon)
+        fields = fetch_era5t_one(current.valid_time, current.lat, current.lon)
     except Exception:  # noqa: BLE001 - no real field available must degrade, never crash
         return None
+    return replace(fields, source="era5t")
 
 
 era5t_fields.source_name = "era5t"  # type: ignore[attr-defined] - read by the cycle's provenance

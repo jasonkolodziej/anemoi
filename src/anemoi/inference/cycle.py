@@ -85,6 +85,9 @@ class DeterministicForecast:
     #: ``unknown`` for a forecast built outside these paths.
     fusion: str = "unknown"
     gridded_source: str | None = None
+    #: Gridded models fed fields of a different forecast hour than they were
+    #: trained on, with what each was trained on and fed (#215).
+    input_skew: dict[str, str] = field(default_factory=dict)
 
     def at(self, lead: int) -> tuple[float, float, float]:
         i = self.lead_hours.index(lead)

@@ -125,6 +125,7 @@ def _cmd_gridded_cache(
     *,
     archive_prefix: str,
     boundaries: dict | None = None,
+    fetch_kwargs: dict | None = None,
 ) -> int:
     """Shared body for cmd_era5_cache/cmd_gdas_cache -- same split-selection,
     reporting and exit-code behaviour, different underlying fetch pipeline.
@@ -151,6 +152,7 @@ def _cmd_gridded_cache(
         max_workers=args.max_workers,
         skip_existing=not args.force,
         progress_every=args.progress_every,
+        **(fetch_kwargs or {}),
     )
     print(
         f"done: {report.n_fetched} fetched, {report.n_skipped} skipped, "
@@ -208,12 +210,22 @@ def cmd_gdas_cache(args: argparse.Namespace) -> int:
     boundaries -- those were set for Stage A/ERA5's 1980-2025 pretraining
     window and have zero overlap with GDAS's real 2021-present archive.
     """
-    from .data.gdas_cache import run_fetch_cache
+    from .data.gdas_cache import STAGE_B_NWP_LEAD_HOURS, CacheLeadMismatch, run_fetch_cache
     from .data.splits import STAGE_B_BOUNDARIES
 
-    return _cmd_gridded_cache(
-        args, run_fetch_cache, archive_prefix="gdas_archive", boundaries=STAGE_B_BOUNDARIES
-    )
+    lead = getattr(args, "nwp_lead_hours", STAGE_B_NWP_LEAD_HOURS)
+    try:
+        return _cmd_gridded_cache(
+            args, run_fetch_cache,
+            # Analyses keep their original prefix; forecasts of each lead
+            # get their own, so the two never share a storm/time key (#215).
+            archive_prefix="gdas_archive" if lead == 0 else f"gdas_archive_f{lead:03d}",
+            boundaries=STAGE_B_BOUNDARIES,
+            fetch_kwargs={"lead_hours": lead},
+        )
+    except CacheLeadMismatch as exc:
+        print(f"gdas-cache: {exc}")
+        return 1
 
 
 def cmd_train(args: argparse.Namespace) -> int:
@@ -258,6 +270,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         arch_params_tag,
         build_run_tags,
         candidate_tags,
+        gridded_input_tags,
         log_curriculum_stages,
         standardization_tags,
     )
@@ -355,6 +368,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         tag_dict["arch_params"] = arch_params
     tag_dict.update(candidate_tags(artifacts))
     tag_dict.update(standardization_tags(artifacts))
+    tag_dict.update(gridded_input_tags(args.gdas_cache_dir))
     version = registry.register(
         args.model,
         run_id=f"cli-{datetime.now(UTC):%Y%m%dT%H%M%S}",
@@ -1216,6 +1230,16 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("gdas-cache", help="fetch+cache real GDAS fields for a data.splits split")
     _add_gridded_cache_args(p, default_max_workers=4)
+    from .data.gdas_cache import STAGE_B_NWP_LEAD_HOURS
+
+    p.add_argument(
+        "--nwp-lead-hours", dest="nwp_lead_hours", type=int, default=STAGE_B_NWP_LEAD_HOURS,
+        help=(
+            "GFS forecast hour to cache: 0 for analyses, 6 for the t-6 cycle's f006 that "
+            f"live cycles read (default: curriculum.yaml stage_b.nwp_lead_hours = "
+            f"{STAGE_B_NWP_LEAD_HOURS}). One lead per cache directory (#215)."
+        ),
+    )
     p.set_defaults(func=cmd_gdas_cache)
 
     p = sub.add_parser("train", help="run a real Stage A/B curriculum (#22)")

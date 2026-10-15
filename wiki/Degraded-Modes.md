@@ -17,7 +17,9 @@ The cycle is written around its failure modes, because a hurricane forecast that
 | No trained model can run | Straight-line placeholder track | `deterministic_fallback:synthetic` |
 | Archive storm (final best track as input) | Runs, but it is not an as-issued forecast | `input:final_best_track` |
 | Storm outside the trained basins | Runs out of distribution | `basin_untrained:<basin>` |
-| `t−6` NWP missing | Fall back to `t−12` | `nwp_stale=12h` |
+| `t−6` NWP missing | Fall back to `t−12` (its `f012`, #215) | `nwp_stale=12h` |
+| No NWP within 12 h | Gridded models sit out; LSTM + climatology | `nwp_unavailable` |
+| A gridded model fed a forecast hour it wasn't trained on | Runs; flagged | `input_skew:<models>` |
 | All NWP missing within 12 h | Abandon the cycle; LSTM + climatology mode | `CycleAbandoned` raised |
 | Diffusion crash or empty ensemble | Climatological-spread ensemble | `spread_fallback:<ExcType>` |
 | Optional feed missing | Continue | `missing:<source>` |

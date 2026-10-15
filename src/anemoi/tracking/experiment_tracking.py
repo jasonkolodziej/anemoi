@@ -128,6 +128,22 @@ STANDARDIZATION_STAT_FIELDS: tuple[str, ...] = (
 )
 
 
+#: Registry tag naming the GFS forecast hour a model's gridded inputs were
+#: trained on (#215). Absent on versions registered before it: analyses (0).
+NWP_LEAD_TAG = "nwp_lead_hours"
+
+
+def gridded_input_tags(gdas_cache_dir: object) -> dict[str, str]:
+    """The forecast hour of the GDAS cache a Stage B run trained from, as a
+    registry tag -- what inference compares the fields it feeds a model
+    against (`training.real_inference_cycle`, #215)."""
+    if not gdas_cache_dir:
+        return {}
+    from ..data.gdas_cache import cache_nwp_lead_hours
+
+    return {NWP_LEAD_TAG: str(cache_nwp_lead_hours(gdas_cache_dir))}
+
+
 def standardization_tags(artifacts: object) -> dict[str, str]:
     """JSON-encode whichever of ``artifacts``' real standardisation stats
     are actually present (#78) -- a real inference process needs the
