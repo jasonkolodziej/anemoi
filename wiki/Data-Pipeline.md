@@ -94,6 +94,17 @@ Also computed: climatology baselines per storm position and month, and storm-cen
 
 Scope v2.1 §4.4. Implemented in `data/splits.py`.
 
+**Since #216 every real training run derives its splits from the HURDAT2 it trains on** (`data.splits.season_boundaries(N)`, `N` = the newest season with final labels; `training.real_run.boundaries_for_tracks`):
+
+| Split | Stage A (ERA5) | Stage B (GDAS) | Purpose |
+|---|---|---|---|
+| Training | 1980–2019 | 2021 – N−2 | Parameter learning |
+| Validation | 2020 – N−2 | N−1 | Early stopping; Stage B's is where **promotion** is decided |
+| Test | N | N | Unbiased evaluation. **Metered** |
+| Operational | N+1 – | N+1 – | Live inference, never training |
+
+With the 2024 archive: Stage B trains on 2021–2022, validates on 2023, tests on 2024. Each spring's HURDAT2 moves everything along one season. Stage B's validation season is never seen by Stage A, and nothing is tested on a season it trained or validated on; the fixed tables below had Stage A's *test* season (2023) as Stage B's *validation* season -- the one promotion uses -- and Stage B's test seasons (2024–25) empty, because the pinned HURDAT2 stopped at 2023. The tables below remain only for small synthetic archives (ablations, unit tests) that don't reach 2023.
+
 | Split | Seasons | Purpose |
 |---|---|---|
 | Training | 1980–2019 | Parameter learning |

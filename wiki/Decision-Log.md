@@ -619,6 +619,30 @@ Even with entry 44, a cache miss still meant waiting on a cold container, behind
 
 **Enforced by** `tests/test_nwp_lead.py` (URLs across a day boundary; `f006` first, `f012` fallback, none; the cache keyed by position; lead and source surviving the cache and a pre-#215 cache reading as analyses; one lead per cache directory; the training tag; through the API, the payload and provenance reporting a `t−12` fallback and `nwp_unavailable`), the refusal case for a non-synoptic `nwp_lead_hours` in `tests/test_config_sync.py`, and `input_skew` assertions in `tests/test_real_inference_cycle.py`.
 
+### 53. A retrain would never have seen a new season (#216) — *data, training*
+
+**Found reviewing whether current-year storms are collected well enough to retrain on.**
+
+- **One pinned HURDAT2.** Both images downloaded `hurdat2-atl-1851-2023-042624.txt`; every training run parsed it. NHC publishes each season's final best track the following spring, so 2024's (and later) was never trained on.
+- **The data-volume trigger could never fire.** It counted fixes *valid after* the newest registration -- in a file that never changed, and a published season's fixes are all dated last year anyway.
+- **The fixed split tables didn't move and overlapped.** Stage B's test seasons (2024–25) were empty; Stage A's test season (2023) was Stage B's validation season, which promotion is decided on.
+- **No provenance from training.** The Cloud Run image has no `.git`, so `build_run_tags` returned None and no MLflow stage run was logged; `trigger` was `manual_sweep` for every run; nothing recorded which HURDAT2 a model trained on.
+- **The noise emulator stayed on placeholders** (15 nm / 5 kt / 3 mb) -- nothing paired real working fixes with final ones (the working half is kept since entry 50).
+- **Nothing ran the skew audit.**
+
+**Fix.**
+
+- `anemoi hurdat2-fetch` (`data.hurdat2_source`): the newest Atlantic file in NHC's listing -- latest season, latest release -- with a manifest (file, URL, sha256, last season); the pinned file, flagged, if the listing can't be read. Run at both image builds and at the start of every training job.
+- `data.splits.season_boundaries(N)`: Stage B trains 2021..N−2, validates N−1, tests N; Stage A trains 1980–2019, validates 2020..N−2, tests N. Every real training path derives them from the archive it's given (`boundaries_for_tracks`), and so does `gdas-cache`.
+- Data volume counts fixes in seasons newer than every Group 1 model's `hurdat2_last_season` tag (none = 2023).
+- Registered versions carry `hurdat2_file`, `hurdat2_sha256`, `hurdat2_last_season`, `config_sha256`; run tags carry the real commit (`anemoi.provenance`), the derived split and the real trigger (`train-schedule --trigger`, set by `retrain-check` from what fired).
+- `anemoi noise-calibrate --season N`: the archived as-issued TC-Vitals (first bulletin per time) paired with HURDAT2's final track; prints the `working_track_noise` values and stores the measurement in R2. Applying them is a reviewed config change.
+- **The skew audit runs as a step of the cycle Workflow** (`skew audit`, `POST /v1/internal/skew-audit`), after every synoptic cycle, in the API container -- the same image and inference code that served the cycles it replays, with its storage credentials already in place. Each pass takes the oldest six due cycles (`audit_run(max_records=)`) so the step stays short and retryable; the rest wait for the next cycle. `anemoi skew-audit` remains for a by-hand backfill. (A GitHub Actions schedule was considered first; it would have needed the bucket's credentials as repository secrets and replayed on a runner, not the serving image.)
+
+**Not changed:** the `TestSetBudget` log is still in memory only; nothing instantiates it yet. Patch centring in training (entry 52) is unchanged.
+
+**Enforced by** `tests/test_retrain_seasons.py` (the listing picker incl. a NE Pacific file and two releases of one season; the manifest; the pinned fallback; derived boundaries for several archives, Stage B's validation season absent from every Stage A split and the test season from every train/val split; a 2024 archive's test season non-empty; as-issued pairing and RMS; run tags with commit, split and trigger; the Dockerfile, entrypoint and scheduled workflow), the data-volume count test in `tests/test_cli.py`, and the real-run fixtures, now with a 2022 storm for Stage B validation.
+
 ---
 
 ## Implementation → rebrand

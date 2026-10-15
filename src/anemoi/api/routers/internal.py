@@ -24,6 +24,14 @@ def calibration_audit(state=Depends(state_dependency)) -> dict:
     return {"new_samples": run() if run is not None else 0}
 
 
+@router.post("/skew-audit")
+def skew_audit(state=Depends(state_dependency), max_records: int = 6) -> dict:
+    """One bounded ERA5T skew-audit pass (#216, `RealState.run_skew_audit`).
+    `DemoState` has no recorded cycles to replay."""
+    run = getattr(state, "run_skew_audit", None)
+    return run(max_records=max_records) if run is not None else {"n_audited": 0}
+
+
 @router.post("/archive-atcf")
 def archive_atcf(state=Depends(state_dependency)) -> dict:
     """Archive NHC's as-issued storm files to R2 (#213, `data.atcf_archive`).

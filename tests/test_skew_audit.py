@@ -235,6 +235,36 @@ def test_audit_run_replays_only_due_records_and_persists_the_result(tmp_path, mo
     assert summary2["n_audited"] == 0
 
 
+def test_audit_run_takes_a_bounded_batch_oldest_first(tmp_path, monkeypatch):
+    """#216: the cycle Workflow runs a pass after every cycle; `max_records`
+    keeps one step short, oldest first, the rest left for the next pass."""
+    from anemoi.monitoring import skew_audit as sa
+
+    monkeypatch.setattr(
+        "anemoi.data.real_gridded.open_era5_store", lambda: (_ for _ in ()).throw(RuntimeError()),
+    )
+    now = datetime(2026, 9, 20, tzinfo=UTC)
+    store = CheckpointStore(_CONFIG, client=_FakeClient())
+    for days in (3, 1, 2):
+        record = _record(label=f"d{days}", target_time=now - AUDIT_DELAY - timedelta(days=days))
+        record_operational_cycle(
+            record.storm_id, record.track(), record.current,
+            _make_output({"lstm": 1.0}, label=record.label, target_time=record.target_time),
+            local_root=tmp_path, checkpoint_store=store,
+        )
+    seen: list[str] = []
+    monkeypatch.setattr(
+        sa, "audit_one",
+        lambda record, *a, **k: seen.append(record.label) or [],
+    )
+    summary = audit_run(
+        registry=object(), checkpoint_store=store, cache_dir=tmp_path, local_root=tmp_path,
+        now=now, max_records=2,
+    )
+    assert seen == ["d3", "d2"]
+    assert summary["n_remaining"] == 1
+
+
 def test_audit_run_degrades_per_record_when_audit_one_raises(tmp_path, monkeypatch):
     """A real gap from PR review: a corrupted record or a mismatched
     forecast/record lead_hours count (audit_one's own zip(..., strict=True)

@@ -38,6 +38,8 @@ from ..data.splits import (
     Split,
     assign_splits,
     filter_tracks,
+    latest_final_season,
+    season_boundaries,
 )
 from ..data.storm_relative import STORM_RELATIVE_COLUMNS, displacement_nm, storm_relative_sequence
 from ..geo import offset_position
@@ -54,15 +56,32 @@ LEAD_STEPS: tuple[int, ...] = tuple(h // 6 for h in DEFAULT_LEADS)
 _MAX_LEAD_STEPS = LEAD_STEPS[-1]
 
 
-def boundaries_for_flavor(flavor: Flavor) -> dict[Split, tuple[int, int]]:
+def boundaries_for_flavor(
+    flavor: Flavor, latest_season: int | None = None,
+) -> dict[Split, tuple[int, int]]:
     """Which `data.splits` boundary scheme a stage's real data comes from.
 
-    Mirrors `cli.cmd_era5_cache`/`cmd_gdas_cache`'s choice: ERA5_PRETRAIN
-    uses the default (decades-deep) window, GDAS_FINETUNE uses
-    STAGE_B_BOUNDARIES (GDAS's real archive has zero overlap with the
-    default train window -- see that constant's docstring).
+    With ``latest_season`` -- the newest season the HURDAT2 being trained on
+    has (`data.splits.latest_final_season`) -- the boundaries move with the
+    archive (`data.splits.season_boundaries`, #216); every real training
+    entry point passes it. Without, the fixed tables: ERA5_PRETRAIN uses the
+    default (decades-deep) window, GDAS_FINETUNE STAGE_B_BOUNDARIES.
     """
+    if latest_season is not None:
+        stage_a, stage_b = season_boundaries(latest_season)
+        return stage_b if flavor is Flavor.GDAS_FINETUNE else stage_a
     return STAGE_B_BOUNDARIES if flavor is Flavor.GDAS_FINETUNE else DEFAULT_BOUNDARIES
+
+
+def boundaries_for_tracks(flavor: Flavor, tracks: list[Track]) -> dict[Split, tuple[int, int]]:
+    """`boundaries_for_flavor` for the archive actually being trained on:
+    derived from its newest season (#216) whenever it reaches the first
+    season a Stage B split can be cut from (2023); the fixed tables only for
+    small synthetic archives that don't."""
+    latest = latest_final_season(tracks) if tracks else None
+    if latest is None or latest < 2023:
+        return boundaries_for_flavor(flavor)
+    return boundaries_for_flavor(flavor, latest)
 
 
 def displacement_to_latlon(
@@ -579,7 +598,7 @@ def run_lstm_curriculum(
     model = None
     val_metrics: MetricSet | None = None
     for stage in curriculum.stages:
-        boundaries = boundaries_for_flavor(stage.flavor)
+        boundaries = boundaries_for_tracks(stage.flavor, tracks)
         assignment = assign_splits(tracks, boundaries)
         train_tracks = filter_tracks(tracks, assignment, Split.TRAIN)
         val_tracks = filter_tracks(tracks, assignment, Split.VAL)

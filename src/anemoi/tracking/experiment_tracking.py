@@ -33,7 +33,6 @@ completes, not more.
 from __future__ import annotations
 
 import json
-import subprocess
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -60,12 +59,15 @@ _BASELINE_BEATEN_THRESHOLD = 0.50
 
 
 def _git_commit() -> str | None:
+    """The commit this code was built from (`anemoi.provenance`, #214/#216).
+    Training runs in the Cloud Run image, which has no ``.git`` -- `git
+    rev-parse` there returned nothing, so `build_run_tags` returned None and
+    no MLflow stage run was ever logged. The image's ``build-info.json``
+    now carries the commit."""
     try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, timeout=5, check=True,
-        )
-        return completed.stdout.strip()
+        from ..provenance import git_sha
+
+        return git_sha()
     except Exception:  # noqa: BLE001 - tagging must never fail a training run
         return None
 
@@ -83,11 +85,11 @@ def _gpu_type() -> str:
     return "cpu"
 
 
-def _storm_split(stage: StageSpec) -> str:
-    from ..data.sources import Flavor
-    from ..data.splits import DEFAULT_BOUNDARIES, STAGE_B_BOUNDARIES, Split
+def _storm_split(stage: StageSpec, latest_season: int | None = None) -> str:
+    from ..data.splits import Split
+    from ..training.real_run import boundaries_for_flavor
 
-    boundaries = STAGE_B_BOUNDARIES if stage.flavor is Flavor.GDAS_FINETUNE else DEFAULT_BOUNDARIES
+    boundaries = boundaries_for_flavor(stage.flavor, latest_season)
     train_lo, train_hi = boundaries[Split.TRAIN]
     val_lo, val_hi = boundaries[Split.VAL]
     return f"train-{train_lo}-{train_hi}_val-{val_lo}-{val_hi}"
@@ -131,6 +133,39 @@ STANDARDIZATION_STAT_FIELDS: tuple[str, ...] = (
 #: Registry tag naming the GFS forecast hour a model's gridded inputs were
 #: trained on (#215). Absent on versions registered before it: analyses (0).
 NWP_LEAD_TAG = "nwp_lead_hours"
+
+
+#: Registry tag: the newest season of the HURDAT2 a version trained on
+#: (#216) -- what `anemoi retrain-check`'s data-volume trigger counts newer
+#: seasons against. Absent on versions before it: the pinned 2023 file.
+HURDAT2_LAST_SEASON_TAG = "hurdat2_last_season"
+PINNED_HURDAT2_LAST_SEASON = 2023
+
+
+def training_data_tags(hurdat2_path: object, tracks: list) -> dict[str, str]:
+    """Which labels a run trained on (#216): the HURDAT2 file's name and
+    sha256 (`data.hurdat2_source.describe`), its newest season, and the
+    sha256 of `configs/` -- the dataset version `dvc_version` can't give
+    yet. Best-effort per field: tagging never fails a training run."""
+    tags: dict[str, str] = {}
+    if hurdat2_path:
+        try:
+            from ..data.hurdat2_source import describe
+
+            tags.update(describe(hurdat2_path))
+        except OSError:
+            pass
+    if tracks:
+        from ..data.splits import latest_final_season
+
+        tags[HURDAT2_LAST_SEASON_TAG] = str(latest_final_season(tracks))
+    try:
+        from ..provenance import config_digest
+
+        tags["config_sha256"] = config_digest()
+    except Exception:  # noqa: BLE001
+        pass
+    return tags
 
 
 def gridded_input_tags(gdas_cache_dir: object) -> dict[str, str]:
@@ -201,6 +236,8 @@ def build_run_tags(
     *,
     execution_mode: ExecutionMode = ExecutionMode.SEQUENTIAL,
     val_metrics: MetricSet | None = None,
+    latest_season: int | None = None,
+    trigger: Trigger = Trigger.MANUAL_SWEEP,
 ) -> RunTags | None:
     """Real `RunTags` for one completed curriculum stage -- every field a
     real, currently-derivable value (git commit, real season-boundary
@@ -219,8 +256,8 @@ def build_run_tags(
         model_type=model_name,
         git_commit=git_commit,
         dvc_version=NO_DVC_VERSION,
-        storm_split=_storm_split(stage),
-        trigger=Trigger.MANUAL_SWEEP,
+        storm_split=_storm_split(stage, latest_season),
+        trigger=trigger,
         gpu_type=_gpu_type(),
         execution_mode=execution_mode,
         input_flavor=stage.flavor,
@@ -237,6 +274,8 @@ def log_stage_run(
     *,
     execution_mode: ExecutionMode = ExecutionMode.SEQUENTIAL,
     val_metrics: MetricSet | None = None,
+    latest_season: int | None = None,
+    trigger: Trigger = Trigger.MANUAL_SWEEP,
 ) -> str | None:
     """Log one completed curriculum stage as a real MLflow run under this
     model's wind-god experiment (`branding.experiment_name`) -- the
@@ -250,7 +289,10 @@ def log_stage_run(
     if mlflow_client is None:
         return None
 
-    tags = build_run_tags(model_name, stage, execution_mode=execution_mode, val_metrics=val_metrics)
+    tags = build_run_tags(
+        model_name, stage, execution_mode=execution_mode, val_metrics=val_metrics,
+        latest_season=latest_season, trigger=trigger,
+    )
     if tags is None:
         return None
 
@@ -297,6 +339,8 @@ def log_curriculum_stages(
     val_metrics: MetricSet,
     *,
     execution_mode: ExecutionMode = ExecutionMode.SEQUENTIAL,
+    latest_season: int | None = None,
+    trigger: Trigger = Trigger.MANUAL_SWEEP,
 ) -> str | None:
     """Log every completed stage in `run` as its own real MLflow run,
     attaching `val_metrics` (the deployable stage's real verification
@@ -315,6 +359,7 @@ def log_curriculum_stages(
         run_id = log_stage_run(
             mlflow_client, model_name, stage, result,
             execution_mode=execution_mode, val_metrics=val_metrics if is_deployable else None,
+            latest_season=latest_season, trigger=trigger,
         )
         if is_deployable:
             deployable_run_id = run_id

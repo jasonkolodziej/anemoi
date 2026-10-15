@@ -299,6 +299,9 @@ def test_run_cnn_curriculum_completes_both_stages(tmp_path):
         make_track("AL011985", season=1985, n=26, seed=0),
         make_track("AL012021", season=2021, n=26, seed=1),
         make_track("AL022021", season=2021, n=26, seed=2),
+        # Stage B validation since #216 (data.splits.season_boundaries: with
+        # 2023 the newest season, 2022 is validation and 2023 the test season).
+        make_track("AL012022", season=2022, n=26, seed=7),
         make_track("AL012023", season=2023, n=26, seed=3),
     ]
     for t in tracks:
@@ -334,6 +337,9 @@ def test_run_cnn_curriculum_streaming_completes_both_stages(tmp_path):
         make_track("AL011985", season=1985, n=26, seed=0),
         make_track("AL012021", season=2021, n=26, seed=1),
         make_track("AL022021", season=2021, n=26, seed=2),
+        # Stage B validation since #216 (data.splits.season_boundaries: with
+        # 2023 the newest season, 2022 is validation and 2023 the test season).
+        make_track("AL012022", season=2022, n=26, seed=7),
         make_track("AL012023", season=2023, n=26, seed=3),
     ]
     for t in tracks:

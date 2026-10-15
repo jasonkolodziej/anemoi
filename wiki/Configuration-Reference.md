@@ -196,7 +196,7 @@ triggers:
 
 | Setting | Why |
 |---|---|
-| `working_track_noise.*` | Documented placeholders. Measure from your own archive with `recalibrate_from_pairs()` — real-format parsers now exist (`data.atcf`, `data.hurdat2`), not yet pointed at a real archive |
+| `working_track_noise.*` | Documented placeholders until measured: `anemoi noise-calibrate --season N` pairs the as-issued TC-Vitals archived since #213 with that season's HURDAT2 final track and prints the values (#216) |
 | `promotion.thresholds` absolute track/intensity limits | Re-baseline against the current NHC verification report. Beat-rate is the real gate |
 
 ---

@@ -28,6 +28,7 @@ from pathlib import Path
 
 from ..data.besttrack import Track
 from ..data.sources import Flavor
+from ..data.splits import latest_final_season
 from ..tracking.checkpoint_store import CheckpointStore
 from ..tracking.experiment_tracking import (
     arch_params_tag,
@@ -36,6 +37,7 @@ from ..tracking.experiment_tracking import (
     gridded_input_tags,
     log_curriculum_stages,
     standardization_tags,
+    training_data_tags,
 )
 from ..tracking.registry import (
     DERIVED_MODELS,
@@ -44,6 +46,7 @@ from ..tracking.registry import (
     Stage,
     latent_signature,
 )
+from ..tracking.tags import Trigger
 from .curriculum import CurriculumRun
 from .orchestrator import OrchestrationError, RunOutcome, Task
 from .promotion import MetricSet, PromotionDecision, evaluate_promotion
@@ -197,6 +200,10 @@ class RealOrchestratorRunner:
     gdas_cache_dir: Path | str
     registry: ModelRegistry
     seed: int = 20260806
+    #: Why this run happened, for its run tags (#216).
+    trigger: Trigger = Trigger.MANUAL_SWEEP
+    #: The HURDAT2 file ``tracks`` came from, for its name/sha256 tags (#216).
+    hurdat2_path: Path | str | None = None
     n_augment: int = 3
     #: Opt-in streaming training (`docs/streaming_dataloader.md`, #60-#63)
     #: -- real per-batch DataLoader training with O(batch_size) VRAM
@@ -325,12 +332,14 @@ class RealOrchestratorRunner:
             else None
         )
 
+        latest_season = latest_final_season(self.tracks) if self.tracks else None
         tags = build_run_tags(
             task.name, run.curriculum.stages[-1], execution_mode=task.execution_mode,
+            latest_season=latest_season, trigger=self.trigger,
         )
         mlflow_run_id = log_curriculum_stages(
             self.registry.mlflow_client, task.name, run, val_metrics,
-            execution_mode=task.execution_mode,
+            execution_mode=task.execution_mode, latest_season=latest_season, trigger=self.trigger,
         )
         tag_dict = tags.to_dict() if tags else {}
         artifacts = self.trained_artifacts.get(task.name)
@@ -340,6 +349,7 @@ class RealOrchestratorRunner:
         tag_dict.update(candidate_tags(artifacts))
         tag_dict.update(standardization_tags(artifacts))
         tag_dict.update(gridded_input_tags(self.gdas_cache_dir))
+        tag_dict.update(training_data_tags(self.hurdat2_path, self.tracks))
         version = self.registry.register(
             task.name,
             run_id=f"orchestrator-{datetime.now(UTC):%Y%m%dT%H%M%S}",

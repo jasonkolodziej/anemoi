@@ -39,8 +39,8 @@ stage_b:
   frozen_modules: [encoder]
 
 # Measured working-vs-final best-track error used to build Stage B inputs.
-# These are the documented starting values; replace with numbers from
-# recalibrate_from_pairs() once paired archive data exists.
+# These are the documented starting values; replace with the numbers
+# `anemoi noise-calibrate --season N` measures from archived as-issued fixes (#216).
 working_track_noise:
   position_rms_nm: 15.0
   intensity_rms_kt: 5.0

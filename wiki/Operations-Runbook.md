@@ -54,7 +54,8 @@ The deployed `anemoi-api-real` Worker's cron (`30 1,7,13,19 * * *`, UTC) fires a
 2. **run cycle {storm}** -- one step per storm, marked as the scheduled run and with the API's full ensemble (it sent `members: 20` until #212). The API answers `409` `exists` if the scheduled run already happened (`already run`), replaces a manual run of the label, and answers `409` `in_progress` if the label is running (retried). A 5xx or an unreachable container is retried twice; any other 4xx is recorded as `refused`;
 3. **refresh read cache** -- the KV snapshot the console reads;
 4. **calibration audit** -- see [Monitoring](Monitoring#calibration-audit);
-5. **archive atcf** -- copies NHC's as-issued TC-Vitals, b-deck, a-deck and `CurrentStorms.json` to R2 `archive/atcf/` (#213). Its output lists the storms covered and how many files were new; `not_published` (e.g. no a-deck yet) is normal, `error` means NHC's index or the store was unreachable and the next cycle retries. Run it by hand with `anemoi atcf-archive` (needs `S3_ARTIFACT_*`); `anemoi atcf-archive --list 2026` summarises a season's archived TC-Vitals.
+5. **archive atcf** -- copies NHC's as-issued TC-Vitals, b-deck, a-deck and `CurrentStorms.json` to R2 `archive/atcf/` (#213). Its output lists the storms covered and how many files were new; `not_published` (e.g. no a-deck yet) is normal, `error` means NHC's index or the store was unreachable and the next cycle retries. Run it by hand with `anemoi atcf-archive` (needs `S3_ARTIFACT_*`); `anemoi atcf-archive --list 2026` summarises a season's archived TC-Vitals;
+6. **skew audit** -- replays up to six cycles old enough for ERA5T against it, in this container (#216; see "The skew audit" below).
 
 So between t+0:00 and t+1:30 the newest forecast on a storm is still the previous cycle's. The console's storm page says so ("The 20261008_06Z cycle hasn't run yet — it's scheduled for 07:30Z").
 
@@ -136,6 +137,14 @@ The storm page reports a cycle as *overdue* 45 minutes after its t+1:30 run time
 4. **Re-running a cycle that exists** (a bad scheduled run) needs an operator: set `ANEMOI_OPERATOR_USER_IDS` (comma-separated user ids) with `wrangler secret put ANEMOI_OPERATOR_USER_IDS` in `docker/api` -- the Worker forwards it to the container -- and `POST` with `"replace": true`. Everyone else gets `409`.
 
 **Console shows something older than the API has:** the read cache (KV) serves a storm for up to 30 minutes before refreshing, and every cycle run refreshes it. To check what the API itself returns, request it signed in (an API key) with `Cache-Control: no-cache` (`X-Anemoi-Cache: bypass` confirms the cache was skipped; an anonymous request is always served from the cache).
+
+### A new HURDAT2 season is out (each spring)
+
+Nothing to do by hand: both images fetch the newest Atlantic HURDAT2 when built, and every training job fetches it again at start (`anemoi hurdat2-fetch`, manifest beside the file). `anemoi retrain-check` counts the new season's fixes against each model's `hurdat2_last_season` tag, and the next run trains on it with the season boundaries moved along (#216). If NHC's listing can't be read the fetch falls back to the pinned 2023 file and says so (`"fallback": true` in the manifest and the job log).
+
+**Then calibrate the working-track noise** against what was archived that season (#213): `anemoi noise-calibrate --season 2026 --hurdat2 /app/data/hurdat2-atl.txt` (needs `S3_ARTIFACT_*`). It pairs each storm's as-issued TC-Vitals with the final best track, prints the `working_track_noise` values for `configs/curriculum.yaml`, and stores the measurement at `archive/noise_calibration/{season}.json`. Changing the config is a reviewed PR: it changes every Stage B run after it.
+
+**The skew audit** runs as the cycle Workflow's last step (`skew audit`): up to six recorded cycles that ERA5T has caught up with (~5 days old) per synoptic cycle, replayed in the API container. Its output reports `n_audited`, `n_samples_added` and `n_remaining`; a growing `n_remaining` means cycles are recorded faster than six per pass -- raise `max_records` in `cycleWorkflow.ts`, or backfill with `anemoi skew-audit`.
 
 ### The skew audit is alerting
 

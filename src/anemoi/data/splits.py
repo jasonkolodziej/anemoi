@@ -59,6 +59,65 @@ STAGE_B_BOUNDARIES: dict[Split, tuple[int, int]] = {
 }
 
 
+#: The first season of real GDAS data (`data.gdas_cache.GDAS_ARCHIVE_START`).
+GDAS_FIRST_SEASON = 2021
+
+
+def latest_final_season(tracks: list[Track]) -> int:
+    """The newest season a HURDAT2 archive has final labels for."""
+    if not tracks:
+        raise ValueError("no tracks")
+    return max(t.season for t in tracks)
+
+
+Boundaries = dict[Split, tuple[int, int]]
+
+
+def season_boundaries(latest_season: int) -> tuple[Boundaries, Boundaries]:
+    """Stage A's and Stage B's boundaries, derived from the newest season with
+    final labels, ``N`` (#216). The fixed tables above stop moving when a new
+    HURDAT2 is published -- Stage B's test seasons (2024-25) were empty, and
+    a new season was never trained on -- and they overlapped: Stage A's test
+    season 2023 was Stage B's validation season, the split promotion is
+    decided on.
+
+    ===========  =====================  =====================
+    split        Stage A (ERA5)          Stage B (GDAS)
+    ===========  =====================  =====================
+    train        1980-2019               2021 .. N-2
+    val          2020 .. N-2             N-1
+    test         N                       N
+    operational  N+1 ..                  N+1 ..
+    ===========  =====================  =====================
+
+    One held-out test season, ``N``, for the whole curriculum, and Stage B's
+    validation season -- the one promotion is decided on -- is never seen
+    by Stage A (N-1 belongs to no Stage A split). Stage A validating on
+    Stage B's training seasons is harmless: they're training data either
+    way. As each spring's HURDAT2 adds a season, it becomes the test season
+    and last year's test season becomes validation, then training.
+    """
+    if latest_season < GDAS_FIRST_SEASON + 2:
+        raise ValueError(
+            f"need final labels through at least {GDAS_FIRST_SEASON + 2} for a Stage B "
+            f"train/val/test split; the archive ends at {latest_season}"
+        )
+    operational = (latest_season + 1, 2100)
+    stage_a = {
+        Split.TRAIN: (1980, 2019),
+        Split.VAL: (2020, latest_season - 2),
+        Split.TEST: (latest_season, latest_season),
+        Split.OPERATIONAL: operational,
+    }
+    stage_b = {
+        Split.TRAIN: (GDAS_FIRST_SEASON, latest_season - 2),
+        Split.VAL: (latest_season - 1, latest_season - 1),
+        Split.TEST: (latest_season, latest_season),
+        Split.OPERATIONAL: operational,
+    }
+    return stage_a, stage_b
+
+
 class LeakageError(RuntimeError):
     """A storm appears in more than one split, or split ordering is violated."""
 

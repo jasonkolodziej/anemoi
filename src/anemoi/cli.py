@@ -140,6 +140,8 @@ def _cmd_gridded_cache(
     from .data.splits import Split, assign_splits, filter_tracks
 
     tracks = parse_hurdat2_file(args.hurdat2)
+    if callable(boundaries):
+        boundaries = boundaries(tracks)
     assignment = assign_splits(tracks, boundaries=boundaries)
     split_tracks = filter_tracks(tracks, assignment, Split(args.split))
     print(f"{args.split}: {len(split_tracks)} storms, "
@@ -211,7 +213,8 @@ def cmd_gdas_cache(args: argparse.Namespace) -> int:
     window and have zero overlap with GDAS's real 2021-present archive.
     """
     from .data.gdas_cache import STAGE_B_NWP_LEAD_HOURS, CacheLeadMismatch, run_fetch_cache
-    from .data.splits import STAGE_B_BOUNDARIES
+    from .data.sources import Flavor
+    from .training.real_run import boundaries_for_tracks
 
     lead = getattr(args, "nwp_lead_hours", STAGE_B_NWP_LEAD_HOURS)
     try:
@@ -220,7 +223,8 @@ def cmd_gdas_cache(args: argparse.Namespace) -> int:
             # Analyses keep their original prefix; forecasts of each lead
             # get their own, so the two never share a storm/time key (#215).
             archive_prefix="gdas_archive" if lead == 0 else f"gdas_archive_f{lead:03d}",
-            boundaries=STAGE_B_BOUNDARIES,
+            # The same seasons Stage B will train on for this archive (#216).
+            boundaries=lambda tracks: boundaries_for_tracks(Flavor.GDAS_FINETUNE, tracks),
             fetch_kwargs={"lead_hours": lead},
         )
     except CacheLeadMismatch as exc:
@@ -265,6 +269,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     """
     from .data.hurdat2 import parse_hurdat2_file
     from .data.sources import Flavor
+    from .data.splits import latest_final_season
     from .tracking.checkpoint_store import CheckpointStore, S3Config
     from .tracking.experiment_tracking import (
         arch_params_tag,
@@ -273,6 +278,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         gridded_input_tags,
         log_curriculum_stages,
         standardization_tags,
+        training_data_tags,
     )
     from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ModelRegistry, Stage
@@ -360,8 +366,11 @@ def cmd_train(args: argparse.Namespace) -> int:
         else None
     )
 
-    tags = build_run_tags(args.model, run.curriculum.stages[-1])
-    mlflow_run_id = log_curriculum_stages(registry.mlflow_client, args.model, run, val_metrics)
+    latest_season = latest_final_season(tracks) if tracks else None
+    tags = build_run_tags(args.model, run.curriculum.stages[-1], latest_season=latest_season)
+    mlflow_run_id = log_curriculum_stages(
+        registry.mlflow_client, args.model, run, val_metrics, latest_season=latest_season,
+    )
     tag_dict = tags.to_dict() if tags else {}
     arch_params = arch_params_tag(artifacts)
     if arch_params is not None:
@@ -369,6 +378,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     tag_dict.update(candidate_tags(artifacts))
     tag_dict.update(standardization_tags(artifacts))
     tag_dict.update(gridded_input_tags(args.gdas_cache_dir))
+    tag_dict.update(training_data_tags(args.hurdat2, tracks))
     version = registry.register(
         args.model,
         run_id=f"cli-{datetime.now(UTC):%Y%m%dT%H%M%S}",
@@ -449,7 +459,11 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
         models = tuple(args.models.split(",")) if args.models else default_models
         schedule = build_schedule(mode, models=models)
 
+    from .tracking.tags import Trigger
+
     runner = RealOrchestratorRunner(
+        hurdat2_path=args.hurdat2,
+        trigger=Trigger(getattr(args, "trigger", Trigger.MANUAL_SWEEP.value)),
         tracks=tracks,
         checkpoint_store=store,
         era5_cache_dir=args.era5_cache_dir,
@@ -527,7 +541,8 @@ def cmd_retrain_check(args: argparse.Namespace) -> int:
     from .data.hurdat2 import parse_hurdat2_file
     from .tracking.checkpoint_store import CheckpointStore, S3Config
     from .tracking.mlflow_client import mlflow_client_from_env
-    from .tracking.registry import ALL_MODELS, GROUP1_MODELS, ModelRegistry, RegistryError
+    from .tracking.registry import ALL_MODELS, GROUP1_MODELS, ModelRegistry
+    from .tracking.tags import Trigger
     from .training.orchestrator import Mode, build_schedule, run_schedule
     from .training.real_orchestrator import RealOrchestratorRunner
     from .training.triggers import Reason, SeasonState, evaluate_all
@@ -576,19 +591,7 @@ def cmd_retrain_check(args: argparse.Namespace) -> int:
         )
 
     tracks = parse_hurdat2_file(args.hurdat2)
-    last_trained: datetime | None = None
-    for model in GROUP1_MODELS:
-        try:
-            created = datetime.fromisoformat(registry.latest(model).created_at)
-        except RegistryError:
-            continue
-        if last_trained is None or created > last_trained:
-            last_trained = created
-    new_synoptic_times = (
-        0
-        if last_trained is None
-        else sum(1 for t in tracks for f in t.fixes if f.valid_time > last_trained)
-    )
+    new_synoptic_times = count_untrained_fixes(tracks, registry)
 
     jobs = evaluate_all(
         now,
@@ -616,7 +619,16 @@ def cmd_retrain_check(args: argparse.Namespace) -> int:
         return 0
 
     schedule = build_schedule(Mode.PARALLEL, models=GROUP1_MODELS)
+    # The tag says why this run happened (#216): it said `manual_sweep`
+    # for every run, whatever fired.
+    reason = next(j.reason for j in jobs if j.reason in dispatchable)
     runner = RealOrchestratorRunner(
+        trigger={
+            Reason.SCHEDULED_MONTHLY: Trigger.SCHEDULED_MONTHLY,
+            Reason.PRESEASON: Trigger.SEASONAL,
+            Reason.DATA_VOLUME: Trigger.DATA_VOLUME,
+        }[reason],
+        hurdat2_path=args.hurdat2,
         tracks=tracks,
         checkpoint_store=store,
         era5_cache_dir=args.era5_cache_dir,
@@ -635,6 +647,35 @@ def cmd_retrain_check(args: argparse.Namespace) -> int:
     print(f"succeeded: {list(result.succeeded)}")
     print(f"failed: {list(result.failed)}")
     return 0 if not result.failed else 1
+
+
+def count_untrained_fixes(tracks, registry) -> int:
+    """Final-labelled fixes in seasons newer than any Group 1 model has
+    trained on -- the data-volume trigger's count (#216).
+
+    It counted HURDAT2 fixes *valid after* the newest registration. But a
+    season's final labels arrive the following spring, all dated last year,
+    so that count was 0 whenever a model had been trained since -- and with
+    the HURDAT2 file pinned in the image it was 0 regardless. Each version
+    now records the newest season it trained on (`hurdat2_last_season`;
+    versions before #216 trained on the pinned 2023 file), so a newly
+    published season counts in full. No registered model: 0, as before --
+    the calendar triggers handle a first training.
+    """
+    from .tracking.experiment_tracking import HURDAT2_LAST_SEASON_TAG, PINNED_HURDAT2_LAST_SEASON
+    from .tracking.registry import GROUP1_MODELS, RegistryError
+
+    trained_through: int | None = None
+    for model in GROUP1_MODELS:
+        try:
+            version = registry.latest(model)
+        except RegistryError:
+            continue
+        season = int(version.tags.get(HURDAT2_LAST_SEASON_TAG, PINNED_HURDAT2_LAST_SEASON))
+        trained_through = season if trained_through is None else max(trained_through, season)
+    if trained_through is None:
+        return 0
+    return sum(len(t.fixes) for t in tracks if t.season > trained_through)
 
 
 def cmd_registry_pull(args: argparse.Namespace) -> int:
@@ -863,6 +904,71 @@ def cmd_drift_reference_fit(args: argparse.Namespace) -> int:
     )
     if store is not None:
         print("pushed to durable storage")
+    return 0
+
+
+def cmd_hurdat2_fetch(args: argparse.Namespace) -> int:
+    """Download the newest Atlantic HURDAT2 NHC has published (#216) to
+    ``--out``, with its manifest beside it. Run at image build and at the
+    start of every training job."""
+    import json
+
+    from .data.hurdat2_source import fetch_latest_hurdat2
+
+    try:
+        manifest = fetch_latest_hurdat2(args.out)
+    except Exception as exc:  # noqa: BLE001 - one clear line, not a traceback
+        print(f"hurdat2-fetch: could not download any HURDAT2 file: {type(exc).__name__}: {exc}")
+        return 1
+    print(json.dumps(manifest, indent=2))
+    if manifest.get("fallback"):
+        reason = manifest["fallback_reason"]
+        print(f"hurdat2-fetch: WARNING fell back to the pinned file ({reason})")
+    return 0
+
+
+def cmd_noise_calibrate(args: argparse.Namespace) -> int:
+    """Measure working-vs-final error for one season (#216): the as-issued
+    TC-Vitals archived by `atcf-archive` (#213), paired against HURDAT2's
+    final best track (`data.atcf.pair_by_valid_time`,
+    `besttrack.recalibrate_from_pairs`). Prints the values to put in
+    `configs/curriculum.yaml`'s `working_track_noise` and stores the
+    measurement in R2 (``archive/noise_calibration/{season}.json``).
+
+    The as-issued bulletin is the *first* one archived for each storm and
+    time -- what a cycle had when it ran -- not NHC's later correction.
+    """
+    import json
+
+    from .data.atcf_archive import archived_tcvitals
+    from .data.hurdat2 import parse_hurdat2_file
+    from .data.noise_calibration import calibrate_season
+    from .tracking.checkpoint_store import CheckpointStore, CheckpointStoreError, S3Config
+
+    try:
+        store = CheckpointStore(S3Config.from_env())
+    except CheckpointStoreError as exc:
+        print(f"noise-calibrate needs real S3_ARTIFACT_* durable storage credentials: {exc}")
+        return 1
+    finals = [t for t in parse_hurdat2_file(args.hurdat2) if t.season == args.season]
+    if not finals:
+        print(f"noise-calibrate: {args.hurdat2} has no {args.season} season yet -- "
+              "final labels are published the following spring")
+        return 1
+    result = calibrate_season(archived_tcvitals(store, args.season), finals)
+    if result is None:
+        print(f"noise-calibrate: no archived working fix matches a {args.season} final fix")
+        return 1
+    print(json.dumps(result, indent=2))
+    print(
+        "\nconfigs/curriculum.yaml working_track_noise:\n"
+        f"  position_rms_nm: {result['position_rms_nm']:.1f}\n"
+        f"  intensity_rms_kt: {result['intensity_rms_kt']:.1f}\n"
+        f"  pressure_rms_mb: {result['pressure_rms_mb']:.1f}"
+    )
+    from .api.cycle_store import _put_text
+
+    _put_text(store, f"archive/noise_calibration/{args.season}.json", json.dumps(result, indent=2))
     return 0
 
 
@@ -1175,6 +1281,24 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_consistency_distill)
 
     p = sub.add_parser(
+        "hurdat2-fetch", help="download the newest Atlantic HURDAT2 NHC has published (#216)",
+    )
+    p.add_argument(
+        "--out", required=True, help="where to write it (a .json manifest goes beside it)",
+    )
+    p.set_defaults(func=cmd_hurdat2_fetch)
+
+    p = sub.add_parser(
+        "noise-calibrate",
+        help="measure working-vs-final best-track error from archived TC-Vitals (#216)",
+    )
+    p.add_argument("--season", type=int, required=True)
+    p.add_argument(
+        "--hurdat2", required=True, help="a HURDAT2 file with that season's final labels",
+    )
+    p.set_defaults(func=cmd_noise_calibrate)
+
+    p = sub.add_parser(
         "atcf-archive",
         help="archive NHC's as-issued TC-Vitals/b-deck/a-deck to durable storage (#213)",
     )
@@ -1287,6 +1411,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument(
         "--mode", default="sequential", choices=["sequential", "parallel"],
+    )
+    from .tracking.tags import Trigger
+
+    p.add_argument(
+        "--trigger", default=Trigger.MANUAL_SWEEP.value, choices=[t.value for t in Trigger],
+        help="why this run is happening, recorded on its run tags (#216)",
     )
     p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
     p.add_argument(
