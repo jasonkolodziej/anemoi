@@ -1,4 +1,9 @@
-# Skew, drift and promotion gates (Scope v2.1 §4.6.3, §5.3, §5.5).
+# Skew, drift, calibration and promotion gates (Scope v2.1 §4.6.3, §5.3, §5.5).
+#
+# Documentation of what the code does, not something it reads: there is no
+# config loader yet (wiki Roadmap, "Config loader"). Every value here mirrors
+# a Python constant or default, and tests/test_config_sync.py fails if any of
+# them disagree, or if a key is added here that nothing checks.
 
 skew_audit:
   # ERA5T lands ~5 days after the cycle; re-run and compare against operational.
@@ -19,6 +24,15 @@ drift:
   validation_loss:
     threshold_fraction: 0.15
     consecutive_required: 3
+
+calibration_audit:
+  # Was the served cone / intensity band right once truth arrived (#184)?
+  # monitoring/calibration_audit.py. Runs once per synoptic cycle, after the
+  # anemoi-cycle Workflow's runs.
+  cone_nominal_rate: 0.667          # the served cone is a 2/3-probability circle
+  intensity_nominal_rate: 0.8       # p10-p90 band
+  verdict_margin: 0.15              # +/- around nominal before "too narrow/wide"
+  min_cases: 5                      # below this: "not enough data"
 
 promotion:
   # Decided on validation. The test set is not a promotion criterion.

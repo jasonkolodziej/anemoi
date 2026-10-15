@@ -516,6 +516,21 @@ Even with entry 44, a cache miss still meant waiting on a cold container, behind
 
 **Enforced by** `console/e2e/cycle-context.spec.ts`, which pins the clock to 07:00Z with a storm whose latest fix is 06Z and newest cycle 00Z, and checks the stated cycle, the scheduled/running/overdue line, and the older-cycle callout.
 
+### 48. The configs were never read -- every value is now checked against the code (#211) — *bugfix, docs*
+
+**Asked to validate that `configs/*.yaml` are used by the code.** They aren't: nothing loads them. `pyyaml` is a declared core dependency that nothing under `src/` imports, and every value lives as a module constant or a function default. The files' own comments said so ("kept in sync by hand, there is no loader"), and the only enforcement was `tests/test_config_sync.py` checking 3 values of about 70 -- added after #188 left `ensemble.members` at 20 for a release.
+
+**What was checked.** Every key in all three files against the value the code actually uses, including callers: none of `plan_cycle`, `build_products`, `build_cone`, `landfall_probability` or the curriculum stages is called with an override, so their defaults are what runs. Result:
+
+- **All ~70 values matched the code.** No runtime behaviour was wrong.
+- **Missing parameters:** the calibration audit's four constants (cone nominal 2/3, intensity nominal 0.8, verdict margin ±0.15, minimum 5 cases) had no config entry at all; the reduced ensemble size (25) existed only in prose; the cone percentile (67) and landfall radius (60 nm) that define two served products were undocumented; and the production run offset (t+1:30, copied by hand into the Worker's cron and the console) appeared nowhere. All added.
+- **Wiki mismatch:** [Configuration Reference](Configuration-Reference) showed Stage B's `season_range` as `[2015, 2019]` -- a range with no real GDAS data -- while the YAML and code said `[2021, 2023]`. Its blocks are now regenerated from the files rather than hand-copied, which is how they went stale.
+- **Stale code comments:** `inference.scheduler`'s module docstring still gave the vitals timeout as t+1:30 (it is derived as t+1:20, entry 11), and the load-shedding comment said "a 10-member ensemble instead of 20-50" (25 instead of 50 since #188).
+
+**Not done: a runtime loader.** It stays a [Roadmap](Roadmap) item. Wiring one in would change how production starts, and the API image doesn't contain `configs/`. The test makes the documentation trustworthy without that risk.
+
+**Enforced by** `tests/test_config_sync.py`: one case per config key (109 in all) against constants, defaults, behaviour (the monthly trigger's day, the preseason date, the nightly refresh hour, suppression during active storms) and the cron in `docker/api/wrangler.jsonc`; a key nothing checks fails; duplicate YAML keys fail; the console's `CYCLE_RUN_DELAY_MIN` must equal the configured offset, which must stay after the vitals timeout. Each was confirmed to fail on the drift it guards against before merging -- including the old wiki value, a changed budget (which also flags the vitals timeout to re-derive), and a moved cron.
+
 ---
 
 ## Implementation → rebrand

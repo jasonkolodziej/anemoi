@@ -110,6 +110,8 @@ reports = calibrate_products(load_calibration_samples(path, checkpoint_store))
 
 **When it runs.** Once per synoptic cycle, as the last step of the `anemoi-cycle` Workflow (see [Operations Runbook](Operations-Runbook#automatic-cycles-in-production)), through `POST /v1/internal/calibration-audit` → `RealState.run_calibration_audit()`. Until #206 it ran inside `_refresh_live_storms`, i.e. inside whichever console request found the live feed stale, downloading every stored cycle of every live storm from R2 while that request waited ([Decision Log #44](Decision-Log#44-every-console-view-woke-the-api-container----storm-reads-now-served-from-kv-206--bugfix-performance)). With `lead_hours` given, a stored cycle whose leads are all not yet due, or all already audited, is skipped from its label alone, without a download.
 
+`configs/monitoring.yaml` → `calibration_audit` documents these, checked against `monitoring/calibration_audit.py` by `tests/test_config_sync.py`.
+
 | Parameter | Default |
 |---|---|
 | Cone nominal containment | 2/3 (the served cone is a 2/3-probability circle) |

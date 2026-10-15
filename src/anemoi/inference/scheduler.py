@@ -3,7 +3,8 @@
 Scope v2.1 §6.2.2 and §8.2. The cycle is *gated on the working fix*, not on the
 synoptic time: prefetch runs from t+0:00 against already-staged t-6 NWP fields,
 but the cycle formally starts when TC-Vitals lands (nominally t+0:45, timeout
-t+1:30). The deliverable deadline is the NHC advisory at t+3:00.
+t+1:20 -- derived, see :func:`derive_vitals_timeout`; the scope's t+1:30 did not
+survive the arithmetic). The deliverable deadline is the NHC advisory at t+3:00.
 """
 
 from __future__ import annotations
@@ -59,9 +60,10 @@ DEFAULT_BUDGETS: tuple[StageBudget, ...] = (
 
 #: Load-shedding profile. Used when the standard profile would not clear the
 #: advisory -- typically after a late working fix. The saving comes almost
-#: entirely from Anemoi-Spread: a 10-member ensemble instead of 20-50. A smaller
-#: ensemble is a real loss of tail resolution, but it is a smaller loss than
-#: delivering nothing before the advisory goes out.
+#: entirely from Anemoi-Spread: REDUCED_ENSEMBLE_MEMBERS (25) instead of
+#: DEFAULT_ENSEMBLE_MEMBERS (50). A smaller ensemble is a real loss of tail
+#: resolution, but it is a smaller loss than delivering nothing before the
+#: advisory goes out.
 REDUCED_BUDGETS: tuple[StageBudget, ...] = (
     StageBudget(Stage.ASSEMBLY, timedelta(minutes=8), timedelta(minutes=14)),
     StageBudget(Stage.PREPROCESS, timedelta(minutes=12), timedelta(minutes=18)),

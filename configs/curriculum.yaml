@@ -1,5 +1,10 @@
 # Two-stage training curriculum (Scope v2.1 §4.6.1).
 #
+# Documentation of what the code does, not something it reads: there is no
+# config loader yet (wiki Roadmap, "Config loader"). Every value here mirrors
+# a Python constant or default, and tests/test_config_sync.py fails if any of
+# them disagree, or if a key is added here that nothing checks.
+#
 # The hard rule: the final stage is always the operational flavor. A run that
 # stops after Stage A cannot be registered or promoted.
 
