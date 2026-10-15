@@ -108,8 +108,19 @@ All paths are prefixed `/v1`.
 |---|---|---|
 | GET | `/storms` | Every storm the demo state knows about |
 | GET | `/storms/{id}` | Storm detail: latest fix, full history, cycles already run |
-| POST | `/storms/{id}/cycles` | Runs one forecast cycle — the only mutating route in v1 |
+| POST | `/storms/{id}/cycles` | Runs one forecast cycle — the only mutating route in v1; see **Who may run a cycle** below |
 | GET | `/storms/{id}/cycles/{cycle}` | Retrieves a previously run cycle; `404` if it hasn't been run |
+
+**Who may run a cycle** (real deployment; [Decision Log #49](Decision-Log#49-anyone-signed-in-could-overwrite-the-official-forecast-212--security-bugfix)). A cycle label is one shared forecast, so `RealState` enforces `api.cycle_policy`:
+
+- The **scheduled** run (the `anemoi-cycle` Workflow) is the official cycle. A manual run only fills a label nothing has run; the next scheduled run of that label replaces it.
+- A manual run of a label that already exists → `409` `exists`, unless an operator (`ANEMOI_OPERATOR_USER_IDS`) sends `"replace": true`.
+- A manual run of an active storm's label before its scheduled run time (t+1:30) → `409` `not_scheduled_yet`, naming the time.
+- A second run of a label while one is executing → `409` `in_progress`.
+- A label before the storm's first fix, or more than 12 h after its latest → `400`.
+- The API image requires a signed-in caller (`X-Anemoi-User-Id`, set by the Worker) on manual runs (`ANEMOI_REQUIRE_CALLER`); the demo state runs anything.
+
+A `409` body is `{"detail": "<message>", "code": "<code>"}`. Every result carries `run`: `{"source": "scheduled" | "manual", "overrides": [...]}`, naming the request fields that moved its inputs off the operational defaults (`lat`, `lon`, `wind_kt`, `members`, `worst_case`, `coastline`). `run` is `null` on results stored before #212.
 
 **Served from a cache in production.** On the deployed `anemoi-api-real` Worker, these three `GET`s are answered from a KV read cache without waking the container ([Decision Log #44](Decision-Log#44-every-console-view-woke-the-api-container----storm-reads-now-served-from-kv-206--bugfix-performance)). Every successful cycle run (scheduled or `POST`) writes to it. The storm list and a storm's detail can be up to 30 minutes old before a background refresh; a stored cycle result never changes. Each response says how it was served:
 
@@ -118,9 +129,11 @@ All paths are prefixed `/v1`.
 | `hit` | From KV, fresh |
 | `stale` | From KV, older than 30 min; refreshed in the background |
 | `miss` | Not cached yet; answered by the container, then cached |
-| `bypass` | The request sent `Cache-Control: no-cache` |
+| `bypass` | A signed-in request sent `Cache-Control: no-cache` |
 
-Send `Cache-Control: no-cache` when a read must reflect a write you just made: KV reads can lag a write by up to a minute. A `404` is never cached. `/v1/internal/*` (operator routes the cron calls, e.g. `POST /v1/internal/calibration-audit`) is not part of the public API and returns `404` from outside.
+`GET /v1/health`, `/v1/schedule?date=…&worst_case=…` and `/v1/monitoring/skew?lead_hours=…` are cached the same way (30-minute refresh): the console polls them every minute, and uncached they kept the container awake (#212). A query with any other parameter is passed through.
+
+A signed-in caller can send `Cache-Control: no-cache` when a read must reflect a write they just made: KV reads can lag a write by up to a minute. An anonymous `no-cache` is served from the cache like any other read; otherwise anyone could wake the container at will. A `404` is never cached. `/v1/internal/*` (operator routes the cron calls, e.g. `POST /v1/internal/calibration-audit`) is not part of the public API and returns `404` from outside.
 
 ### Registry
 

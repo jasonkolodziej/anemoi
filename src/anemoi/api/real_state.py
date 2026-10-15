@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import os
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -46,8 +46,10 @@ from ..inference.scheduler import plan_cycle
 from ..monitoring.calibration_audit import CalibrationSample, LeadProductCalibration
 from ..monitoring.drift import DriftError, DriftReport, ReferenceDistribution, detect_feature_drift
 from ..monitoring.skew import SkewMonitor, SkewReport, SkewSample
+from ..time_utils import cycle_label
 from ..tracking.registry import ALL_MODELS, ModelRegistry
 from . import schemas
+from .cycle_policy import InFlight, RunRequest, check_run
 from .cycle_store import CycleHistory
 
 #: How recently a storm's latest real fix must be to count as "active" --
@@ -203,6 +205,8 @@ class RealState:
             "GDAS_CACHE_DIR", str(Path.home() / "gdas_cache"),
         )
         self._lock = threading.Lock()
+        #: One run per (storm, label) at a time (#212, `api.cycle_policy`).
+        self._in_flight = InFlight()
         #: Why the most recent real deterministic_fn attempt degraded to
         #: the synthetic fallback, if it did -- InferenceCycleError's own
         #: message already carries a real per-model breakdown (#100), this
@@ -459,15 +463,33 @@ class RealState:
         members: int,
         worst_case: bool,
         coastline: tuple[float, float] | None,
+        run: RunRequest | None = None,
     ) -> CycleOutput:
+        """Run (or refuse) one cycle -- see `api.cycle_policy` for who may run
+        what. ``run`` defaults to a manual request with no user, the most
+        restricted kind."""
         from ..time_utils import parse_cycle_label
-        from ..training.real_inference_cycle import build_real_deterministic_fn
-        from ..training.real_inference_ensemble import build_real_ensemble_fn
 
-        self.refresh_registry_if_stale()
-        self._ensure_drift_restored()
-        storm = self.get_storm(storm_id)
+        run = run or RunRequest()
         target = parse_cycle_label(cycle)
+        storm = self.get_storm(storm_id)
+        label = cycle_label(target)
+        with self._in_flight.hold(storm_id, label):
+            self._check_not_started(cycle, target)
+            check_run(
+                storm_id=storm_id, target=target,
+                first_fix=storm.track.fixes[0].valid_time,
+                latest_fix=storm.latest_fix.valid_time,
+                active=storm.active, cycles=storm.cycles, request=run,
+                now=datetime.now(UTC),
+            )
+            return self._run_cycle(
+                storm, target, lat=lat, lon=lon, wind_kt=wind_kt, members=members,
+                worst_case=worst_case, coastline=coastline, run=run,
+            )
+
+    @staticmethod
+    def _check_not_started(cycle: str, target: datetime) -> None:
         # `LatencyOracle`/`plan_cycle` have no wall-clock concept of "now" --
         # by design, since a replay harness needs to plan a cycle before it
         # happens using only a hypothetical `as_of`. But this is the one real
@@ -491,6 +513,26 @@ class RealState:
                 f"{now:%Y-%m-%d %H:%M}Z); a forecast cycle can only be issued "
                 "for a synoptic time that has already begun"
             )
+
+    def _run_cycle(
+        self,
+        storm: RealStormState,
+        target: datetime,
+        *,
+        lat: float | None,
+        lon: float | None,
+        wind_kt: float | None,
+        members: int,
+        worst_case: bool,
+        coastline: tuple[float, float] | None,
+        run: RunRequest,
+    ) -> CycleOutput:
+        from ..training.real_inference_cycle import build_real_deterministic_fn
+        from ..training.real_inference_ensemble import build_real_ensemble_fn
+
+        self.refresh_registry_if_stale()
+        self._ensure_drift_restored()
+        storm_id = storm.storm_id
         oracle = LatencyOracle(use_max_latency=worst_case)
         plan = plan_cycle(target, oracle)
 
@@ -533,9 +575,12 @@ class RealState:
             )
             return real_ensemble(det, n)
 
-        output = run_cycle(
-            plan, fix, deterministic, ensemble,
-            coastline=coastline, requested_members=members,
+        output = replace(
+            run_cycle(
+                plan, fix, deterministic, ensemble,
+                coastline=coastline, requested_members=members,
+            ),
+            run=run.info(),
         )
         with self._lock:
             storm.cycles[output.label] = output

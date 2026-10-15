@@ -324,6 +324,11 @@ creation for console to attach one itself (see `src/auth.ts`,
 `src/index.ts`'s `resolveUserId`). Generate it once with something like
 `openssl rand -base64 32` and set the same value in both places.
 
+Optional: `ANEMOI_OPERATOR_USER_IDS` (comma-separated console user ids)
+lets those users re-run a cycle that already exists, with `"replace": true`
+(#212, `src/anemoi/api/cycle_policy.py`). Unset, nobody can -- a cycle,
+once its scheduled run has happened, stays as issued.
+
 `AUTH_DB` (`d1_databases` in `wrangler.jsonc`) must point at the same D1
 database console's own `wrangler.jsonc` creates -- see console/README.md's
 "Deploying" section for `wrangler d1 create`/schema setup; this Worker only

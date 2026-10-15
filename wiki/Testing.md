@@ -54,6 +54,8 @@ rather than `test_select_nwp_cycle_2`. When one fails, the name should tell you 
 | `test_satellite.py` | Synthetic GOES crop shape/channels; intensity-dependent structure; CNN integration |
 | `test_real_gridded.py` | ERA5/GDAS unit conversion and cropping (synthetic-schema); real endpoints behind `ANEMOI_RUN_NETWORK_TESTS=1` |
 | `test_models.py` | Architecture shapes and latent contracts (**needs torch**) |
+| `test_cycle_policy.py` | Who may run which cycle (#212): scheduled vs manual, `409` codes, operator replace, the track window, one run per label at a time, the image's caller requirement, the real-mode WebSocket |
+| `docker/api/test/*.test.ts` | The Worker's routing and read-cache rules under Node's own runner (`pnpm test`): the decoded-path cycle gate, internal routes, the Workflow's handling of each API answer, cache keys, signed-in-only bypass |
 | `test_config_sync.py` | The runtime config loader: every key is read by some module; edited values take effect; each kind of invalid file is refused; the image layout finds `configs/`; the Worker cron and console copy of the run offset agree |
 
 ---

@@ -160,6 +160,9 @@ RUN groupadd --system --gid 10001 app \
 
 ENV ANEMOI_API_REAL_STATE=1
 ENV HURDAT2_PATH=/app/data/hurdat2.txt
+# A manual cycle POST must carry the user id the Worker resolved (#212,
+# api.cycle_policy); the cycle Workflow marks its own runs instead.
+ENV ANEMOI_REQUIRE_CALLER=1
 # The deployed console's origins (its custom domain and workers.dev, both
 # serving the same build) plus local dev, so a local `pnpm dev` console can
 # also talk to this API.

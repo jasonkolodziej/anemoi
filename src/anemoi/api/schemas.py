@@ -10,6 +10,7 @@ would recognise. Everything else here is additive.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -162,11 +163,22 @@ class CycleProducts(BaseModel):
     degraded: bool
 
 
+class RunInfoOut(BaseModel):
+    """Who ran a cycle and what they changed -- see `inference.cycle.RunInfo`."""
+
+    source: Literal["scheduled", "manual"]
+    overrides: list[str] = Field(default_factory=list)
+
+
 class CycleResult(BaseModel):
     storm_id: str
     payload: CyclePayload
     products: CycleProducts
     on_time: bool
+    #: `None` for a cycle stored before #212 recorded this. Those were all
+    #: run before manual runs were restricted, so nothing says which they
+    #: were; `api.cycle_policy` treats them as official.
+    run: RunInfoOut | None = None
 
 
 class FixOut(BaseModel):
@@ -224,6 +236,13 @@ class RunCycleRequest(BaseModel):
     worst_case: bool = False
     coastline_lat: float | None = None
     coastline_lon: float | None = None
+    replace: bool = Field(
+        default=False,
+        description=(
+            "Re-run a cycle that already exists. Honoured only for an operator "
+            "(ANEMOI_OPERATOR_USER_IDS); anyone else gets 409 for an existing cycle."
+        ),
+    )
 
 
 class ModelVersionOut(BaseModel):

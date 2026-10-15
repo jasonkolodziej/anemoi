@@ -223,7 +223,10 @@
       // pinned to a label that was never created, and every 60s poll then
       // 404'd on it and rewrote `error` (Copilot review, #190).
       cycle = result;
-      viewedLabel = cycleInput;
+      // The label the API actually stored, not what was typed: it accepts
+      // `20261015_6Z` and stores `20261015_06Z`, and pinning the typed form
+      // made every later poll 404 on a label that doesn't exist (#212).
+      viewedLabel = result.payload.cycle;
       storm = await getStorm(stormId, { fresh: true });
     } catch (e) {
       error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
@@ -313,6 +316,13 @@
                 >
               {/if}
             </p>
+            {#if cycle.run?.source === "manual"}
+              <p class="mt-1 text-xs text-status-degraded" data-testid="manual-run">
+                A manual run{cycle.run.overrides.length > 0
+                  ? ` (changed: ${cycle.run.overrides.join(", ")})`
+                  : ""}, not the scheduled one — the scheduled run replaces it.
+              </p>
+            {/if}
             <p class="mt-1 text-xs text-text-muted">
               Map times are when each forecast point is valid, counted from
               {cycle.payload.cycle.slice(-3)} — not from the latest fix ({formatUtc(

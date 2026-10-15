@@ -10,7 +10,7 @@
  * its own, a finished step is never re-run, and one storm's failure never
  * stops the others.
  *
- *   find due storms -> run cycle {storm} (one step each) -> refresh read cache -> calibration audit
+ *   find active storms -> run cycle {storm} (one step each) -> refresh read cache -> calibration audit
  *
  * The cron starts one instance per cycle label (`index.ts`'s `scheduled`),
  * with the label as the instance id, so an at-least-once duplicate cron
@@ -19,6 +19,7 @@
 import { getContainer } from '@cloudflare/containers';
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { type ContainerFetch, putCycleResult, refreshStormSnapshot } from './readCache';
+import { RUN_SOURCE_HEADER, classifyCycleResponse } from './routing';
 
 export interface CycleParams {
 	/** Synoptic cycle label, e.g. `20261008_06Z`. */
@@ -28,11 +29,6 @@ export interface CycleParams {
 interface StormSummaryOut {
 	storm_id: string;
 	active: boolean;
-	last_cycle: string | null;
-}
-
-interface StormDetailOut {
-	cycles: string[];
 }
 
 /** Workflow instance ids are one per cycle label. */
@@ -65,11 +61,12 @@ export class CycleWorkflow extends WorkflowEntrypoint<Env, CycleParams> {
 			const res = await fetchContainer(new Request('https://internal/v1/storms'));
 			if (!res.ok) throw new Error(`GET /v1/storms -> ${res.status}`);
 			const storms = (await res.json()) as StormSummaryOut[];
-			const active = storms.filter((s) => s.active);
-			// Idempotent against `last_cycle`, as before: the cron could also
-			// overlap a cycle someone ran by hand.
-			const due = active.filter((s) => s.last_cycle !== cycleLabel).map((s) => s.storm_id);
-			log(`${due.length}/${active.length} active storm(s) due`);
+			// Every active storm, including one whose last cycle already has
+			// this label: that may be a manual run, which the scheduled run
+			// replaces. The API answers 409 `exists` when the scheduled run
+			// already happened (#212).
+			const due = storms.filter((s) => s.active).map((s) => s.storm_id);
+			log(`${due.length} active storm(s)`);
 			return due;
 		});
 
@@ -124,12 +121,18 @@ export class CycleWorkflow extends WorkflowEntrypoint<Env, CycleParams> {
 }
 
 /**
- * One storm's cycle. Safe to retry: a previous attempt that ran the cycle
- * but lost its response is detected from the storm's own cycle list rather
- * than run twice. A 4xx is the container refusing the request (unknown
- * storm, a cycle that hasn't started) -- retrying can't change that, so it
- * is a completed step with a "refused" outcome rather than a thrown error.
- * (`NonRetryableError` would fail the whole instance, not just this storm.)
+ * One storm's cycle. Safe to retry: the API refuses a second scheduled run
+ * of a label (409 `exists`, reported as done) and a run of a label already
+ * running (409 `in_progress`, thrown so the step retries once the first
+ * finishes). Any other 4xx is the container refusing the request (unknown
+ * storm, a cycle outside the storm's track) -- retrying can't change that,
+ * so it is a completed step with a "refused" outcome rather than a thrown
+ * error. (`NonRetryableError` would fail the whole instance, not just this
+ * storm.)
+ *
+ * No `members`: the API's default is the full operational ensemble
+ * (`configs/inference.yaml`). This sent 20 until #212, so every scheduled
+ * cycle since #188 raised the default to 50 was a reduced ensemble.
  */
 async function runStormCycle(
 	fetchContainer: ContainerFetch,
@@ -137,21 +140,23 @@ async function runStormCycle(
 	stormId: string,
 	cycleLabel: string,
 ): Promise<string> {
-	const detail = await fetchContainer(new Request(`https://internal/v1/storms/${stormId}`));
-	if (detail.ok && ((await detail.json()) as StormDetailOut).cycles.includes(cycleLabel)) {
-		return 'already run';
-	}
-
 	const res = await fetchContainer(
 		new Request(`https://internal/v1/storms/${stormId}/cycles`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ cycle: cycleLabel, members: 20 }),
+			headers: { 'Content-Type': 'application/json', [RUN_SOURCE_HEADER]: 'scheduled' },
+			body: JSON.stringify({ cycle: cycleLabel }),
 		}),
 	);
 	const body = await res.text();
-	if (res.status >= 400 && res.status < 500) return `refused: ${res.status} ${body.slice(0, 200)}`;
-	if (!res.ok) throw new Error(`${res.status} ${body}`);
-	await putCycleResult(kv, stormId, body);
-	return `ran (${res.status})`;
+	switch (classifyCycleResponse(res.status, body)) {
+		case 'ran':
+			await putCycleResult(kv, stormId, body);
+			return `ran (${res.status})`;
+		case 'done':
+			return 'already run';
+		case 'refused':
+			return `refused: ${res.status} ${body.slice(0, 200)}`;
+		case 'retry':
+			throw new Error(`${res.status} ${body.slice(0, 200)}`);
+	}
 }

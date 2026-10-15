@@ -538,6 +538,29 @@ Even with entry 44, a cache miss still meant waiting on a cold container, behind
 
 **Enforced by** `tests/test_config_sync.py`: every key in the files is read by some module (a key nothing reads fails -- it is a setting someone would edit expecting an effect); edited values reach the code in a fresh interpreter; 16 kinds of invalid file are each refused with their message (fixed keys, a budget change without re-deriving the timeout, wrong types including `true` for a number, a missing key, an impossible date, a labels-only source as an input, …); a copy of the image layout (`/app/src` + `/app/configs`) imports with no env var and fails clearly without `configs/`; both Dockerfile stages copy it and `.dockerignore` admits it; `deploy-plan.sh` redeploys on it; and the Worker's cron and the console's `CYCLE_RUN_DELAY_MIN` match `scheduled_run_offset_minutes`. Each was confirmed to fail on the drift it guards against.
 
+### 49. Anyone signed in could overwrite the official forecast (#212) — *security, bugfix*
+
+**Found in a review of the console → Worker → API → R2/KV path after #211.**
+
+- **The cycle gate could be bypassed.** The Worker matched `POST /v1/storms/{id}/cycles` against the raw path, while uvicorn decodes it. `POST /v1/storms/AL012026%2Fcycles` skipped the 401, the rate limiter, metering and the KV update, and the API ran the cycle anyway (reproduced: `201`). The KV entry then served the replaced cycle for up to 90 days.
+- **A run replaced the shared forecast.** `run_cycle` had no notion of an existing label. Any signed-in POST overwrote it in memory, R2 and KV -- with the caller's `lat`/`lon`/`wind_kt`, `members=1`, `worst_case`, or a label years outside the storm (`20200101_00Z` on a 2026 storm: `201`). A tab opened at 07:00Z still holds `…_06Z` in its run form; clicking Run at 14:00 silently replaced the scheduled 06Z cycle.
+- **A manual run cancelled the scheduled one.** The Workflow skipped any storm whose `last_cycle` equalled the label, and the form defaults to the current synoptic label. A run at t+0:45 became the official cycle, on the estimated vitals the t+1:30 schedule exists to avoid.
+- **Scheduled cycles ran 20 members.** The Workflow hard-coded `members: 20`; #188 raised the default to 50. Every scheduled cycle was a reduced ensemble, and the calibration audit mixed both sizes.
+- **Two runs of one label could execute at once** (a manual POST racing the Workflow, or a Workflow retry racing its own lost attempt); the last to finish won in R2 and KV.
+- **Smaller:** the home page's `Promise.all` blanked a KV-served storm list when `/v1/health` failed on a cold start; health, schedule and skew weren't cached, so a visible tab kept the container awake; an anonymous `Cache-Control: no-cache` woke it at will; a typed `…_6Z` label pinned the page to a cycle stored as `…_06Z`, 404ing every poll; and the WebSocket read the demo state in real mode ("unknown storm" for every real storm).
+
+**Fix.**
+
+- **The Worker matches the decoded path** (`routing.ts`, as `isInternalPath` already did), refuses an undecodable one, and strips `X-Anemoi-Run-Source` from public requests. Only a signed-in caller can bypass the cache.
+- **`api.cycle_policy`**, enforced by `RealState.run_cycle`. The Workflow marks its runs `scheduled` (a header only it can send) and they are the official cycle: a second one is `409 exists`, a manual run of the label is replaced. A manual run only fills a label nothing has run (`409 exists` otherwise, unless an operator asks to `replace`), waits for an active storm's scheduled run time (`409 not_scheduled_yet`), and must fall within the storm's track (`400`). One run per (storm, label) executes at a time (`409 in_progress`, which the Workflow retries). The API image also refuses a manual run with no resolved user (`ANEMOI_REQUIRE_CALLER`), in case anything ever gets past the Worker again.
+- **Every result records its run** (`run.source`, `run.overrides`), in the served JSON and in R2, so the console can label a manual run and a retrain can tell an as-issued forecast from an experiment.
+- **The Workflow sends no `members`**, so scheduled cycles get the configured full ensemble; it no longer filters on `last_cycle`.
+- **Console:** `Promise.allSettled` on the home page; the pinned label comes from the stored result; a manual run is labelled as such. **Read cache:** `/v1/health`, `/v1/schedule` and `/v1/monitoring/skew` are cached, keyed by exactly the query they depend on. **WebSocket:** reads the configured state off the event loop and closes after 15 minutes so it can't keep the container awake.
+
+**Not changed:** the demo state still runs anything (no cron, no shared audience). Three console e2e tests that run cycles without signing in (`landfall-and-verification` "coastline", `periodic-refresh` "in flight" and "leaves the cycle the user selected") fail on `main` too since #171 required sign-in; CI runs only the auth suite.
+
+**Enforced by** `tests/test_cycle_policy.py` (each rule, through the real API too: run info stored in R2, the scheduled run replacing a manual one, an operator replace, the `not_scheduled_yet` window, a concurrent run refused, the image's caller requirement, the real-mode WebSocket) and `docker/api/test/*.test.ts` under `pnpm test` (encoded-slash and encoded-letter cycle paths, undecodable paths, the Workflow's reading of each API answer, cache keys for the new routes, anonymous vs signed-in bypass), now run by "Test: docker/api".
+
 ---
 
 ## Implementation → rebrand
