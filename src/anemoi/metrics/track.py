@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ..geo import bearing_deg, cross_along_track_nm, haversine_nm
+from ..geo import bearing_deg, cross_along_track_nm, cross_along_track_nms, haversine_nm
 
 #: Lead times verified, in hours (§7.3).
 LEAD_TIMES: tuple[int, ...] = (12, 24, 36, 48, 72, 96, 120)
@@ -86,16 +86,30 @@ def verify(pairs: list[VerificationPair]) -> dict[int, LeadTimeStats]:
     for p in pairs:
         by_lead.setdefault(p.forecast.lead_hours, []).append(p)
 
+    # Each lead's errors in one array call, not one `track_error_nm` /
+    # `decomposed_nm` per pair -- the same formulas (`geo`), ~100x less
+    # overhead on a training run's tens of thousands of pairs (#218).
     out: dict[int, LeadTimeStats] = {}
     for lead, group in sorted(by_lead.items()):
-        track = np.array([p.track_error_nm for p in group])
-        intensity = np.array([p.intensity_error_kt for p in group])
-        decomposable = [p for p in group if p.obs_motion_bearing is not None]
+        f_lat = np.array([p.forecast.lat for p in group], dtype=float)
+        f_lon = np.array([p.forecast.lon for p in group], dtype=float)
+        o_lat = np.array([p.obs_lat for p in group], dtype=float)
+        o_lon = np.array([p.obs_lon for p in group], dtype=float)
+        track = np.asarray(haversine_nm(o_lat, o_lon, f_lat, f_lon), dtype=float).reshape(-1)
+        intensity = np.array([p.intensity_error_kt for p in group], dtype=float)
+        decomposable = np.array([p.obs_motion_bearing is not None for p in group])
         cross = along = None
-        if decomposable:
-            pairs_xy = np.array([p.decomposed_nm() for p in decomposable])
-            cross = float(pairs_xy[:, 0].mean())
-            along = float(pairs_xy[:, 1].mean())
+        if decomposable.any():
+            motion = np.array(
+                [p.obs_motion_bearing for p in group if p.obs_motion_bearing is not None],
+                dtype=float,
+            )
+            xs, ys = cross_along_track_nms(
+                f_lat[decomposable], f_lon[decomposable],
+                o_lat[decomposable], o_lon[decomposable], motion,
+            )
+            cross = float(xs.mean())
+            along = float(ys.mean())
         out[lead] = LeadTimeStats(
             lead_hours=lead,
             n=len(group),

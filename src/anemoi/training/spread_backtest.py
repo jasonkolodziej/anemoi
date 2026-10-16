@@ -22,7 +22,7 @@ What's measured is exactly what production serves:
 * **The same sampling and conversions as production and training.**
   `model.sample(...)` with its own defaults (as `build_real_ensemble_fn`
   calls it), un-standardised with the version's real stats, converted to
-  absolute positions with `real_run.displacement_to_latlon` -- observed
+  absolute positions with `real_run.displacements_to_absolute` -- observed
   positions derived from the displacement targets the way
   `train_diffusion_stage`'s own validation does, so this agrees with the
   version's registered track-error metric rather than re-deriving truth
@@ -210,7 +210,7 @@ def run_spread_backtest(
     from ..tracking.registry import GROUP1_MODELS, RegistryError, latent_signature
     from .real_inference import load_run_artifacts, load_standardization_stats, load_trained_model
     from .real_latents import CONTEXT_FEATURE_NAMES, extract_joint_latents
-    from .real_run import displacement_to_latlon
+    from .real_run import displacements_to_absolute
 
     champions = {m: registry.champion(m) for m in GROUP1_MODELS}
     missing = [m for m, v in champions.items() if v is None]
@@ -247,7 +247,6 @@ def run_spread_backtest(
 
     n_cases, n_leads = val.mask.shape
     members_abs = np.zeros((n_cases, n_members, n_leads, 3))
-    true_abs = np.zeros((n_cases, n_leads, 3))
     generator = torch.Generator().manual_seed(sample_seed)
     z_z = (val.z - stats["z_mean"]) / stats["z_std"]
     with torch.no_grad():
@@ -255,14 +254,12 @@ def run_spread_backtest(
             z_t = torch.as_tensor(z_z[ci : ci + 1], dtype=torch.float32)
             samples = model.sample(z_t, n_members=n_members, generator=generator).cpu().numpy()
             disp = samples * stats["y_std"] + stats["y_mean"]  # (n_members, n_leads, 3)
-            base_lat, base_lon = val.base_lat[ci], val.base_lon[ci]
-            for li in range(n_leads):
-                for mi in range(n_members):
-                    lat, lon = displacement_to_latlon(base_lat, base_lon, *disp[mi, li, :2])
-                    members_abs[ci, mi, li] = (lat, lon, disp[mi, li, 2])
-                obs_dx, obs_dy, obs_wind = val.y[ci, li]
-                obs_lat, obs_lon = displacement_to_latlon(base_lat, base_lon, obs_dx, obs_dy)
-                true_abs[ci, li] = (obs_lat, obs_lon, obs_wind)
+            members_abs[ci] = displacements_to_absolute(disp, val.base_lat[ci], val.base_lon[ci])
+    true_abs = displacements_to_absolute(
+        np.asarray(val.y, dtype=float),
+        np.asarray(val.base_lat)[:, None],
+        np.asarray(val.base_lon)[:, None],
+    )
 
     base = np.stack([val.base_lat, val.base_lon], axis=1)
     sin_i = CONTEXT_FEATURE_NAMES.index("heading_sin")

@@ -691,6 +691,62 @@ The spec mocks the API, so CI now runs it against the built Worker next to `auth
 
 **Also fixed in the suite.** The 14 older specs that click **Run cycle** had failed since #171 by being sent to sign in. They now sign in and run a label the storm doesn't have. Signing in from parallel workers is serialized (`withEmailLock`). The closed-registration tests run as their own project, after the rest.
 
+### 55. Numba evaluated for the Python numerics -- not adopted; the loops vectorised instead (#218) — *evaluation, performance*
+
+**The question.** Would compiling the Python-side numerics with Numba speed the project up?
+
+**Where the time goes, measured.** Training is torch forward and backward passes, which Numba can't compile. A live cycle's cost is model inference and the NOAA/GCS fetches. The Python numerics that remained were small loops making one NumPy call per point:
+- per-member distances in the cone and landfall;
+- displacement-to-position conversion in every training runner's validation, the latents, the PINN, the spread backtest and consistency distillation;
+- one distance and bearing per pair in `verify()`;
+- per-row CRPS and rank histogram;
+- per-case motion bearings in the ensemble calibration.
+
+Each NumPy call carries ~10 µs of overhead, and that overhead was most of the time.
+
+**Benchmarked, three ways** (`numba 0.68.0`, NumPy 2.5.3, Python 3.13):
+
+| loop | as written | vectorised NumPy | Numba |
+|---|---|---|---|
+| displacement → position, 20k windows × 7 leads | 926 ms | 22 ms | 21 ms + 2.7 s compile |
+| CRPS, 2,000 cases × 50 members | 26 ms | 0.8 ms | 4.1 ms + 1.3 s compile |
+
+**Decision: Numba is not adopted.**
+- Vectorised NumPy was as fast or faster on every loop.
+- Numba's import (~1.3 s) and per-function compile (1–3 s on first call) would land on every cold start of the scale-to-zero API container (entry 38), unless cached to disk, which is fragile in a read-only image.
+- It adds llvmlite (57 MB) to every install, including the CPU-only API image.
+- It pins NumPy (`<2.6` for 0.68), and this project tracks the newest NumPy.
+
+Worth revisiting only for a loop that is genuinely sequential (each step depending on the last) over large arrays. Nothing here is.
+
+**What changed instead.** Every one of those loops became array maths, with no new dependency and no public signature changed.
+- `geo` gained `bearings_deg`, `offset_positions` and `cross_along_track_nms`. The scalar forms delegate to them, so each formula exists once.
+- `training.real_run` gained `displacements_to_latlon`, `displacements_to_absolute` and `verification_pairs`. The last replaced three copies of the same pair-building loop.
+- The climatological fallback ensemble keeps its random draws in the same order, so a seed gives the same members.
+
+Measured on the same inputs, main vs this change:
+- converting 20k × 7 displacements: 822 → 30 ms;
+- building 140k verification pairs: 2.22 → 0.64 s;
+- `verify()` over 140k pairs: 1.32 → 0.13 s;
+- CRPS: 22.6 → 0.8 ms;
+- rank histogram: 9.1 → 0.13 ms;
+- a 50-member cycle's products: 8.2 → 2.7 ms;
+- the whole demo cycle: 12.6 → 5.6 ms.
+
+**A bug found on the way.** `geo.haversine_nm` decided its result was a scalar from the *first* point alone. A single point against an array of points therefore called `float()` on an array and raised. No caller passed that combination until the cone did; it now decides from the result's shape.
+
+**Enforced by** `tests/test_vectorised_numerics.py`. It checks every array form against an independent per-point reference in plain `math`:
+- the geodesy, and displacement conversion, including zero displacement and the antimeridian;
+- `verification_pairs` (same pairs, same order) and `verify`, with and without motion bearings;
+- CRPS against the O(m²) pairwise form, including ties;
+- the rank histogram, including ties;
+- the calibration bearings and member errors;
+- the cone and landfall;
+- the seeded climatological ensemble;
+- the `haversine_nm` broadcast.
+
+The API job in `deploy.yml` runs it, since the cycle's product maths is what the API serves.
+
 ---
 
 ## Implementation → rebrand

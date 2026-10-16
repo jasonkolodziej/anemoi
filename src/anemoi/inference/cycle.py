@@ -24,7 +24,7 @@ import numpy as np
 from ..data import sources
 from ..data.besttrack import Fix, TrackQuality, assert_input_safe
 from ..data.sources import Flavor
-from ..geo import offset_position
+from ..geo import offset_positions
 from ..time_utils import cycle_label
 from .postprocess import CLIMATOLOGICAL_CONE_NM, EnsembleMember, ForecastProducts, build_products
 from .scheduler import CyclePlan
@@ -198,27 +198,28 @@ def climatological_ensemble(
     a probabilistic product on the wire.
     """
     rng = np.random.default_rng(seed)
+    base_lat = np.asarray(deterministic.lats, dtype=float)
+    base_lon = np.asarray(deterministic.lons, dtype=float)
     members: list[EnsembleMember] = []
     for i in range(n_members):
-        lats, lons, winds = [], [], []
+        # Drawn lead by lead in the same order as always (distance, bearing,
+        # wind), so a seed gives the same members; only the position maths
+        # is done for all leads at once.
+        dists, bearings, winds = [], [], []
         for k, lead in enumerate(deterministic.lead_hours):
             radius = CLIMATOLOGICAL_CONE_NM.get(lead, 60.0)
             # 67th-percentile radius -> sigma via the Rayleigh quantile.
             sigma = radius / np.sqrt(-2.0 * np.log(1.0 - 0.67))
-            dist = float(abs(rng.normal(0.0, sigma)))
-            bearing = float(rng.uniform(0.0, 360.0))
-            lat, lon = offset_position(
-                float(deterministic.lats[k]), float(deterministic.lons[k]), dist, bearing
-            )
-            lats.append(lat)
-            lons.append(lon)
+            dists.append(float(abs(rng.normal(0.0, sigma))))
+            bearings.append(float(rng.uniform(0.0, 360.0)))
             winds.append(float(deterministic.winds_kt[k] + rng.normal(0.0, 8.0)))
+        lats, lons = offset_positions(base_lat, base_lon, np.array(dists), np.array(bearings))
         members.append(
             EnsembleMember(
                 member_id=i,
                 lead_hours=deterministic.lead_hours,
-                lats=np.array(lats),
-                lons=np.array(lons),
+                lats=lats,
+                lons=lons,
                 winds_kt=np.clip(np.array(winds), 0.0, None),
             )
         )
