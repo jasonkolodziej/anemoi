@@ -60,6 +60,7 @@ rather than `test_select_nwp_cycle_2`. When one fails, the name should tell you 
 | `test_nwp_lead.py` | Live cycles read the `t−6` `f006` (else `t−12` `f012`, else none), cached by position; the payload and provenance report the NWP really used; caches record their lead and refuse mixing; training tags the lead |
 | `test_cycle_provenance.py` | A cycle starts from its own fix (not the latest relabelled), says where it came from, flags a synthetic track, an archive storm and an untrained basin, records its real issue time, and leaves a per-run input record with its gridded fields |
 | `test_atcf_archive.py` | NHC's as-issued files archived verbatim, every basin, only new content, never overwritten; storms kept a few days after leaving the index; every TC-Vitals revision read back in issue order; the live track uses NHC's latest revision |
+| `test_vectorised_numerics.py` | The array forms of the geodesy, displacement conversion, verification pairs and `verify`, CRPS, rank histogram, calibration bearings, cone and landfall agree with per-point references; zero displacement, the antimeridian and tied members; a seed gives the same climatological ensemble; `haversine_nm` broadcasts one point against many (Decision Log 55) |
 | `test_config_sync.py` | The runtime config loader: every key is read by some module; edited values take effect; each kind of invalid file is refused; the image layout finds `configs/`; the Worker cron and console copy of the run offset agree |
 
 ---

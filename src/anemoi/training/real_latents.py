@@ -51,7 +51,7 @@ from .device import get_device
 from .real_run import (
     RunArtifacts,
     boundaries_for_tracks,
-    displacement_to_latlon,
+    displacements_to_absolute,
     iter_stage_windows,
 )
 
@@ -343,14 +343,9 @@ def _displacement_to_absolute(
 ) -> np.ndarray:
     """``disp`` is (N, n_leads, 3) = (dx_east_nm, dy_north_nm, wind_kt);
     returns (N, n_leads, 3) = (lat, lon, wind)."""
-    out = np.zeros_like(disp)
-    n, n_leads, _ = disp.shape
-    for si in range(n):
-        for li in range(n_leads):
-            dx, dy, wind = disp[si, li]
-            lat, lon = displacement_to_latlon(base_lat[si], base_lon[si], dx, dy)
-            out[si, li] = [lat, lon, wind]
-    return out
+    return displacements_to_absolute(
+        disp, np.asarray(base_lat)[:, None], np.asarray(base_lon)[:, None]
+    ).astype(disp.dtype)
 
 
 def extract_joint_latents(

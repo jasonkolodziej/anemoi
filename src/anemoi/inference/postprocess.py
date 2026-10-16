@@ -136,9 +136,17 @@ class ForecastProducts:
     notes: tuple[str, ...] = ()
 
 
+def _positions(members: list[EnsembleMember], leads: tuple[int, ...]) -> np.ndarray:
+    """Every member's (lat, lon) at ``leads``: ``(n_members, len(leads), 2)``.
+    Distances are then taken over the whole array in one call -- one
+    `haversine_nm` per member and lead was most of a cycle's product time
+    (#218)."""
+    return np.array([[m.at(lead)[:2] for lead in leads] for m in members], dtype=float)
+
+
 def deterministic_center(members: list[EnsembleMember], lead: int) -> tuple[float, float]:
     """Ensemble-mean position at a lead time."""
-    pts = np.array([m.at(lead)[:2] for m in members], dtype=float)
+    pts = _positions(members, (lead,))[:, 0]
     return float(pts[:, 0].mean()), float(pts[:, 1].mean())
 
 
@@ -146,10 +154,9 @@ def cone_radius_from_spread(
     members: list[EnsembleMember], lead: int, percentile: float = CONE_PERCENTILE
 ) -> float:
     """Radius containing ``percentile``% of members around the ensemble mean."""
-    clat, clon = deterministic_center(members, lead)
-    dists = np.array(
-        [haversine_nm(clat, clon, *m.at(lead)[:2]) for m in members], dtype=float
-    )
+    pts = _positions(members, (lead,))[:, 0]
+    clat, clon = float(pts[:, 0].mean()), float(pts[:, 1].mean())
+    dists = np.asarray(haversine_nm(clat, clon, pts[:, 0], pts[:, 1]), dtype=float)
     return float(np.percentile(dists, percentile))
 
 
@@ -237,12 +244,11 @@ def landfall_probability(
     if not members:
         raise ValueError("empty ensemble")
     leads = (lead,) if lead is not None else members[0].lead_hours
-    hits = 0
-    for m in members:
-        closest = min(
-            haversine_nm(coastline_lat, coastline_lon, *m.at(l)[:2]) for l in leads
-        )
-        hits += int(closest <= threshold_nm)
+    pts = _positions(members, leads)
+    dists = np.asarray(
+        haversine_nm(coastline_lat, coastline_lon, pts[..., 0], pts[..., 1]), dtype=float
+    )
+    hits = int((dists.min(axis=1) <= threshold_nm).sum())
     return hits / len(members)
 
 

@@ -220,13 +220,16 @@ jobs:
         #
         # test_config_sync.py too: since #211 configs/ is read at runtime and
         # counts as an API change, so its loader/validation tests gate the
-        # API like its routes do.
+        # API like its routes do. test_vectorised_numerics.py checks the
+        # cycle's product and verification maths against per-point
+        # references (#218); it needs no torch.
         run: >-
           uv run --frozen --extra dev --extra api --extra tracking
           --extra storage --extra gridded
           pytest -q tests/test_api_docs.py tests/test_api_real_state.py tests/test_api_smoke.py
           tests/test_config_sync.py tests/test_cycle_policy.py tests/test_atcf_archive.py
           tests/test_cycle_provenance.py tests/test_nwp_lead.py tests/test_retrain_seasons.py
+          tests/test_vectorised_numerics.py
 
       # The first build of the API image used to happen inside `wrangler
       # deploy`, in production -- so an image that couldn't start (since

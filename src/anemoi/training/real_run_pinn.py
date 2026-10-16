@@ -60,7 +60,7 @@ from .promotion import MetricSet
 from .real_run import (
     RunArtifacts,
     boundaries_for_tracks,
-    displacement_to_latlon,
+    displacements_to_absolute,
     iter_stage_windows,
 )
 
@@ -209,16 +209,10 @@ def _candidate_and_true_absolute(
         xt = torch.as_tensor(samples.x_track, dtype=torch.float32, device=device)
         pred_disp = candidate_model(xt).cpu().numpy()
 
-    n, n_leads, _ = pred_disp.shape
-    candidate_abs = np.zeros_like(pred_disp)
-    true_abs = np.zeros_like(samples.y)
-    for si in range(n):
-        base_lat, base_lon = samples.base_lat[si], samples.base_lon[si]
-        for li in range(n_leads):
-            plat, plon = displacement_to_latlon(base_lat, base_lon, *pred_disp[si, li, :2])
-            candidate_abs[si, li] = [plat, plon, pred_disp[si, li, 2]]
-            tlat, tlon = displacement_to_latlon(base_lat, base_lon, *samples.y[si, li, :2])
-            true_abs[si, li] = [tlat, tlon, samples.y[si, li, 2]]
+    base_lat = np.asarray(samples.base_lat)[:, None]
+    base_lon = np.asarray(samples.base_lon)[:, None]
+    candidate_abs = displacements_to_absolute(pred_disp, base_lat, base_lon).astype(pred_disp.dtype)
+    true_abs = displacements_to_absolute(samples.y, base_lat, base_lon).astype(samples.y.dtype)
     return candidate_abs, true_abs
 
 
@@ -335,14 +329,7 @@ def _disp_to_abs_batch(disp: np.ndarray, base: np.ndarray) -> np.ndarray:
     is ``(batch, 2)`` (lat, lon) -- returns ``(batch, n_leads, 3)`` absolute
     (lat, lon, wind_kt), PINN's own coordinate convention (module
     docstring)."""
-    n, n_leads, _ = disp.shape
-    out = np.zeros_like(disp)
-    for si in range(n):
-        base_lat, base_lon = base[si]
-        for li in range(n_leads):
-            lat, lon = displacement_to_latlon(base_lat, base_lon, *disp[si, li, :2])
-            out[si, li] = [lat, lon, disp[si, li, 2]]
-    return out
+    return displacements_to_absolute(disp, base[:, 0:1], base[:, 1:2]).astype(disp.dtype)
 
 
 def _filter_windows_with_finite_env(windows: list, cache_dir: Path) -> list:
