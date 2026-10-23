@@ -1,8 +1,27 @@
 # Boreas and Kaikias not weighing in on a live storm (2026-10-23)
 
-**Status:** root cause found in the code, not yet confirmed against the live
-storm's data. This note is the hand-off for a laptop session that has
-production access. Steps 1–3 below confirm the cause; step 4 is the fix.
+**Status:** root cause found in the code and confirmed on the live storm
+(AL102026 Josephine, below). This note is the hand-off for a laptop session
+that has production access. Step 3 (ruling out PINN's other failures) is
+still open; step 4 is the fix.
+
+### Confirmed on AL102026
+
+From the console, 2026-10-23 ~03:40Z, with the latest fix at 2026-10-22 18Z:
+
+| Cycle | Started from | Models | Fusion | Ensemble |
+|---|---|---|---|---|
+| `20261022_18Z` | the storm's TC-Vitals fix at the cycle time | 5/5 | learned | Anemoi-Spread (RI flagged, 64%) |
+| `20261023_00Z` | a fix extrapolated from earlier ones | 3/5 (no Boreas, Kaikias) | validation-error weights | `InferenceEnsembleError`, climatological substituted |
+
+Flags on 00Z: `Cycle ran on an extrapolated fix — TC-Vitals arrived late`,
+`Anemoi-Spread failed (InferenceEnsembleError) — climatological ensemble
+substituted`, `input_skew:cnn,gnn,transformer`.
+
+The same storm, a 6 h-old track, and the only difference between the two
+cycles is whether a fix existed at the cycle time. That's case 1 below. The
+ensemble failing on the same cycle confirms `build_real_ensemble_fn`'s
+`window_ending(target, 1)` has the same problem (step 4b).
 
 ## What was seen
 
@@ -100,6 +119,8 @@ young tcvitals False
 ```
 
 ## Laptop session: confirm on the real storm
+
+Steps 1–2 are done for AL102026 (above); rerun them only for another storm.
 
 The cloud session has no production access. Steps 1–3 need it.
 
