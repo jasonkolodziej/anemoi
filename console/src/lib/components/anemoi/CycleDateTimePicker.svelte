@@ -21,6 +21,13 @@
 	 * no time-of-day/timezone component -- exactly right here, since every
 	 * cycle label is UTC by definition (no local-timezone conversion to
 	 * get wrong).
+	 *
+	 * `range` (`runnableCycleRange`) bounds both fields to the cycles the
+	 * API would run for this storm: days outside it are disabled in the
+	 * calendar (bits-ui's `minValue`/`maxValue`, which also stop the month
+	 * buttons at the bounds), and hours outside it in the select. Picking
+	 * an earlier day for a storm that didn't exist yet could otherwise only
+	 * be refused.
 	 */
 	import { CalendarDate, type DateValue } from '@internationalized/date';
 	import { Calendar } from '$lib/components/ui/calendar';
@@ -29,8 +36,18 @@
 
 	interface Props {
 		value: string;
+		range?: { first: Date; last: Date } | null;
 	}
-	let { value = $bindable() }: Props = $props();
+	let { value = $bindable(), range = null }: Props = $props();
+
+	const toCalendarDate = (d: Date) =>
+		new CalendarDate(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
+	const minValue = $derived(range ? toCalendarDate(range.first) : undefined);
+	const maxValue = $derived(range ? toCalendarDate(range.last) : undefined);
+
+	const at = (year: number, month: number, day: number, hour: number) =>
+		new Date(Date.UTC(year, month - 1, day, hour));
+	const inRange = (d: Date) => !range || (d >= range.first && d <= range.last);
 
 	let open = $state(false);
 
@@ -44,15 +61,24 @@
 			: null,
 	);
 	const calendarValue = $derived<CalendarDate | undefined>(
+		parsed ? toCalendarDate(parsed) : undefined,
+	);
+	// Hours the API would run on the date shown; every hour when no date is.
+	const hourAllowed = $derived((h: number) =>
 		parsed
-			? new CalendarDate(parsed.getUTCFullYear(), parsed.getUTCMonth() + 1, parsed.getUTCDate())
-			: undefined,
+			? inRange(at(parsed.getUTCFullYear(), parsed.getUTCMonth() + 1, parsed.getUTCDate(), h))
+			: true,
 	);
 
 	function onDateChange(d: DateValue | undefined) {
 		if (!d) return;
-		const hour = parsed?.getUTCHours() ?? 0;
-		value = cycleLabel(new Date(Date.UTC(d.year, d.month - 1, d.day, hour)));
+		// Keep the hour when the new day has it, else the nearest one it does:
+		// moving 12Z onto a storm's first day, which starts at 18Z, gives 18Z.
+		const keep = parsed?.getUTCHours() ?? 0;
+		const nearest = SYNOPTIC_HOURS.filter((h) => inRange(at(d.year, d.month, d.day, h))).sort(
+			(a, b) => Math.abs(a - keep) - Math.abs(b - keep),
+		)[0];
+		value = cycleLabel(at(d.year, d.month, d.day, nearest ?? keep));
 		open = false;
 	}
 
@@ -78,7 +104,13 @@
 				{parsed ? cycleLabel(parsed).slice(0, 8) : 'select date'}
 			</Popover.Trigger>
 			<Popover.Content class="w-auto border border-border bg-surface p-0 shadow-lg">
-				<Calendar type="single" value={calendarValue} onValueChange={onDateChange} />
+				<Calendar
+					type="single"
+					value={calendarValue}
+					onValueChange={onDateChange}
+					{minValue}
+					{maxValue}
+				/>
 			</Popover.Content>
 		</Popover.Root>
 	</div>
@@ -95,7 +127,7 @@
 				<option value="" disabled selected>—</option>
 			{/if}
 			{#each SYNOPTIC_HOURS as h (h)}
-				<option value={h}>{String(h).padStart(2, '0')}Z</option>
+				<option value={h} disabled={!hourAllowed(h)}>{String(h).padStart(2, '0')}Z</option>
 			{/each}
 		</select>
 	</div>
