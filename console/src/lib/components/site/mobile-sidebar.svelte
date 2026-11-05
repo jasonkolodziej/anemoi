@@ -14,6 +14,7 @@
 	import { cn } from "$lib/utils";
 	import HurricaneIcon from "$lib/components/anemoi/HurricaneIcon.svelte";
 	import Github from "$lib/icons/github.svelte";
+	import { consent } from "$lib/consent.svelte";
 
 	interface NavItem {
 		href: string;
@@ -131,6 +132,14 @@
 						rel="noopener noreferrer">jasonkolodziej/anemoi</a
 					>
 				</div>
+				<button
+					type="button"
+					class="mt-1 text-text-faint hover:text-text"
+					onclick={() => {
+						open = false;
+						consent.openSettings();
+					}}>Cookie settings</button
+				>
 			</div>
 		</Dialog.Content>
 	</Dialog.Portal>
