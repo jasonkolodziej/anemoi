@@ -4,6 +4,9 @@
   import "../app.css";
   import HurricaneIcon from "$lib/components/anemoi/HurricaneIcon.svelte";
   import SiteHeader from "$lib/components/site/site-header.svelte";
+  import SiteFooter from "$lib/components/site/site-footer.svelte";
+  import CookieBanner from "$lib/components/site/cookie-banner.svelte";
+  import CloudflareAnalytics from "$lib/components/site/cloudflare-analytics.svelte";
   import { health } from "$lib/api/endpoints";
   import Waiter from "$lib/components/waiter/waiter.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
@@ -82,5 +85,10 @@
       {@render children?.()}
     </Waiter>
   </main>
+  <SiteFooter />
 </div>
+<!-- Outside the layout's flex column and above its overlays: shown until
+     the visitor chooses what may be stored or loaded. -->
+<CookieBanner />
+<CloudflareAnalytics />
 </Tooltip.Provider>
