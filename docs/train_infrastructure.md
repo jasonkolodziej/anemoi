@@ -224,6 +224,26 @@ default). At ~16,474 train-split fixes and a modest 6.7-9s/sample even from
 this VM, that's still tens of hours sequential; concurrency is what makes it
 practical.
 
+**ERA5 is bandwidth-bound, so on Cloud Run, shard it (#228).** ARCO-ERA5
+stores each time step of a 3D variable as one chunk of all 37 levels over
+the whole globe (~150 MB raw), read whole whatever is cropped from it. A
+sample reads five such variables plus two surface fields: ~544 MB
+(measured; ~800 MB before #228, which read u and v once per level). Threads
+on one machine share its network link, so they don't add throughput -- the
+multi-basin train split ran at 0.07 fixes/s on one 8-CPU Cloud Run task,
+~56 MB/s. `era5-cache`/`gdas-cache` take `--shard-index`/`--shard-count`,
+defaulting to Cloud Run's `CLOUD_RUN_TASK_INDEX`/`CLOUD_RUN_TASK_COUNT`, so
+one execution with `--tasks N` (and the job's `--parallelism 0`) fetches N
+disjoint shards on N instances:
+
+```bash
+gcloud run jobs execute anemoi-train-schedule --region us-central1 --tasks 10 \
+  --args=era5-cache,--hurdat2,/app/data/hurdat2-atl.txt,--cache-dir,/cache/era5_cache,--split,train,--max-workers,8,--sync-archive
+```
+
+GDAS fetches byte ranges of NOAA's GRIB2 files, not whole chunks, and ran
+at ~2.5 fixes/s on one task.
+
 Run these via `slurm/` (job scripts, `#SBATCH`-headered so they're also
 directly `sbatch`-submittable on a real cluster later; `slurm/run_local.sh`
 is the local stand-in for `sbatch` on this single-VM environment, launching

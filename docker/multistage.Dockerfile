@@ -3,14 +3,17 @@
 # real-mode Anemoi-API server (Cloudflare Containers, docker/api/wrangler.jsonc,
 # #91) and the training image (Cloud Run Jobs, docker/cloud-run-training/).
 # `builder-base` carries what both share verbatim (the uv image, its ENV
-# block, WORKDIR); `training-builder`/`api-builder` diverge only in which
-# pyproject.toml extras get pulled in (torch-cpu vs. full CUDA torch) and the
-# HURDAT2 filename; `runtime-base` carries what both final images share (apt
+# block, WORKDIR); `training-deps`+`training-builder`/`api-builder` diverge
+# only in which pyproject.toml extras get pulled in (torch-cpu vs. full CUDA
+# torch) and the HURDAT2 filename -- training splits its dependencies into a
+# stage of their own so they cache as one layer (see training-deps); `runtime-base` carries what both final images share (apt
 # packages, PATH); `training`/`api` diverge in entrypoint and OCI metadata.
 #
 # `api` is the last stage on purpose: Cloudflare Containers builds a
-# Dockerfile's final stage and has no `target` option, while Cloud Build and
-# `docker/build-push-action` can both select `training` with `--target`.
+# Dockerfile's final stage and has no `target` option, while
+# `docker/build-push-action` (.github/workflows/build-training-image.yml) and
+# Cloud Build (docker/cloud-run-training/cloudbuild.yaml) both select
+# `training` with `--target`.
 # Build context is the repo root in both cases; see
 # docker/multistage.Dockerfile.dockerignore.
 
