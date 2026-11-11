@@ -71,52 +71,26 @@ gcloud builds submit \
 
 `.github/workflows/build-training-image.yml` runs the build above on Cloud Build whenever the image's inputs change on `main`, then points `anemoi-train-schedule` at the new tag. It can also be run by hand from the Actions tab. It signs in with Workload Identity Federation: GCP trusts only this repository's `main` branch, as the `anemoi-ci-build` service account, and no key is stored anywhere.
 
-One-time setup, run by a project owner:
+One-time setup, run by a project owner from a shell where `gcloud` and `gh` are signed in:
 
 ```bash
-PROJECT_ID=anemoi-training
-PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format 'value(projectNumber)')
-CI_SA=anemoi-ci-build@${PROJECT_ID}.iam.gserviceaccount.com
-# Cloud Build runs the build, and the job runs, as this account.
-RUNTIME_SA=${PROJECT_NUMBER}-compute@developer.gserviceaccount.com
-
-gcloud services enable iamcredentials.googleapis.com sts.googleapis.com --project ${PROJECT_ID}
-
-# Trust GitHub's OIDC tokens from this repository's main branch only.
-gcloud iam workload-identity-pools create github \
-  --project ${PROJECT_ID} --location global --display-name "GitHub Actions"
-gcloud iam workload-identity-pools providers create-oidc anemoi-repo \
-  --project ${PROJECT_ID} --location global --workload-identity-pool github \
-  --display-name "jasonkolodziej/anemoi main" \
-  --issuer-uri https://token.actions.githubusercontent.com \
-  --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref" \
-  --attribute-condition "assertion.repository == 'jasonkolodziej/anemoi' && assertion.ref == 'refs/heads/main'"
-
-# The identity CI acts as, and who may act as it.
-gcloud iam service-accounts create anemoi-ci-build --project ${PROJECT_ID} \
-  --display-name "GitHub CI: build the training image, update its job"
-gcloud iam service-accounts add-iam-policy-binding ${CI_SA} --project ${PROJECT_ID} \
-  --role roles/iam.workloadIdentityUser \
-  --member "principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github/attribute.repository/jasonkolodziej/anemoi"
-
-# What it may do: submit and read builds, upload their source, read their
-# logs when one fails, run them (and the job) as the runtime account, and
-# update this one job.
-for role in roles/cloudbuild.builds.editor roles/serviceusage.serviceUsageConsumer roles/logging.viewer; do
-  gcloud projects add-iam-policy-binding ${PROJECT_ID} --member serviceAccount:${CI_SA} --role ${role} --condition None
-done
-gcloud storage buckets add-iam-policy-binding gs://${PROJECT_ID}_cloudbuild \
-  --member serviceAccount:${CI_SA} --role roles/storage.admin
-gcloud iam service-accounts add-iam-policy-binding ${RUNTIME_SA} --project ${PROJECT_ID} \
-  --member serviceAccount:${CI_SA} --role roles/iam.serviceAccountUser
-gcloud run jobs add-iam-policy-binding anemoi-train-schedule --project ${PROJECT_ID} --region us-central1 \
-  --member serviceAccount:${CI_SA} --role roles/run.developer
-
-# Tell the workflow where to authenticate (repository variables, not secrets).
-gh variable set GCP_WIF_PROVIDER \
-  --body "projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github/providers/anemoi-repo"
-gh variable set GCP_CI_SERVICE_ACCOUNT --body "${CI_SA}"
+docker/cloud-run-training/setup-ci.sh
 ```
+
+The script does the following:
+
+1. Turns on the two APIs Workload Identity Federation needs.
+2. Creates the `github` identity pool and its `anemoi-repo` provider. The provider accepts only GitHub runs from `jasonkolodziej/anemoi` on `main`.
+3. Creates the `anemoi-ci-build` service account, and lets runs from this repository act as it.
+4. Grants that account only what CI needs:
+   - submit and read builds (`cloudbuild.builds.editor`), and use the project's APIs (`serviceusage.serviceUsageConsumer`);
+   - read a failed build's log (`logging.viewer`);
+   - upload the build's source (`storage.admin` on `gs://anemoi-training_cloudbuild` only);
+   - run the build and the job as the default compute account (`iam.serviceAccountUser` on that account only);
+   - update `anemoi-train-schedule` (`run.developer` on that job only).
+5. Sets the two repository variables below.
+
+You can run it again safely: anything that already exists is kept. A new service account takes a few seconds before IAM will accept bindings on it, failing with "does not exist" or "Policy modification failed", so the script retries those bindings. It runs under bash. Don't paste its lines into an interactive zsh: zsh doesn't treat `#` as a comment there, and runs the comment lines as commands.
 
 ### The two repository variables
 
@@ -127,7 +101,7 @@ The workflow reads two values from the repository's Actions variables. Neither i
 | `GCP_WIF_PROVIDER` | Full resource name of the Workload Identity provider created above | `projects/269717490483/locations/global/workloadIdentityPools/github/providers/anemoi-repo` |
 | `GCP_CI_SERVICE_ACCOUNT` | Email of the service account CI acts as | `anemoi-ci-build@anemoi-training.iam.gserviceaccount.com` |
 
-The last two commands above set both. To look them up again, from a shell signed in to the project:
+`setup-ci.sh` sets both. To look them up again, from a shell signed in to the project:
 
 ```bash
 # GCP_WIF_PROVIDER -- prints projects/<number>/locations/global/workloadIdentityPools/github/providers/anemoi-repo
@@ -142,7 +116,7 @@ gcloud iam service-accounts list --project anemoi-training \
 
 In the Cloud console, the provider is under IAM & Admin > Workload Identity Federation > `github` > `anemoi-repo`. Its page shows the name without the `projects/<number>/` prefix, so use the command above, or add the prefix with the project number from the console's home page. The service account is under IAM & Admin > Service Accounts.
 
-To set them, use `gh variable set` as above, or the repository's Settings > Secrets and variables > Actions > Variables tab > New repository variable. They go on the Variables tab, not the Secrets tab: the workflow reads `vars.*`, so a value stored as a secret isn't found. To check what's set:
+To set them, use `setup-ci.sh`, `gh variable set`, or the repository's Settings > Secrets and variables > Actions > Variables tab > New repository variable. They go on the Variables tab, not the Secrets tab: the workflow reads `vars.*`, so a value stored as a secret isn't found. To check what's set:
 
 ```bash
 gh variable list

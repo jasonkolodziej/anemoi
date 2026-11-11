@@ -12,7 +12,7 @@ name: Build training image
 # Auth is Workload Identity Federation, no stored key. GCP trusts only this
 # repository's main branch (the provider's attribute condition), as the
 # anemoi-ci-build service account. One-time setup:
-# docker/cloud-run-training/README.md, "Build on every push to main".
+# docker/cloud-run-training/setup-ci.sh (see README.md, "Build on every push to main").
 #
 # Repository variables (Settings > Secrets and variables > Actions >
 # Variables), not secrets -- neither value grants anything on its own:
