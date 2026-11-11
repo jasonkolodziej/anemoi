@@ -69,7 +69,11 @@ gcloud builds submit \
 
 ## Build on every push to main
 
-`.github/workflows/build-training-image.yml` runs the build above on Cloud Build whenever the image's inputs change on `main`, then points `anemoi-train-schedule` at the new tag. It can also be run by hand from the Actions tab. It signs in with Workload Identity Federation: GCP trusts only this repository's `main` branch, as the `anemoi-ci-build` service account, and no key is stored anywhere.
+`.github/workflows/build-training-image.yml` builds the image on a GitHub-hosted runner whenever its inputs change on `main`, pushes it to Artifact Registry, and points `anemoi-train-schedule` at the new tag. It can also be run by hand from the Actions tab. It signs in with Workload Identity Federation: GCP trusts only this repository's `main` branch, as the `anemoi-ci-build` service account, and no key is stored anywhere.
+
+**Why a code change builds in minutes.** The image is mostly its dependencies: several GB, CUDA torch included. `multistage.Dockerfile` installs them in a stage of their own (`training-deps`) that depends only on `uv.lock` and `pyproject.toml`, and the runtime image copies them as one layer, with the project's own files in small layers on top. The build cache lives in Artifact Registry (`anemoi-train:buildcache`). So when only `src/` or `configs/` change, the dependency layer comes from the cache unchanged, and the push skips it because the registry already holds it. A `uv.lock` change rebuilds and pushes it in full, as does the first build.
+
+Before pushing, the workflow smoke-tests the image (`.github/scripts/smoke-test-image.sh`) and checks that torch is the CUDA build `uv.lock` pins from PyPI. A pull request that changes how the image is built (the Dockerfile, `pyproject.toml`, `uv.lock`, the workflow) runs the same build and checks without GCP access, and pushes nothing.
 
 One-time setup, run by a project owner from a shell where `gcloud` and `gh` are signed in:
 
@@ -83,12 +87,11 @@ The script does the following:
 2. Creates the `github` identity pool and its `anemoi-repo` provider. The provider accepts only GitHub runs from `jasonkolodziej/anemoi` on `main`.
 3. Creates the `anemoi-ci-build` service account, and lets runs from this repository act as it.
 4. Grants that account only what CI needs:
-   - submit and read builds (`cloudbuild.builds.editor`), and use the project's APIs (`serviceusage.serviceUsageConsumer`);
-   - read a failed build's log (`logging.viewer`);
-   - upload the build's source (`storage.admin` on `gs://anemoi-training_cloudbuild` only);
-   - run the build and the job as the default compute account (`iam.serviceAccountUser` on that account only);
-   - read the image repository (`artifactregistry.reader` on the `anemoi` repository only). Cloud Run checks that whoever updates a job can pull the image it's pointed at;
-   - update `anemoi-train-schedule` (`run.developer` on that job only).
+   - push and read images and the build cache (`artifactregistry.writer` on the `anemoi` repository only). Cloud Run also checks that whoever updates a job can pull the image it's pointed at;
+   - update `anemoi-train-schedule` (`run.developer` on that job only), whose executions run as the default compute account (`iam.serviceAccountUser` on that account only);
+   - use the project's APIs (`serviceusage.serviceUsageConsumer`).
+
+   It also removes the roles the earlier Cloud Build setup granted (`cloudbuild.builds.editor`, `logging.viewer`, `storage.admin` on the build bucket, `artifactregistry.reader`), if present.
 5. Sets the two repository variables below.
 
 You can run it again safely: anything that already exists is kept. A new service account takes a few seconds before IAM will accept bindings on it, failing with "does not exist" or "Policy modification failed", so the script retries those bindings. It runs under bash. Don't paste its lines into an interactive zsh: zsh doesn't treat `#` as a comment there, and runs the comment lines as commands.
@@ -124,10 +127,6 @@ gh variable list
 ```
 
 If either is missing or wrong, the workflow fails at "Authenticate to Google Cloud". A missing variable fails before contacting GCP. A wrong provider name gives `invalid_target`. A run from a branch other than `main` is rejected by the provider's condition with `unauthorized_client`.
-
-### Build logs
-
-The build logs to Cloud Build's GCS bucket, which `gcloud` can only stream with project-wide Viewer. So the workflow submits with `--async`, waits on the build's status, and prints the log from Cloud Logging if the build fails.
 
 ## Build and push image to GHCR
 

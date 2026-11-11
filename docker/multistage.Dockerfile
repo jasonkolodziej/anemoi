@@ -36,9 +36,13 @@ ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # ---------------------------------------------------------------------------
-# training-builder: full CUDA torch (Cloud Run Jobs training has GPUs).
+# training-deps: the dependencies alone -- full CUDA torch (Cloud Run Jobs
+# training has GPUs) and the rest, several GB. Depends only on uv.lock and
+# pyproject.toml, so with a build cache it is rebuilt only when they change,
+# and the runtime image copies it as a layer of its own whose digest stays
+# the same across code changes: the push skips it.
 # ---------------------------------------------------------------------------
-FROM builder-base AS training-builder
+FROM builder-base AS training-deps
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
@@ -49,6 +53,14 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --extra storage \
       --extra gridded
 
+# ---------------------------------------------------------------------------
+# training-builder: the project itself on top of training-deps.
+# ---------------------------------------------------------------------------
+FROM training-deps AS training-builder
+
+# Everything the project install below adds to the venv is newer than this.
+RUN touch /tmp/deps-installed
+
 COPY . /app
 # build-info.json: the commit this image was built from, written by CI
 # before every build (anemoi.provenance, #214). `{}` for a local build, so
@@ -56,12 +68,25 @@ COPY . /app
 # rather than inventing one.
 RUN test -f /app/build-info.json || echo '{}' > /app/build-info.json
 
+# UV_COMPILE_BYTECODE=0: the project is installed editable (its code stays
+# in /app/src), so there's nothing new to compile, and recompiling would
+# touch every dependency's .pyc and put them all in the overlay below.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked \
+    UV_COMPILE_BYTECODE=0 uv sync --locked \
       --extra torch \
       --extra tracking \
       --extra storage \
       --extra gridded
+
+# What that install added to the venv (the editable .pth, the dist-info,
+# the `anemoi` script), kept apart so the runtime image layers it over
+# training-deps' venv rather than copying the whole venv again.
+RUN mkdir /venv-overlay \
+    && cd /app/.venv \
+    && find . -newer /tmp/deps-installed \( -type f -o -type l \) -print0 \
+       | xargs -0 -r cp -a --parents -t /venv-overlay \
+    && echo "venv overlay: $(find /venv-overlay -type f | wc -l) files, $(du -sh /venv-overlay | cut -f1)" \
+    && test -x /venv-overlay/bin/anemoi
 
 # Baked in at build time under the filename docker/cloud-run-training's
 # entrypoint.sh expects (HURDAT2_PATH default).
@@ -153,7 +178,10 @@ ENV IMAGE_NAMESPACE=jasonkolodziej
 ENV IMAGE_NAME=anemoi-train
 ENV IMAGE_TAG=latest
 
-COPY --from=training-builder /app/.venv /app/.venv
+# Largest and least often changed first: the dependencies (several GB, the
+# same layer until uv.lock changes), then the project's own small layers.
+COPY --from=training-deps /app/.venv /app/.venv
+COPY --from=training-builder /venv-overlay/ /app/.venv/
 COPY --from=training-builder /app/src /app/src
 COPY --from=training-builder /app/data /app/data
 # Read at import by anemoi.config (#211): curriculum, schedule and monitoring
