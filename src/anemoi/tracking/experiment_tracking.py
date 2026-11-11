@@ -161,6 +161,41 @@ LEGACY_TRAINED_BASINS = frozenset({"AL"})
 VERIFIED_BASINS_TAG = "verified_basins"
 
 
+#: Registry tag: the basins a version's basin input columns stand for, in
+#: order, comma-separated (`training.basin_input`). What the serving side
+#: builds its inputs with, so they match what the model was trained on.
+#: Absent on versions before the basin input: no such columns.
+BASIN_INPUTS_TAG = "basin_inputs"
+
+
+def basin_input_tags(artifacts: object) -> dict[str, str]:
+    """``artifacts``' basin input columns (`real_run.RunArtifacts.basins`)
+    as a registry tag. Set only for a model that has any -- so a version
+    without the tag is unambiguously one with no basin input."""
+    basins = tuple(getattr(artifacts, "basins", ()) or ())
+    return {BASIN_INPUTS_TAG: ",".join(basins)} if basins else {}
+
+
+def basin_inputs(tags: dict[str, str]) -> tuple[str, ...]:
+    """The basins a registered version's input columns stand for, from its
+    tags, for building the inputs it is served with.
+
+    A column for a basin the version had no training samples from
+    (`TRAINED_BASINS_TAG`) comes back blank: no storm lights it up, so a
+    storm from that basin reads as "none of the basins I know" rather than
+    switching on an input whose weights were never trained.
+    """
+    raw = tags.get(BASIN_INPUTS_TAG)
+    if not raw:
+        return ()
+    columns = tuple(raw.split(","))
+    trained = tags.get(TRAINED_BASINS_TAG)
+    if trained is None:
+        return columns
+    seen = set(trained.split(","))
+    return tuple(b if b in seen else "" for b in columns)
+
+
 def training_data_tags(hurdat2_path: object, tracks: list) -> dict[str, str]:
     """Which labels a run trained on (#216): the HURDAT2 file's name and
     sha256 (`data.hurdat2_source.describe`), its newest season, and the

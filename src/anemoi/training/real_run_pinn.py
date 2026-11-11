@@ -38,6 +38,7 @@ apart, with `dt_hours=12.0` -- a real, valid subsequence, not the full one.
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,9 +50,10 @@ from ..data.features import FEATURE_NAMES, compute_environment_features
 from ..data.gridded_cache import FetchTask, cache_path, load_cached_fields
 from ..data.sources import Flavor
 from ..data.splits import Split, assign_splits, filter_tracks
-from ..data.storm_relative import STORM_RELATIVE_COLUMNS, storm_relative_sequence
+from ..data.storm_relative import STORM_RELATIVE_COLUMNS
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
+from .basin_input import DEFAULT_BASIN_INPUTS, with_basin_vector
 from .capacity_ablation import SEQUENCE_LENGTH
 from .curriculum import Curriculum, CurriculumRun, StageResult, StageSpec
 from .device import get_device
@@ -61,6 +63,7 @@ from .real_run import (
     boundaries_for_tracks,
     displacements_to_absolute,
     iter_stage_windows,
+    track_input,
     validation_metrics,
 )
 
@@ -75,10 +78,19 @@ _PHYSICS_LEAD_COUNT = 4
 _PHYSICS_DT_HOURS = 12.0
 
 
+def pinn_environment(fields, storm_id: str, basins: Sequence[str] = ()) -> np.ndarray:
+    """PINN's environment input for one window's fields:
+    `data.features.compute_environment_features`, plus the storm's basin
+    for a model trained with ``basins`` (`basin_input`). Raises
+    ``ValueError`` for non-finite features, as that function does."""
+    return with_basin_vector(compute_environment_features(fields).values, storm_id, basins)
+
+
 @dataclass(frozen=True, slots=True)
 class PinnStageSamples:
-    x_track: np.ndarray  # (N, SEQUENCE_LENGTH, 5) -- for the candidate generator
-    environment: np.ndarray  # (N, len(FEATURE_NAMES))
+    #: (N, SEQUENCE_LENGTH, 5 + len(basins)) -- for the candidate generator
+    x_track: np.ndarray
+    environment: np.ndarray  # (N, len(FEATURE_NAMES) + len(basins))
     y: np.ndarray  # (N, n_leads, 3) -- true (dx_east_nm, dy_north_nm, wind_kt)
     mask: np.ndarray
     base_lat: np.ndarray
@@ -95,6 +107,7 @@ def build_pinn_samples(
     rng: np.random.Generator,
     n_augment: int = 1,
     noise: WorkingTrackNoise | None = None,
+    basins: Sequence[str] = (),
 ) -> PinnStageSamples:
     """Same windows/targets as `real_run.build_stage_samples`, plus the
     real environment vector for the window's current fix (from cached
@@ -122,11 +135,11 @@ def build_pinn_samples(
             continue
         fields = load_cached_fields(path)
         try:
-            env = compute_environment_features(fields).values
+            env = pinn_environment(fields, sw.storm_id, basins)
         except ValueError:
             continue  # non-finite feature (box entirely over land) -- skip
 
-        x_track_rows.append(storm_relative_sequence(sw.window))
+        x_track_rows.append(track_input(sw.window, sw.storm_id, basins))
         env_rows.append(env)
         y_rows.append(sw.y)
         mask_rows.append(sw.mask)
@@ -137,8 +150,8 @@ def build_pinn_samples(
     n_leads = len(DEFAULT_LEADS)
     if not x_track_rows:
         return PinnStageSamples(
-            x_track=np.empty((0, SEQUENCE_LENGTH, len(STORM_RELATIVE_COLUMNS))),
-            environment=np.empty((0, len(FEATURE_NAMES))),
+            x_track=np.empty((0, SEQUENCE_LENGTH, len(STORM_RELATIVE_COLUMNS) + len(basins))),
+            environment=np.empty((0, len(FEATURE_NAMES) + len(basins))),
             y=np.empty((0, n_leads, 3)),
             mask=np.empty((0, n_leads), dtype=bool),
             base_lat=np.empty((0,)),
@@ -164,6 +177,7 @@ def _train_candidate_lstm(
     hidden_dim: int = 64,
     epochs: int = 30,
     lr: float = 1e-3,
+    basins: Sequence[str] = (),
 ):
     """A small internal LSTM trained on raw (unstandardised) displacement
     targets -- see module docstring for why this doesn't reuse
@@ -176,12 +190,13 @@ def _train_candidate_lstm(
     torch = require_torch()
     device = device or get_device()
 
-    samples = build_stage_samples(train_tracks, rng, n_augment=n_augment)
+    samples = build_stage_samples(train_tracks, rng, n_augment=n_augment, basins=basins)
     if len(samples) == 0:
         raise ValueError("no track samples to train the PINN candidate generator on")
 
     model, _spec = build_lstm(
-        input_dim=len(STORM_RELATIVE_COLUMNS), hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
+        input_dim=len(STORM_RELATIVE_COLUMNS) + len(basins), hidden_dim=hidden_dim,
+        lead_hours=DEFAULT_LEADS,
     )
     model.to(device)
 
@@ -242,6 +257,7 @@ def _train_candidate_lstm_streaming(
     hidden_dim: int = 64,
     epochs: int = 30,
     lr: float = 1e-3,
+    basins: Sequence[str] = (),
 ):
     """Streaming analog of `_train_candidate_lstm` -- same raw
     (unstandardized) displacement targets (module docstring's reasoning
@@ -261,13 +277,14 @@ def _train_candidate_lstm_streaming(
         raise ValueError("no track samples to train the PINN candidate generator on")
 
     def build_x(sw):
-        return storm_relative_sequence(sw.window)
+        return track_input(sw.window, sw.storm_id, basins)
 
     ds = WindowDataset(windows, build_x)
     loader = make_dataloader(ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
     model, _spec = build_lstm(
-        input_dim=len(STORM_RELATIVE_COLUMNS), hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
+        input_dim=len(STORM_RELATIVE_COLUMNS) + len(basins), hidden_dim=hidden_dim,
+        lead_hours=DEFAULT_LEADS,
     )
     model.to(device)
 
@@ -304,11 +321,13 @@ class _PinnWindowDataset:
         *,
         env_mean: np.ndarray | None = None,
         env_std: np.ndarray | None = None,
+        basins: Sequence[str] = (),
     ) -> None:
         self._windows = windows
         self._cache_dir = cache_dir
         self.env_mean = env_mean
         self.env_std = env_std
+        self._basins = tuple(basins)
 
     def __len__(self) -> int:
         return len(self._windows)
@@ -319,10 +338,10 @@ class _PinnWindowDataset:
             storm_id=sw.storm_id, valid_time=sw.current.valid_time,
             lat=sw.current.lat, lon=sw.current.lon,
         )))
-        env = compute_environment_features(fields).values.astype(np.float32)
+        env = pinn_environment(fields, sw.storm_id, self._basins).astype(np.float32)
         if self.env_mean is not None:
             env = (env - self.env_mean) / self.env_std
-        x_track = storm_relative_sequence(sw.window).astype(np.float32)
+        x_track = track_input(sw.window, sw.storm_id, self._basins).astype(np.float32)
         base = np.array([sw.current.lat, sw.current.lon], dtype=np.float32)
         return env, x_track, base, sw.y.astype(np.float32), sw.mask.astype(np.float32)
 
@@ -368,7 +387,7 @@ def _filter_windows_with_finite_env(windows: list, cache_dir: Path) -> list:
 
 
 def _filter_and_fit_env_stats(
-    windows: list, cache_dir: Path
+    windows: list, cache_dir: Path, basins: Sequence[str] = (),
 ) -> tuple[list, np.ndarray | None, np.ndarray | None]:
     """TRAIN-only combined pass: drop windows whose environment features
     come back non-finite (same real land-coverage limitation
@@ -394,7 +413,7 @@ def _filter_and_fit_env_stats(
             lat=sw.current.lat, lon=sw.current.lon,
         )))
         try:
-            env = compute_environment_features(fields).values
+            env = pinn_environment(fields, sw.storm_id, basins)
         except ValueError:
             continue
         acc.update(env[None])
@@ -418,6 +437,7 @@ def train_pinn_stage_streaming(
     batch_size: int = 32,
     num_workers: int = 0,
     device=None,
+    basins: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_pinn_stage`'s streaming analog (`docs/streaming_dataloader.md`) --
     same return contract, same masked track/intensity loss plus physics
@@ -451,15 +471,21 @@ def train_pinn_stage_streaming(
         )
 
     cache_dir = Path(cache_dir)
-    train_windows, env_mean, env_std = _filter_and_fit_env_stats(train_windows_cached, cache_dir)
+    train_windows, env_mean, env_std = _filter_and_fit_env_stats(
+        train_windows_cached, cache_dir, basins,
+    )
     if not train_windows:
         raise ValueError(
             f"stage {stage.name}: every cached window's environment features were "
             "non-finite (storms entirely over land?) -- nothing left to train on"
         )
 
-    train_ds = _PinnWindowDataset(train_windows, cache_dir, env_mean=env_mean, env_std=env_std)
-    val_ds = _PinnWindowDataset(val_windows, cache_dir, env_mean=env_mean, env_std=env_std)
+    train_ds = _PinnWindowDataset(
+        train_windows, cache_dir, env_mean=env_mean, env_std=env_std, basins=basins,
+    )
+    val_ds = _PinnWindowDataset(
+        val_windows, cache_dir, env_mean=env_mean, env_std=env_std, basins=basins,
+    )
 
     def collate(batch):
         envs, tracks_, bases, ys, masks = zip(*batch, strict=True)
@@ -560,6 +586,7 @@ def train_pinn_stage(
     *,
     n_augment: int = 3,
     device=None,
+    basins: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """PINN analog of `real_run.train_lstm_stage`. Loss is masked
     track/intensity MSE (absolute-coordinate space) plus a small weighted
@@ -576,8 +603,10 @@ def train_pinn_stage(
 
     device = device or get_device()
 
-    train_samples = build_pinn_samples(train_tracks, cache_dir, rng, n_augment=n_augment)
-    val_samples = build_pinn_samples(val_tracks, cache_dir, rng, n_augment=1)
+    train_samples = build_pinn_samples(
+        train_tracks, cache_dir, rng, n_augment=n_augment, basins=basins,
+    )
+    val_samples = build_pinn_samples(val_tracks, cache_dir, rng, n_augment=1, basins=basins)
     if len(train_samples) == 0 or len(val_samples) == 0:
         raise ValueError(
             f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
@@ -653,6 +682,7 @@ def run_pinn_curriculum(
     streaming: bool = False,
     batch_size: int = 32,
     num_workers: int = 0,
+    basins: Sequence[str] | None = None,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the PINN baseline.
     A fresh candidate-generator LSTM is trained per stage (see module
@@ -676,10 +706,17 @@ def run_pinn_curriculum(
     OOM shape one level removed, so it's streamed too, not just the outer
     PINN stage. ``num_workers`` (streaming only, default 0) forwards to
     `streaming.make_dataloader` -- see that function's docstring.
+
+    ``basins`` (see `real_run.run_lstm_curriculum`) goes into both models'
+    inputs: the corrector's environment vector and the candidate
+    generator's track sequence.
     """
     from ..models.pinn import build_pinn
 
     require_torch()
+    basins = DEFAULT_BASIN_INPUTS if basins is None else tuple(basins)
+    env_dim = len(FEATURE_NAMES) + len(basins)
+    candidate_input_dim = len(STORM_RELATIVE_COLUMNS) + len(basins)
     rng = np.random.default_rng(seed)
     device = get_device()
     curriculum = Curriculum.standard("pinn", **(curriculum_kwargs or {}))
@@ -698,23 +735,24 @@ def run_pinn_curriculum(
             candidate_model = _train_candidate_lstm_streaming(
                 train_tracks, rng, n_augment=n_augment, device=device,
                 hidden_dim=candidate_hidden_dim, batch_size=batch_size, num_workers=num_workers,
+                basins=basins,
             )
         else:
             candidate_model = _train_candidate_lstm(
                 train_tracks, rng, n_augment=n_augment, device=device,
-                hidden_dim=candidate_hidden_dim,
+                hidden_dim=candidate_hidden_dim, basins=basins,
             )
 
         if model is None:
             model, _spec = build_pinn(
-                input_dim=len(FEATURE_NAMES), hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
+                input_dim=env_dim, hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
             )
 
         stage_fn = train_pinn_stage_streaming if streaming else train_pinn_stage
         stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
         model, train_loss, val_loss, val_metrics, env_stats = stage_fn(
             model, candidate_model, stage, train_tracks, val_tracks, cache_dir, rng,
-            n_augment=n_augment, device=device, **stage_kwargs,
+            n_augment=n_augment, device=device, basins=basins, **stage_kwargs,
         )
 
         torch = require_torch()
@@ -749,16 +787,15 @@ def run_pinn_curriculum(
     assert val_metrics is not None
     env_mean, env_std = env_stats
     arch_params = {
-        "input_dim": len(FEATURE_NAMES), "hidden_dim": hidden_dim,
-        "lead_hours": list(DEFAULT_LEADS),
+        "input_dim": env_dim, "hidden_dim": hidden_dim, "lead_hours": list(DEFAULT_LEADS),
     }
     candidate_arch_params = {
-        "input_dim": len(STORM_RELATIVE_COLUMNS), "hidden_dim": candidate_hidden_dim,
+        "input_dim": candidate_input_dim, "hidden_dim": candidate_hidden_dim,
         "lead_hours": list(DEFAULT_LEADS),
     }
     artifacts = RunArtifacts(
         model=model, candidate_model=candidate_model, env_mean=env_mean, env_std=env_std,
         arch_params=arch_params, candidate_arch_params=candidate_arch_params,
-        candidate_checkpoint_uri=candidate_checkpoint_uri,
+        candidate_checkpoint_uri=candidate_checkpoint_uri, basins=basins,
     )
     return run, val_metrics, artifacts

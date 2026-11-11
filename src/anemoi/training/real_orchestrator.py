@@ -32,6 +32,7 @@ from ..data.splits import latest_final_season
 from ..tracking.checkpoint_store import CheckpointStore
 from ..tracking.experiment_tracking import (
     arch_params_tag,
+    basin_input_tags,
     build_run_tags,
     candidate_tags,
     gridded_input_tags,
@@ -352,6 +353,7 @@ class RealOrchestratorRunner:
         if arch_params is not None:
             tag_dict["arch_params"] = arch_params
         tag_dict.update(candidate_tags(artifacts))
+        tag_dict.update(basin_input_tags(artifacts))
         tag_dict.update(standardization_tags(artifacts))
         tag_dict.update(gridded_input_tags(self.gdas_cache_dir))
         tag_dict.update(training_data_tags(self.hurdat2_path, self.tracks))

@@ -38,6 +38,7 @@ a PyG dependency.
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -51,6 +52,7 @@ from ..data.sources import Flavor
 from ..data.splits import Split, assign_splits, filter_tracks
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
+from .basin_input import DEFAULT_BASIN_INPUTS, with_basin_columns
 from .curriculum import Curriculum, CurriculumRun, StageResult, StageSpec
 from .device import get_device
 from .promotion import MetricSet
@@ -151,9 +153,19 @@ def _node_features(fields, topo: MeshTopology) -> np.ndarray | None:
     return out
 
 
+def gnn_input(
+    fields, topo: MeshTopology, storm_id: str, basins: Sequence[str] = (),
+) -> np.ndarray | None:
+    """The GNN's node features for one window's fields: `_node_features`,
+    plus the storm's basin on every node for a model trained with
+    ``basins`` (`basin_input`). ``None`` when the fields can't be used."""
+    nodes = _node_features(fields, topo)
+    return None if nodes is None else with_basin_columns(nodes, storm_id, basins)
+
+
 @dataclass(frozen=True, slots=True)
 class GnnStageSamples:
-    x: np.ndarray  # (N, n_nodes, NODE_FEATURES)
+    x: np.ndarray  # (N, n_nodes, NODE_FEATURES + len(basins))
     y: np.ndarray
     mask: np.ndarray
     base_lat: np.ndarray
@@ -172,6 +184,7 @@ def build_gnn_samples(
     n_augment: int = 1,
     noise: WorkingTrackNoise | None = None,
     stride: int = GNN_STRIDE,
+    basins: Sequence[str] = (),
 ) -> GnnStageSamples:
     """Same windows/targets as `real_run.build_stage_samples`; ``x`` is a
     lattice-graph node-feature block built from the real cached
@@ -207,7 +220,7 @@ def build_gnn_samples(
                 "-- cache was built with inconsistent box_deg"
             )
 
-        node_features = _node_features(fields, topo)
+        node_features = gnn_input(fields, topo, sw.storm_id, basins)
         if node_features is None:
             continue
         x_rows.append(node_features)
@@ -220,7 +233,7 @@ def build_gnn_samples(
     n_leads = len(LEAD_STEPS)
     if not x_rows:
         return GnnStageSamples(
-            x=np.empty((0, 0, NODE_FEATURES)),
+            x=np.empty((0, 0, NODE_FEATURES + len(basins))),
             y=np.empty((0, n_leads, 3)),
             mask=np.empty((0, n_leads), dtype=bool),
             base_lat=np.empty((0,)),
@@ -288,6 +301,7 @@ def train_gnn_stage(
     *,
     n_augment: int = 3,
     device=None,
+    basins: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """GNN analog of `real_run.train_lstm_stage` -- see that function for
     the loss/verification design this mirrors, including the extra
@@ -300,8 +314,10 @@ def train_gnn_stage(
     torch = require_torch()
     device = device or get_device()
 
-    train_samples = build_gnn_samples(train_tracks, cache_dir, rng, n_augment=n_augment)
-    val_samples = build_gnn_samples(val_tracks, cache_dir, rng, n_augment=1)
+    train_samples = build_gnn_samples(
+        train_tracks, cache_dir, rng, n_augment=n_augment, basins=basins,
+    )
+    val_samples = build_gnn_samples(val_tracks, cache_dir, rng, n_augment=1, basins=basins)
     if len(train_samples) == 0 or len(val_samples) == 0:
         raise ValueError(
             f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
@@ -376,6 +392,7 @@ def train_gnn_stage_streaming(
     num_workers: int = 0,
     stride: int = GNN_STRIDE,
     device=None,
+    basins: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_gnn_stage`'s streaming analog (`docs/streaming_dataloader.md`) --
     same return contract, real per-batch training via a `torch.utils.data
@@ -441,7 +458,7 @@ def train_gnn_stage_streaming(
                 f"ragged cached field shape for {sw.storm_id}: {fields.shape} != "
                 f"{mesh_state['shape']} -- cache was built with inconsistent box_deg"
             )
-        return _node_features(fields, mesh_state["topo"])
+        return gnn_input(fields, mesh_state["topo"], sw.storm_id, basins)
 
     n_leads = len(LEAD_STEPS)
     raw_train_ds = WindowDataset(train_windows, build_x)
@@ -549,6 +566,7 @@ def run_gnn_curriculum(
     streaming: bool = False,
     batch_size: int = 32,
     num_workers: int = 0,
+    basins: Sequence[str] | None = None,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the GNN baseline
     against real cached GriddedFields, treated as a lattice mesh (see
@@ -567,6 +585,9 @@ def run_gnn_curriculum(
     from ..models.gnn import build_gnn
 
     require_torch()
+    # See `real_run.run_lstm_curriculum` for ``basins``.
+    basins = DEFAULT_BASIN_INPUTS if basins is None else tuple(basins)
+    node_features = NODE_FEATURES + len(basins)
     rng = np.random.default_rng(seed)
     curriculum = Curriculum.standard("gnn", **(curriculum_kwargs or {}))
     run = CurriculumRun(curriculum=curriculum)
@@ -582,7 +603,7 @@ def run_gnn_curriculum(
 
         if model is None:
             model, _spec = build_gnn(
-                node_features=NODE_FEATURES, edge_features=EDGE_FEATURES,
+                node_features=node_features, edge_features=EDGE_FEATURES,
                 hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
             )
 
@@ -590,7 +611,7 @@ def run_gnn_curriculum(
         stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
         model, train_loss, val_loss, val_metrics, stats = stage_fn(
             model, stage, train_tracks, val_tracks, cache_dir, rng,
-            n_augment=n_augment, **stage_kwargs,
+            n_augment=n_augment, basins=basins, **stage_kwargs,
         )
 
         torch = require_torch()
@@ -615,11 +636,11 @@ def run_gnn_curriculum(
     assert val_metrics is not None
     x_mean, x_std, y_mean, y_std = stats
     arch_params = {
-        "node_features": NODE_FEATURES, "edge_features": EDGE_FEATURES,
+        "node_features": node_features, "edge_features": EDGE_FEATURES,
         "hidden_dim": hidden_dim, "lead_hours": list(DEFAULT_LEADS),
     }
     artifacts = RunArtifacts(
         model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
-        arch_params=arch_params,
+        arch_params=arch_params, basins=basins,
     )
     return run, val_metrics, artifacts

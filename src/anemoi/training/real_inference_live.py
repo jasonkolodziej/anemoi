@@ -10,6 +10,12 @@ training used (raw, unstandardized -- the caller applies
 `real_inference.load_standardization_stats`' real mean/std), for the
 current moment, with no target needed or computed at all.
 
+Each also takes ``basins``: the basins the version's basin input columns
+stand for (`basin_input`, read from its registry tags by
+`tracking.experiment_tracking.basin_inputs`), so the storm's basin is
+appended exactly as training appended it. Empty -- the default, and every
+version from before the basin input -- adds nothing.
+
 Each takes a real `data.besttrack.Track` (the storm's real known history)
 and its most recent real `Fix` (``current`` -- the same pair
 `inference.cycle.run_cycle`'s ``deterministic_fn(plan, initial_fix)``
@@ -23,7 +29,7 @@ treat ``None`` as "this model can't contribute to this cycle," the same
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -178,49 +184,47 @@ def era5t_fields(track: Track, current: Fix, cache_dir: Path | str) -> GriddedFi
 era5t_fields.source_name = "era5t"  # type: ignore[attr-defined] - read by the cycle's provenance
 
 
-def build_live_lstm_x(track: Track, current: Fix) -> np.ndarray | None:
+def build_live_lstm_x(
+    track: Track, current: Fix, *, basins: Sequence[str] = (),
+) -> np.ndarray | None:
     """LSTM's real input: the storm-relative sequence over its most
     recent real fixes, no gridded fields needed at all."""
-    from ..data.storm_relative import storm_relative_sequence
     from .capacity_ablation import SEQUENCE_LENGTH
+    from .real_run import track_input
 
     window = _current_window(track, current, SEQUENCE_LENGTH + 1)
     if window is None:
         return None
-    return storm_relative_sequence(window)
+    return track_input(window, track.storm_id, basins)
 
 
 def build_live_cnn_x(
     track: Track, current: Fix, cache_dir: Path | str,
-    *, fields_fetcher: FieldsFetcher | None = None,
+    *, fields_fetcher: FieldsFetcher | None = None, basins: Sequence[str] = (),
 ) -> np.ndarray | None:
-    from .real_run_cnn import _sanitized_channel_stack
+    from .real_run_cnn import cnn_input
 
     fields = (fields_fetcher or _current_fields)(track, current, cache_dir)
     if fields is None:
         return None
-    return _sanitized_channel_stack(fields)
+    return cnn_input(fields, track.storm_id, basins)
 
 
 def build_live_transformer_x(
     track: Track, current: Fix, cache_dir: Path | str,
-    *, fields_fetcher: FieldsFetcher | None = None,
+    *, fields_fetcher: FieldsFetcher | None = None, basins: Sequence[str] = (),
 ) -> np.ndarray | None:
-    from .real_run_transformer import GRID_SIZE, _sanitized_channel_stack
+    from .real_run_transformer import transformer_input
 
     fields = (fields_fetcher or _current_fields)(track, current, cache_dir)
     if fields is None:
         return None
-    stack = _sanitized_channel_stack(fields)
-    if stack is None:
-        return None
-    gh, gw = GRID_SIZE
-    return stack[:, :gh, :gw]
+    return transformer_input(fields, track.storm_id, basins)
 
 
 def build_live_pinn_x(
     track: Track, current: Fix, candidate_model, cache_dir: Path | str,
-    *, fields_fetcher: FieldsFetcher | None = None,
+    *, fields_fetcher: FieldsFetcher | None = None, basins: Sequence[str] = (),
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """PINN's real input: the environment-feature vector plus its
     candidate-generator LSTM's own forecast, converted to absolute (lat,
@@ -244,15 +248,15 @@ def build_live_pinn_x(
     """
     import torch
 
-    from ..data.features import compute_environment_features
     from .capacity_ablation import SEQUENCE_LENGTH
-    from .real_run import displacement_to_latlon
+    from .real_run import displacement_to_latlon, track_input
+    from .real_run_pinn import pinn_environment
 
     fields = (fields_fetcher or _current_fields)(track, current, cache_dir)
     if fields is None:
         return None
     try:
-        env = compute_environment_features(fields).values
+        env = pinn_environment(fields, track.storm_id, basins)
     except ValueError:
         return None
 
@@ -260,9 +264,7 @@ def build_live_pinn_x(
     if window is None:
         return None
 
-    from ..data.storm_relative import storm_relative_sequence
-
-    x_track = storm_relative_sequence(window)
+    x_track = track_input(window, track.storm_id, basins)
     with torch.no_grad():
         xt = torch.as_tensor(x_track[None], dtype=torch.float32)
         pred_disp = candidate_model(xt).cpu().numpy()[0]
@@ -277,7 +279,7 @@ def build_live_pinn_x(
 
 def build_live_gnn_x(
     track: Track, current: Fix, cache_dir: Path | str, stride: int | None = None,
-    *, fields_fetcher: FieldsFetcher | None = None,
+    *, fields_fetcher: FieldsFetcher | None = None, basins: Sequence[str] = (),
 ) -> tuple[np.ndarray, MeshTopology] | None:
     """GNN needs its mesh topology alongside the node features (`models
     .gnn.build_gnn`'s ``forward`` takes ``edge_index``/``edge_attr``
@@ -286,13 +288,13 @@ def build_live_gnn_x(
     real_run_gnn's own module docstring already establishes for the
     training path.
     """
-    from .real_run_gnn import GNN_STRIDE, _node_features, build_mesh_topology
+    from .real_run_gnn import GNN_STRIDE, build_mesh_topology, gnn_input
 
     fields = (fields_fetcher or _current_fields)(track, current, cache_dir)
     if fields is None:
         return None
     topo = build_mesh_topology(fields.shape, stride or GNN_STRIDE)
-    node_features = _node_features(fields, topo)
+    node_features = gnn_input(fields, topo, track.storm_id, basins)
     if node_features is None:
         return None
     return node_features, topo

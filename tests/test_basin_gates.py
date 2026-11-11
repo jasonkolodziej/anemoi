@@ -302,9 +302,13 @@ def test_candidates_are_compared_on_the_reference_basin_not_the_mix():
     Atlantic the candidate is worse than the incumbent."""
     incumbent = by_basin(52.0, AL=(52.0, 140.0), EP=(40.0, 120.0))
     candidate = by_basin(47.0, AL=(55.0, 140.0), EP=(38.0, 120.0))
-    decision = evaluate_promotion("lstm", complete_run(), candidate, incumbent_val_metrics=incumbent)
+    decision = evaluate_promotion(
+        "lstm", complete_run(), candidate, incumbent_val_metrics=incumbent,
+    )
     assert not decision.promote_to_staging
-    assert any("(AL): candidate 55.00 vs incumbent 52.00 [not better]" in r for r in decision.reasons)
+    assert any(
+        "(AL): candidate 55.00 vs incumbent 52.00 [not better]" in r for r in decision.reasons
+    )
 
     better = by_basin(60.0, AL=(50.0, 140.0), EP=(75.0, 120.0))  # worse overall, better there
     assert evaluate_promotion(
@@ -317,7 +321,9 @@ def test_an_incumbent_from_before_basins_were_scored_is_all_reference_basin():
     its overall error is its Atlantic error."""
     incumbent = metric_set(**{PRIMARY: 52.0})
     candidate = by_basin(45.0, AL=(51.0, 140.0))
-    decision = evaluate_promotion("lstm", complete_run(), candidate, incumbent_val_metrics=incumbent)
+    decision = evaluate_promotion(
+        "lstm", complete_run(), candidate, incumbent_val_metrics=incumbent,
+    )
     assert decision.promote_to_staging
     assert any("(AL): candidate 51.00 vs incumbent 52.00 [better]" in r for r in decision.reasons)
 
@@ -366,7 +372,9 @@ def test_a_candidate_that_loses_a_verified_basin_is_refused():
     take that basin out of distribution."""
     incumbent = by_basin(50.0, AL=(50.0, 140.0), EP=(45.0, 120.0))
     candidate = by_basin(45.0, AL=(44.0, 140.0), EP=(125.0, 120.0))
-    decision = evaluate_promotion("lstm", complete_run(), candidate, incumbent_val_metrics=incumbent)
+    decision = evaluate_promotion(
+        "lstm", complete_run(), candidate, incumbent_val_metrics=incumbent,
+    )
     assert not decision.promote_to_staging
     assert any("no longer better than persistence in ['EP']" in r for r in decision.reasons)
 
@@ -393,3 +401,41 @@ def test_a_candidate_that_scored_no_basin_is_judged_as_before():
     assert decision.promote_to_staging
     assert any(r == "track_error_48h_nm: candidate 49.00 vs incumbent 50.00 [better]"
                for r in decision.reasons)
+
+
+# ---- the basin as a model input --------------------------------------------------
+
+
+def test_basin_inputs_from_tags_blank_a_column_never_trained_on():
+    """A column for a basin the version had no samples from stays off when
+    serving: its weights were never trained."""
+    from anemoi.tracking.experiment_tracking import basin_input_tags, basin_inputs
+
+    assert basin_inputs({}) == ()  # a version from before the basin input
+    assert basin_inputs({"basin_inputs": "AL,EP,CP"}) == ("AL", "EP", "CP")
+    assert basin_inputs(
+        {"basin_inputs": "AL,EP,CP", "trained_basins": "AL,EP"}
+    ) == ("AL", "EP", "")
+    assert basin_input_tags(type("A", (), {"basins": ("AL", "EP")})()) == {
+        "basin_inputs": "AL,EP",
+    }
+    assert basin_input_tags(type("A", (), {"basins": ()})()) == {}
+
+
+def test_the_basin_input_builders_add_one_column_or_channel_per_basin():
+    from anemoi.training.basin_input import (
+        with_basin_channels,
+        with_basin_columns,
+        with_basin_vector,
+    )
+
+    basins = ("AL", "EP", "CP")
+    rows = with_basin_columns(np.zeros((4, 5)), "EP012024", basins)
+    assert rows.shape == (4, 8) and (rows[:, 5:] == [0, 1, 0]).all()
+    planes = with_basin_channels(np.zeros((10, 9, 9)), "CP012024", basins)
+    assert planes.shape == (13, 9, 9) and planes[12].min() == 1.0 and planes[10:12].max() == 0.0
+    vec = with_basin_vector(np.zeros(6), "WP012024", basins)  # a basin it has no column for
+    assert vec.shape == (9,) and not vec.any()
+    # No basins: unchanged, as every version before the basin input was built.
+    x = np.ones((4, 5))
+    assert with_basin_columns(x, "AL012024", ()) is x

@@ -436,13 +436,22 @@ def test_run_pinn_curriculum_completes_both_stages(tmp_path):
     assert artifacts.candidate_checkpoint_uri.startswith(
         "s3://anemoi-test/checkpoints/pinn/"
     )
+    # Both take the storm's basin as well (docs/multi_basin.md): a column
+    # per basin training reads, on the environment vector and on every step
+    # of the candidate's track sequence.
+    from anemoi.data.basins import TRAINING_BASINS
+
+    n_basins = len(TRAINING_BASINS)
+    assert artifacts.basins == TRAINING_BASINS
     assert artifacts.arch_params == {
-        "input_dim": len(FEATURE_NAMES), "hidden_dim": 8, "lead_hours": list(DEFAULT_LEADS),
-    }
-    assert artifacts.candidate_arch_params == {
-        "input_dim": len(STORM_RELATIVE_COLUMNS), "hidden_dim": 8,
+        "input_dim": len(FEATURE_NAMES) + n_basins, "hidden_dim": 8,
         "lead_hours": list(DEFAULT_LEADS),
     }
+    assert artifacts.candidate_arch_params == {
+        "input_dim": len(STORM_RELATIVE_COLUMNS) + n_basins, "hidden_dim": 8,
+        "lead_hours": list(DEFAULT_LEADS),
+    }
+    assert artifacts.env_mean.shape == (len(FEATURE_NAMES) + n_basins,)
 
 
 @pytest.mark.torch

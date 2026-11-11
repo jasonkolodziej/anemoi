@@ -291,6 +291,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     from .tracking.checkpoint_store import CheckpointStore, S3Config
     from .tracking.experiment_tracking import (
         arch_params_tag,
+        basin_input_tags,
         build_run_tags,
         candidate_tags,
         gridded_input_tags,
@@ -398,6 +399,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     if arch_params is not None:
         tag_dict["arch_params"] = arch_params
     tag_dict.update(candidate_tags(artifacts))
+    tag_dict.update(basin_input_tags(artifacts))
     tag_dict.update(standardization_tags(artifacts))
     tag_dict.update(gridded_input_tags(args.gdas_cache_dir))
     tag_dict.update(training_data_tags(args.hurdat2, tracks))

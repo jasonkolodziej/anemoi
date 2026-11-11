@@ -25,6 +25,7 @@ for that, out of scope here.
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,6 +39,7 @@ from ..data.sources import Flavor
 from ..data.splits import Split, assign_splits, filter_tracks
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
+from .basin_input import DEFAULT_BASIN_INPUTS, with_basin_channels
 from .curriculum import Curriculum, CurriculumRun, StageResult, StageSpec
 from .device import get_device
 from .promotion import MetricSet
@@ -79,9 +81,23 @@ def _sanitized_channel_stack(fields) -> np.ndarray | None:
     return np.stack(channels)
 
 
+def transformer_input(
+    fields, storm_id: str, basins: Sequence[str] = (), grid_size: tuple[int, int] = GRID_SIZE,
+) -> np.ndarray | None:
+    """The Transformer's input for one window's fields:
+    `_sanitized_channel_stack` trimmed to ``grid_size``, plus a constant
+    channel per basin for a model trained with ``basins`` (`basin_input`).
+    ``None`` when the fields can't be used, or are smaller than the grid."""
+    stack = _sanitized_channel_stack(fields)
+    gh, gw = grid_size
+    if stack is None or stack.shape[1] < gh or stack.shape[2] < gw:
+        return None
+    return with_basin_channels(stack[:, :gh, :gw], storm_id, basins)
+
+
 @dataclass(frozen=True, slots=True)
 class TransformerStageSamples:
-    x: np.ndarray  # (N, len(TRANSFORMER_FIELD_NAMES), *GRID_SIZE)
+    x: np.ndarray  # (N, len(TRANSFORMER_FIELD_NAMES) + len(basins), *GRID_SIZE)
     y: np.ndarray
     mask: np.ndarray
     base_lat: np.ndarray
@@ -99,6 +115,7 @@ def build_transformer_samples(
     n_augment: int = 1,
     noise: WorkingTrackNoise | None = None,
     grid_size: tuple[int, int] = GRID_SIZE,
+    basins: Sequence[str] = (),
 ) -> TransformerStageSamples:
     """Same windows/targets as `real_run.build_stage_samples`; ``x`` is the
     real cached `GriddedFields` channel stack, trimmed to ``grid_size``
@@ -130,7 +147,7 @@ def build_transformer_samples(
                 f"cached field {h}x{w} is smaller than grid_size {grid_size} for "
                 f"{sw.storm_id} -- cache was built with too small a box_deg"
             )
-        stack = stack[:, :gh, :gw]
+        stack = with_basin_channels(stack[:, :gh, :gw], sw.storm_id, basins)
 
         x_rows.append(stack)
         y_rows.append(sw.y)
@@ -142,7 +159,7 @@ def build_transformer_samples(
     n_leads = len(LEAD_STEPS)
     if not x_rows:
         return TransformerStageSamples(
-            x=np.empty((0, len(TRANSFORMER_FIELD_NAMES), gh, gw)),
+            x=np.empty((0, len(TRANSFORMER_FIELD_NAMES) + len(basins), gh, gw)),
             y=np.empty((0, n_leads, 3)),
             mask=np.empty((0, n_leads), dtype=bool),
             base_lat=np.empty((0,)),
@@ -190,6 +207,7 @@ def train_transformer_stage(
     *,
     n_augment: int = 3,
     device=None,
+    basins: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """Transformer analog of `real_run.train_lstm_stage` -- see that
     function for the loss/verification design this mirrors, including the
@@ -202,8 +220,10 @@ def train_transformer_stage(
     torch = require_torch()
     device = device or get_device()
 
-    train_samples = build_transformer_samples(train_tracks, cache_dir, rng, n_augment=n_augment)
-    val_samples = build_transformer_samples(val_tracks, cache_dir, rng, n_augment=1)
+    train_samples = build_transformer_samples(
+        train_tracks, cache_dir, rng, n_augment=n_augment, basins=basins,
+    )
+    val_samples = build_transformer_samples(val_tracks, cache_dir, rng, n_augment=1, basins=basins)
     if len(train_samples) == 0 or len(val_samples) == 0:
         raise ValueError(
             f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
@@ -270,6 +290,7 @@ def train_transformer_stage_streaming(
     batch_size: int = 16,
     num_workers: int = 0,
     device=None,
+    basins: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_transformer_stage`'s streaming analog
     (`docs/streaming_dataloader.md`) -- same return contract, real
@@ -321,7 +342,9 @@ def train_transformer_stage_streaming(
             storm_id=sw.storm_id, valid_time=sw.current.valid_time,
             lat=sw.current.lat, lon=sw.current.lon,
         )))
-        return _sanitized_channel_stack(fields)[:, :gh, :gw]
+        return with_basin_channels(
+            _sanitized_channel_stack(fields)[:, :gh, :gw], sw.storm_id, basins,
+        )
 
     n_leads = len(LEAD_STEPS)
     raw_train_ds = WindowDataset(train_windows, build_x)
@@ -413,6 +436,7 @@ def run_transformer_curriculum(
     streaming: bool = False,
     batch_size: int = 16,
     num_workers: int = 0,
+    basins: Sequence[str] | None = None,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the Transformer
     baseline against real cached GriddedFields. See `run_cnn_curriculum`
@@ -436,10 +460,13 @@ def run_transformer_curriculum(
     real CUDA OOM training full-batch against the real, growing cache).
     ``num_workers`` (streaming only, default 0) forwards to
     `streaming.make_dataloader` -- see that function's docstring.
+    ``basins``: see `real_run.run_lstm_curriculum`.
     """
     from ..models.transformer import build_transformer
 
     require_torch()
+    basins = DEFAULT_BASIN_INPUTS if basins is None else tuple(basins)
+    n_variables = len(TRANSFORMER_FIELD_NAMES) + len(basins)
     rng = np.random.default_rng(seed)
     curriculum = Curriculum.standard("transformer", **(curriculum_kwargs or {}))
     run = CurriculumRun(curriculum=curriculum)
@@ -455,7 +482,7 @@ def run_transformer_curriculum(
 
         if model is None:
             model, _spec = build_transformer(
-                n_variables=len(TRANSFORMER_FIELD_NAMES), grid_size=GRID_SIZE,
+                n_variables=n_variables, grid_size=GRID_SIZE,
                 d_model=d_model, dropout=dropout, lead_hours=DEFAULT_LEADS,
             )
 
@@ -463,7 +490,7 @@ def run_transformer_curriculum(
         stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
         model, train_loss, val_loss, val_metrics, stats = stage_fn(
             model, stage, train_tracks, val_tracks, cache_dir, rng,
-            n_augment=n_augment, **stage_kwargs,
+            n_augment=n_augment, basins=basins, **stage_kwargs,
         )
 
         torch = require_torch()
@@ -488,11 +515,11 @@ def run_transformer_curriculum(
     assert val_metrics is not None
     x_mean, x_std, y_mean, y_std = stats
     arch_params = {
-        "n_variables": len(TRANSFORMER_FIELD_NAMES), "grid_size": list(GRID_SIZE),
+        "n_variables": n_variables, "grid_size": list(GRID_SIZE),
         "d_model": d_model, "dropout": dropout, "lead_hours": list(DEFAULT_LEADS),
     }
     artifacts = RunArtifacts(
         model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
-        arch_params=arch_params,
+        arch_params=arch_params, basins=basins,
     )
     return run, val_metrics, artifacts

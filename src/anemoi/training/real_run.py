@@ -48,6 +48,7 @@ from ..metrics.basin import absolute_pairs, per_basin_scores, sample_counts
 from ..metrics.track import VerificationPair, to_metric_dict, verify
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
+from .basin_input import DEFAULT_BASIN_INPUTS, with_basin_columns
 from .capacity_ablation import SEQUENCE_LENGTH
 from .curriculum import Curriculum, CurriculumRun, StageResult, StageSpec
 from .device import get_device
@@ -274,6 +275,11 @@ class RunArtifacts:
     #: record of what shape a given checkpoint's weights actually are.
     #: Empty (not None) when a caller has no real inference use for it yet.
     arch_params: dict = field(default_factory=dict)
+    #: The basins this model's basin input columns stand for, in order
+    #: (`basin_input`) -- what its inputs must be built with, in training
+    #: and when serving. Empty for a model with no basin input: every
+    #: version from before it existed.
+    basins: tuple[str, ...] = ()
     #: PINN only: the candidate-generator LSTM's own `build_lstm(...)` kwargs.
     candidate_arch_params: dict = field(default_factory=dict)
     #: PINN only: where the candidate LSTM's checkpoint was uploaded (#78).
@@ -344,6 +350,15 @@ def iter_stage_windows(
                 )
 
 
+def track_input(window: Sequence, storm_id: str, basins: Sequence[str] = ()) -> np.ndarray:
+    """The track-sequence input the LSTM (and PINN's candidate generator)
+    reads for one window: its storm-relative sequence, plus the storm's
+    basin on every step for a model trained with ``basins``
+    (`basin_input`). ``(SEQUENCE_LENGTH, len(STORM_RELATIVE_COLUMNS) +
+    len(basins))``."""
+    return with_basin_columns(storm_relative_sequence(tuple(window)), storm_id, basins)
+
+
 def window_validation_metrics(
     stage: StageSpec,
     val_windows: Sequence[StageWindow],
@@ -370,12 +385,14 @@ def build_stage_samples(
     rng: np.random.Generator,
     n_augment: int = 1,
     noise: WorkingTrackNoise | None = None,
+    basins: Sequence[str] = (),
 ) -> StageSamples:
     """Generalises `capacity_ablation.build_samples` from one fixed 6h-ahead
     proxy step to real multi-lead targets (`DEFAULT_LEADS`, 12-120h) -- what
     `training.promotion.evaluate_promotion`'s thresholds actually need
     (track_error_48h_nm and friends). Input is always working-quality,
     labels always final-quality (Stage B's policy, `besttrack` module).
+    ``basins`` adds the storm's basin to every step (`track_input`).
     """
     n_leads = len(LEAD_STEPS)
     x_rows: list[np.ndarray] = []
@@ -386,7 +403,7 @@ def build_stage_samples(
     storm_ids: list[str] = []
 
     for sw in iter_stage_windows(tracks, rng, n_augment, noise):
-        x_rows.append(storm_relative_sequence(sw.window))
+        x_rows.append(track_input(sw.window, sw.storm_id, basins))
         y_rows.append(sw.y)
         mask_rows.append(sw.mask)
         base_lat_rows.append(sw.current.lat)
@@ -395,7 +412,7 @@ def build_stage_samples(
 
     if not x_rows:
         return StageSamples(
-            x=np.empty((0, SEQUENCE_LENGTH, len(STORM_RELATIVE_COLUMNS))),
+            x=np.empty((0, SEQUENCE_LENGTH, len(STORM_RELATIVE_COLUMNS) + len(basins))),
             y=np.empty((0, n_leads, 3)),
             mask=np.empty((0, n_leads), dtype=bool),
             base_lat=np.empty((0,)),
@@ -458,9 +475,11 @@ def train_lstm_stage(
     *,
     n_augment: int = 3,
     device=None,
+    basins: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """Train ``model`` (fresh, or Stage A's trained weights for Stage B)
-    through one curriculum stage against real tracks.
+    through one curriculum stage against real tracks. ``basins`` must be
+    what ``model`` was built for (`track_input`).
 
     Full-batch, matching `capacity_ablation.train_cell`'s proven pattern --
     same training shape, generalised to masked multi-lead targets and
@@ -478,8 +497,8 @@ def train_lstm_stage(
     torch = require_torch()
     device = device or get_device()
 
-    train_samples = build_stage_samples(train_tracks, rng, n_augment=n_augment)
-    val_samples = build_stage_samples(val_tracks, rng, n_augment=1)
+    train_samples = build_stage_samples(train_tracks, rng, n_augment=n_augment, basins=basins)
+    val_samples = build_stage_samples(val_tracks, rng, n_augment=1, basins=basins)
     if len(train_samples) == 0 or len(val_samples) == 0:
         raise ValueError(f"stage {stage.name}: no usable samples built from the given tracks")
 
@@ -540,6 +559,7 @@ def train_lstm_stage_streaming(
     batch_size: int = 64,
     num_workers: int = 0,
     device=None,
+    basins: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_lstm_stage`'s streaming analog (`docs/streaming_dataloader.md`) --
     same return contract, same masked multi-lead loss and verification
@@ -568,7 +588,7 @@ def train_lstm_stage_streaming(
         raise ValueError(f"stage {stage.name}: no usable samples built from the given tracks")
 
     def build_x(sw):
-        return storm_relative_sequence(sw.window)
+        return track_input(sw.window, sw.storm_id, basins)
 
     n_leads = len(LEAD_STEPS)
     raw_train_ds = WindowDataset(train_windows, build_x)
@@ -654,6 +674,7 @@ def run_lstm_curriculum(
     streaming: bool = False,
     batch_size: int = 64,
     num_workers: int = 0,
+    basins: Sequence[str] | None = None,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the LSTM baseline
     against real HURDAT2 tracks, uploading each stage's checkpoint to
@@ -682,10 +703,17 @@ def run_lstm_curriculum(
     overlap batch loading with GPU compute instead of blocking the
     training step on it. See that function's docstring for why it forces
     ``fork`` explicitly and defaults to 0.
+
+    ``basins`` are the basins the model's basin input columns stand for
+    (`basin_input`): by default the ones training reads. It is returned on
+    the artifacts, and must be what the model's inputs are built with from
+    then on.
     """
     from ..models.lstm import build_lstm
 
     require_torch()
+    basins = DEFAULT_BASIN_INPUTS if basins is None else tuple(basins)
+    input_dim = len(STORM_RELATIVE_COLUMNS) + len(basins)
     rng = np.random.default_rng(seed)
     curriculum = Curriculum.standard("lstm", **(curriculum_kwargs or {}))
     run = CurriculumRun(curriculum=curriculum)
@@ -700,14 +728,14 @@ def run_lstm_curriculum(
 
         if model is None:
             model, _spec = build_lstm(
-                input_dim=len(STORM_RELATIVE_COLUMNS), hidden_dim=hidden_dim,
-                lead_hours=DEFAULT_LEADS,
+                input_dim=input_dim, hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
             )
 
         stage_fn = train_lstm_stage_streaming if streaming else train_lstm_stage
         stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
         model, train_loss, val_loss, val_metrics, stats = stage_fn(
-            model, stage, train_tracks, val_tracks, rng, n_augment=n_augment, **stage_kwargs,
+            model, stage, train_tracks, val_tracks, rng, n_augment=n_augment, basins=basins,
+            **stage_kwargs,
         )
 
         torch = require_torch()
@@ -732,11 +760,10 @@ def run_lstm_curriculum(
     assert val_metrics is not None  # curriculum always has >=1 stage
     x_mean, x_std, y_mean, y_std = stats
     arch_params = {
-        "input_dim": len(STORM_RELATIVE_COLUMNS), "hidden_dim": hidden_dim,
-        "lead_hours": list(DEFAULT_LEADS),
+        "input_dim": input_dim, "hidden_dim": hidden_dim, "lead_hours": list(DEFAULT_LEADS),
     }
     artifacts = RunArtifacts(
         model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
-        arch_params=arch_params,
+        arch_params=arch_params, basins=basins,
     )
     return run, val_metrics, artifacts

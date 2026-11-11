@@ -249,13 +249,57 @@ def test_run_lstm_curriculum_completes_both_stages_and_uploads_checkpoints():
     # #78: real inference needs these exact kwargs to reconstruct the
     # trained model before load_state_dict, since only the state_dict
     # itself gets checkpointed.
+    from anemoi.data.basins import TRAINING_BASINS
     from anemoi.data.storm_relative import STORM_RELATIVE_COLUMNS
     from anemoi.models.base import DEFAULT_LEADS
 
+    # The track sequence, plus a column per basin training reads
+    # (docs/multi_basin.md); the artifacts say which, so inputs can be built
+    # the same way when serving.
+    assert artifacts.basins == TRAINING_BASINS
     assert artifacts.arch_params == {
-        "input_dim": len(STORM_RELATIVE_COLUMNS), "hidden_dim": 8,
+        "input_dim": len(STORM_RELATIVE_COLUMNS) + len(TRAINING_BASINS), "hidden_dim": 8,
         "lead_hours": list(DEFAULT_LEADS),
     }
+    assert artifacts.x_mean.shape == (len(STORM_RELATIVE_COLUMNS) + len(TRAINING_BASINS),)
+
+
+@pytest.mark.torch
+def test_run_lstm_curriculum_without_a_basin_input_is_the_model_it_always_was():
+    """`basins=()`: the input every version before the basin input was
+    trained on, still buildable and trainable."""
+    from anemoi.data.storm_relative import STORM_RELATIVE_COLUMNS
+    from anemoi.training.real_run import run_lstm_curriculum
+
+    tracks = [
+        make_track("AL011985", season=1985, n=26, seed=0),
+        make_track("AL012021", season=2021, n=26, seed=1),
+        make_track("AL012022", season=2022, n=26, seed=7),
+        make_track("AL012023", season=2023, n=26, seed=3),
+    ]
+    _run, _metrics, artifacts = run_lstm_curriculum(
+        tracks, _fake_checkpoint_store(), seed=42, n_augment=1, hidden_dim=8, basins=(),
+    )
+    assert artifacts.basins == ()
+    assert artifacts.arch_params["input_dim"] == len(STORM_RELATIVE_COLUMNS)
+    assert artifacts.x_mean.shape == (len(STORM_RELATIVE_COLUMNS),)
+
+
+def test_track_input_appends_the_storms_basin_to_every_step():
+    from anemoi.data.storm_relative import storm_relative_sequence
+    from anemoi.training.capacity_ablation import SEQUENCE_LENGTH
+    from anemoi.training.real_run import track_input
+
+    window = make_track("EP011985", season=1985, n=SEQUENCE_LENGTH + 1).fixes
+    plain = storm_relative_sequence(window)
+    np.testing.assert_array_equal(track_input(window, "EP011985"), plain)  # no basin input
+    x = track_input(window, "EP011985", ("AL", "EP", "CP"))
+    assert x.shape == (SEQUENCE_LENGTH, plain.shape[1] + 3)
+    np.testing.assert_array_equal(x[:, : plain.shape[1]], plain)
+    np.testing.assert_array_equal(x[:, plain.shape[1] :], np.tile([0.0, 1.0, 0.0], (SEQUENCE_LENGTH, 1)))
+    # A basin the model has no column for: all zeros, not an error.
+    unknown = track_input(window, "WP011985", ("AL", "EP", "CP"))
+    assert not unknown[:, plain.shape[1] :].any()
 
 
 # --- streaming (docs/streaming_dataloader.md) -------------------------------
