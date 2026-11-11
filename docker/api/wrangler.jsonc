@@ -1,124 +1,126 @@
 {
-	// Cloudflare Containers config for issue #91's primary proposal: real-mode
-	// Anemoi-API (torch inference, see ../multistage.Dockerfile) as a real
-	// linux/amd64 container, fronted by this Worker. Deployed and live -- see
-	// docker/api/README.md for status, required secrets, and how to deploy.
-	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "anemoi-api-real",
-	"main": "src/index.ts",
-	"compatibility_date": "2026-09-21",
+  // Cloudflare Containers config for issue #91's primary proposal: real-mode
+  // Anemoi-API (torch inference, see ../multistage.Dockerfile) as a real
+  // linux/amd64 container, fronted by this Worker. Deployed and live -- see
+  // docker/api/README.md for status, required secrets, and how to deploy.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "anemoi-api-real",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-21",
 
-	// Fires the real operational cycle for every active storm (src/index.ts's
-	// `scheduled` handler) -- nothing did this before (#178);
-	// every cycle in production until now was a manual POST. UTC, t+1:30
-	// after each synoptic time (00/06/12/18Z), 10 minutes past the real
-	// TC-Vitals timeout (`scheduler.derive_vitals_timeout()`, t+1:20) so the
-	// vitals-vs-fallback question is already honestly resolved by fire time.
-	"triggers": {
-		"crons": ["30 1,7,13,19 * * *"],
-	},
+  // Fires the real operational cycle for every active storm (src/index.ts's
+  // `scheduled` handler) -- nothing did this before (#178);
+  // every cycle in production until now was a manual POST. UTC, t+1:30
+  // after each synoptic time (00/06/12/18Z), 10 minutes past the real
+  // TC-Vitals timeout (`scheduler.derive_vitals_timeout()`, t+1:20) so the
+  // vitals-vs-fallback question is already honestly resolved by fire time.
+  "triggers": {
+    "crons": ["30 1,7,13,19 * * *"],
+  },
+  "vars": {
+    "PUBLIC_CF_WEB_ANALYTICS_TOKEN": "c90aa284db294b90b85b965ded3bec03",
+  },
+  "containers": [
+    {
+      "class_name": "AnemoiRealApi",
+      // Shared with the Cloud Run training image (docker/multistage.
+      // Dockerfile); Cloudflare Containers has no build-target option, so
+      // that file puts the `api` stage last -- the stage a plain build
+      // produces by default.
+      "image": "../multistage.Dockerfile",
+      // The Dockerfile's COPY instructions (pyproject.toml, src/, etc.)
+      // expect the repo root as the build context, not this directory --
+      // `image_build_context` defaults to the Dockerfile's own directory,
+      // which fails with "pyproject.toml: not found" without this.
+      "image_build_context": "../..",
+      // Default instance type ("lite") caps images at 2000MB; this image
+      // is ~2.2GB (torch + fastapi + mlflow + boto3 + their deps).
+      // standard-1 (4GiB memory / 8GB disk) also gives runtime headroom
+      // for holding several small torch models loaded at once during a
+      // real cycle, not just enough disk for the image itself.
+      "instance_type": "standard-1",
+      "max_instances": 3,
+      // For `wrangler containers ssh <instance-id>` -- real container
+      // stdout/stderr (registry-pull's output, uncaught Python tracebacks)
+      // is otherwise invisible: `wrangler tail` only surfaces the Worker
+      // script's own console.log, not the container process, and the
+      // HTTP response body hides a 500's real cause unless
+      // ANEMOI_API_DEBUG is set (see docker/api/README.md). Key is
+      // dedicated to this container, not reused from anything else.
+      "authorized_keys": [
+        {
+          "name": "claude-code-debug",
+          "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHfzRK8mp9+HLy/gd5t9a6Bx3jrKFs4s+X/HKgfRp90f anemoi-api-real-debug",
+        },
+      ],
+    },
+  ],
 
-	"containers": [
-		{
-			"class_name": "AnemoiRealApi",
-			// Shared with the Cloud Run training image (docker/multistage.
-			// Dockerfile); Cloudflare Containers has no build-target option, so
-			// that file puts the `api` stage last -- the stage a plain build
-			// produces by default.
-			"image": "../multistage.Dockerfile",
-			// The Dockerfile's COPY instructions (pyproject.toml, src/, etc.)
-			// expect the repo root as the build context, not this directory --
-			// `image_build_context` defaults to the Dockerfile's own directory,
-			// which fails with "pyproject.toml: not found" without this.
-			"image_build_context": "../..",
-			// Default instance type ("lite") caps images at 2000MB; this image
-			// is ~2.2GB (torch + fastapi + mlflow + boto3 + their deps).
-			// standard-1 (4GiB memory / 8GB disk) also gives runtime headroom
-			// for holding several small torch models loaded at once during a
-			// real cycle, not just enough disk for the image itself.
-			"instance_type": "standard-1",
-			"max_instances": 3,
-			// For `wrangler containers ssh <instance-id>` -- real container
-			// stdout/stderr (registry-pull's output, uncaught Python tracebacks)
-			// is otherwise invisible: `wrangler tail` only surfaces the Worker
-			// script's own console.log, not the container process, and the
-			// HTTP response body hides a 500's real cause unless
-			// ANEMOI_API_DEBUG is set (see docker/api/README.md). Key is
-			// dedicated to this container, not reused from anything else.
-			"authorized_keys": [
-				{
-					"name": "claude-code-debug",
-					"public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHfzRK8mp9+HLy/gd5t9a6Bx3jrKFs4s+X/HKgfRp90f anemoi-api-real-debug",
-				},
-			],
-		},
-	],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ANEMOI_REAL_API",
+        "class_name": "AnemoiRealApi",
+      },
+    ],
+  },
 
-	"durable_objects": {
-		"bindings": [
-			{
-				"name": "ANEMOI_REAL_API",
-				"class_name": "AnemoiRealApi",
-			},
-		],
-	},
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["AnemoiRealApi"],
+    },
+  ],
 
-	"migrations": [
-		{
-			"tag": "v1",
-			"new_sqlite_classes": ["AnemoiRealApi"],
-		},
-	],
+  // #171: same database console/wrangler.jsonc binds as AUTH_DB -- a key
+  // issued through console's apiKey plugin verifies here (src/auth.ts)
+  // without a second copy of the user/key data. database_id must match
+  // console's exactly (one real D1 database, `wrangler d1 create
+  // anemoi_auth`, shared by both Workers).
+  "d1_databases": [
+    {
+      "binding": "AUTH_DB",
+      "database_name": "anemoi_auth",
+      "database_id": "92bff5ef-6d73-4188-a75a-c763bac6a0e6",
+    },
+  ],
 
-	// #171: same database console/wrangler.jsonc binds as AUTH_DB -- a key
-	// issued through console's apiKey plugin verifies here (src/auth.ts)
-	// without a second copy of the user/key data. database_id must match
-	// console's exactly (one real D1 database, `wrangler d1 create
-	// anemoi_auth`, shared by both Workers).
-	"d1_databases": [
-		{
-			"binding": "AUTH_DB",
-			"database_name": "anemoi_auth",
-			"database_id": "92bff5ef-6d73-4188-a75a-c763bac6a0e6",
-		},
-	],
+  // The operational cycle per synoptic time, one durable step per storm
+  // (src/cycleWorkflow.ts); the cron above starts one instance per cycle
+  // label. Instances: dashboard > Workflows, or
+  // `wrangler workflows instances list anemoi-cycle`.
+  "workflows": [
+    {
+      "name": "anemoi-cycle",
+      "binding": "CYCLE_WORKFLOW",
+      "class_name": "CycleWorkflow",
+    },
+  ],
 
-	// The operational cycle per synoptic time, one durable step per storm
-	// (src/cycleWorkflow.ts); the cron above starts one instance per cycle
-	// label. Instances: dashboard > Workflows, or
-	// `wrangler workflows instances list anemoi-cycle`.
-	"workflows": [
-		{
-			"name": "anemoi-cycle",
-			"binding": "CYCLE_WORKFLOW",
-			"class_name": "CycleWorkflow",
-		},
-	],
+  // Read cache in front of the container (src/readCache.ts): the storm
+  // list, each storm's detail and each stored cycle result, written after
+  // every cycle run (cron or manual POST) and served without waking the
+  // container. Created with `wrangler kv namespace create ANEMOI_READ_CACHE`.
+  "kv_namespaces": [
+    {
+      "binding": "READ_CACHE",
+      "id": "05e84da9ae3646109bca641292062269",
+    },
+  ],
 
-	// Read cache in front of the container (src/readCache.ts): the storm
-	// list, each storm's detail and each stored cycle result, written after
-	// every cycle run (cron or manual POST) and served without waking the
-	// container. Created with `wrangler kv namespace create ANEMOI_READ_CACHE`.
-	"kv_namespaces": [
-		{
-			"binding": "READ_CACHE",
-			"id": "05e84da9ae3646109bca641292062269",
-		},
-	],
-
-	// Route-differentiated burst protection (#171): tighter than the
-	// apiKey plugin's own per-key limit (console/migrations/'s
-	// `apikey.rateLimitMax`, which covers every route at one number),
-	// applied only to `POST .../cycles` in src/index.ts -- that's the
-	// route that wakes the billed container and runs real inference.
-	// `limit`/`period` are placeholders: real traffic is unknown yet
-	// (#171's own "Risks/Unknowns"), revisit once Phase 2 metering
-	// (cycle_runs) has real data.
-	"ratelimits": [
-		{
-			"name": "CYCLE_RATE_LIMITER",
-			"namespace_id": "1001",
-			"simple": { "limit": 6, "period": 60 },
-		},
-	],
+  // Route-differentiated burst protection (#171): tighter than the
+  // apiKey plugin's own per-key limit (console/migrations/'s
+  // `apikey.rateLimitMax`, which covers every route at one number),
+  // applied only to `POST .../cycles` in src/index.ts -- that's the
+  // route that wakes the billed container and runs real inference.
+  // `limit`/`period` are placeholders: real traffic is unknown yet
+  // (#171's own "Risks/Unknowns"), revisit once Phase 2 metering
+  // (cycle_runs) has real data.
+  "ratelimits": [
+    {
+      "name": "CYCLE_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 6, "period": 60 },
+    },
+  ],
 }

@@ -87,6 +87,29 @@ export function defaultCycleToRun(
 	return cycleLabel(floorSynoptic(latest));
 }
 
+/** The first and last cycle the API will run for this storm right now, or
+ * null when there is none. From its first fix, to whichever comes first:
+ * `CYCLE_LIFETIME_GRACE_H` past its latest fix (`cycle_policy.check_run`),
+ * or the synoptic time the clock is in (`RealState._check_not_started`
+ * refuses a cycle that hasn't begun). A day outside this range, picked from
+ * the calendar, could only be refused. */
+export function runnableCycleRange(
+	storm: { latest_fix: { valid_time: string }; history: { valid_time: string }[] } | null,
+	now: Date,
+): { first: Date; last: Date } | null {
+	if (!storm) return null;
+	const firstFix = new Date(storm.history[0]?.valid_time ?? storm.latest_fix.valid_time);
+	// Rounded up: a fix off the synoptic hours still can't start a cycle
+	// before it.
+	const first = floorSynoptic(firstFix);
+	if (first < firstFix) first.setTime(first.getTime() + SIX_HOURS_MS);
+	const graceEnd = new Date(
+		new Date(storm.latest_fix.valid_time).getTime() + CYCLE_LIFETIME_GRACE_H * 3_600_000,
+	);
+	const last = floorSynoptic(graceEnd < now ? graceEnd : now);
+	return first <= last ? { first, last } : null;
+}
+
 /** Why `label` can't be run as typed, or null when it's a well-formed
  * synoptic cycle label. */
 export function cycleLabelProblem(label: string): string | null {
