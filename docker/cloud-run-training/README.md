@@ -118,6 +118,40 @@ gh variable set GCP_WIF_PROVIDER \
 gh variable set GCP_CI_SERVICE_ACCOUNT --body "${CI_SA}"
 ```
 
+### The two repository variables
+
+The workflow reads two values from the repository's Actions variables. Neither is a secret: each only names something, and GCP's trust rules decide who can use them.
+
+| Variable | What it is | Example |
+|---|---|---|
+| `GCP_WIF_PROVIDER` | Full resource name of the Workload Identity provider created above | `projects/269717490483/locations/global/workloadIdentityPools/github/providers/anemoi-repo` |
+| `GCP_CI_SERVICE_ACCOUNT` | Email of the service account CI acts as | `anemoi-ci-build@anemoi-training.iam.gserviceaccount.com` |
+
+The last two commands above set both. To look them up again, from a shell signed in to the project:
+
+```bash
+# GCP_WIF_PROVIDER -- prints projects/<number>/locations/global/workloadIdentityPools/github/providers/anemoi-repo
+gcloud iam workload-identity-pools providers describe anemoi-repo \
+  --project anemoi-training --location global --workload-identity-pool github \
+  --format 'value(name)'
+
+# GCP_CI_SERVICE_ACCOUNT
+gcloud iam service-accounts list --project anemoi-training \
+  --filter 'email~^anemoi-ci-build@' --format 'value(email)'
+```
+
+In the Cloud console, the provider is under IAM & Admin > Workload Identity Federation > `github` > `anemoi-repo`. Its page shows the name without the `projects/<number>/` prefix, so use the command above, or add the prefix with the project number from the console's home page. The service account is under IAM & Admin > Service Accounts.
+
+To set them, use `gh variable set` as above, or the repository's Settings > Secrets and variables > Actions > Variables tab > New repository variable. They go on the Variables tab, not the Secrets tab: the workflow reads `vars.*`, so a value stored as a secret isn't found. To check what's set:
+
+```bash
+gh variable list
+```
+
+If either is missing or wrong, the workflow fails at "Authenticate to Google Cloud". A missing variable fails before contacting GCP. A wrong provider name gives `invalid_target`. A run from a branch other than `main` is rejected by the provider's condition with `unauthorized_client`.
+
+### Build logs
+
 The build logs to Cloud Build's GCS bucket, which `gcloud` can only stream with project-wide Viewer. So the workflow submits with `--async`, waits on the build's status, and prints the log from Cloud Logging if the build fails.
 
 ## Build and push image to GHCR

@@ -18,6 +18,8 @@ name: Build training image
 # Variables), not secrets -- neither value grants anything on its own:
 #   GCP_WIF_PROVIDER      projects/<number>/locations/global/workloadIdentityPools/github/providers/anemoi-repo
 #   GCP_CI_SERVICE_ACCOUNT  anemoi-ci-build@anemoi-training.iam.gserviceaccount.com
+# How to look either up: the README section above, "The two repository
+# variables".
 #
 # Updating the job doesn't touch an execution already running: it keeps the
 # image it started with.
@@ -71,6 +73,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+
+      - name: Check the repository variables are set
+        env:
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          GCP_CI_SERVICE_ACCOUNT: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+        run: |
+          missing=0
+          for v in GCP_WIF_PROVIDER GCP_CI_SERVICE_ACCOUNT; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Repository variable $v is not set (Settings > Secrets and variables > Actions > Variables). See docker/cloud-run-training/README.md, \"The two repository variables\"."
+              missing=1
+            fi
+          done
+          exit $missing
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
