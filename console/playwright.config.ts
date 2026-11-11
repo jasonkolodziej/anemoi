@@ -14,11 +14,38 @@ export default defineConfig({
 	forbidOnly: !!process.env.CI,
 	retries: process.env.CI ? 1 : 0,
 	reporter: 'list',
+	// Migrates the local D1 auth schema and opens registration for
+	// auth.spec.ts, then closes registration again -- see
+	// e2e/global-setup.ts. No-ops for every other spec file.
+	globalSetup: './e2e/global-setup.ts',
+	globalTeardown: './e2e/global-teardown.ts',
 	use: {
-		baseURL: 'http://127.0.0.1:5173',
+		// `localhost`, not `127.0.0.1`: hosting.ts derives the passkey rpId
+		// from the request hostname, and WebAuthn rejects an IP address as
+		// an rpId, so auth.spec.ts's passkey tests silently failed to
+		// register anything against 127.0.0.1.
+		baseURL: 'http://localhost:5173',
 		trace: 'on-first-retry',
+		// The cookie banner already answered, so it doesn't cover what a
+		// spec clicks; cookie-banner.spec.ts starts from nothing instead.
+		storageState: './e2e/fixtures/consent-decided.json',
 	},
-	projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+	// `@registration-closed` closes sign-up for the whole local D1, which
+	// would fail every other spec's sign-in running alongside it -- so it
+	// runs alone, once the rest have finished.
+	projects: [
+		{
+			name: 'chromium',
+			use: { ...devices['Desktop Chrome'] },
+			grepInvert: /@registration-closed/,
+		},
+		{
+			name: 'registration-closed',
+			use: { ...devices['Desktop Chrome'] },
+			grep: /@registration-closed/,
+			dependencies: ['chromium'],
+		},
+	],
 	webServer: [
 		{
 			command: 'uv run python -m anemoi.api',
@@ -40,7 +67,14 @@ export default defineConfig({
 			url: 'http://127.0.0.1:5173',
 			reuseExistingServer: !process.env.CI,
 			timeout: 30_000,
-			env: { PUBLIC_ANEMOI_API_URL: 'http://127.0.0.1:8000' },
+			// A stand-in Web Analytics token, so cookie-banner.spec.ts can see
+			// the beacon load once (and only once) analytics is allowed. That
+			// spec answers the beacon's request itself; nothing reaches
+			// Cloudflare.
+			env: {
+				PUBLIC_ANEMOI_API_URL: 'http://127.0.0.1:8000',
+				PUBLIC_CF_WEB_ANALYTICS_TOKEN: 'e2e-test-token',
+			},
 		},
 	],
 });

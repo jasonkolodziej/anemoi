@@ -12,6 +12,9 @@ Or directly with uvicorn: ``uvicorn anemoi.api.main:app --reload``.
 from __future__ import annotations
 
 import os
+import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request, status
@@ -22,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import __version__ as anemoi_version
 from . import __api_version__
 from .docs import get_custom_redoc_html
-from .routers import meta, monitoring, registry, retraining, schedule, storms
+from .routers import internal, meta, monitoring, registry, retraining, schedule, storms
 from .stream import router as stream_router
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -38,8 +41,23 @@ TAGS_METADATA = [
 ]
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Build the real state as soon as the process starts, on a background
+    thread, instead of inside whichever request arrives first -- a cold
+    container's first `GET /v1/storms` otherwise also paid for parsing the
+    whole HURDAT2 archive. Requests that land before it finishes wait on
+    `get_real_state`'s own lock, no worse than before."""
+    if os.environ.get("ANEMOI_API_REAL_STATE"):
+        from .real_state import get_real_state
+
+        threading.Thread(target=get_real_state, name="real-state-warmup", daemon=True).start()
+    yield
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
+        lifespan=_lifespan,
         title="Anemoi-API",
         description="Many winds. One forecast. Developer interface over the Anemoi reference implementation.",
         version=__api_version__,
@@ -85,6 +103,7 @@ def create_app() -> FastAPI:
     app.include_router(monitoring.router, prefix="/v1")
     app.include_router(retraining.router, prefix="/v1")
     app.include_router(stream_router, prefix="/v1")
+    app.include_router(internal.router, prefix="/v1")
 
     if os.environ.get("ANEMOI_API_DEBUG"):
         # Opt-in only -- real cycle failure detail (which model, why) is

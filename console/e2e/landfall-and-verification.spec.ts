@@ -1,15 +1,19 @@
 import { test, expect } from '@playwright/test';
+import { runFreshCycle, signIn } from './helpers/storm';
 
 // Real regression coverage for the v1.2 "Wind Rose Projection" styling pass:
 // the map panel's real rename, a real coastline-point round trip driving a
 // real non-null landfall_probability, and the real system-wide Verification
 // panel (§4.6.3 skew audit) rendering on a storm page it isn't scoped to.
 
+// Running a cycle needs an account (#171).
+test.beforeEach(async ({ page }) => signIn(page));
+
 test('map panel is titled Wind Rose Projection and shows intensity-coded points', async ({ page }) => {
 	await page.goto('/');
 	await page.locator('a[href^="/storms/"]').first().click();
 	await page.waitForSelector('#cycle-input');
-	await page.getByRole('button', { name: 'Run cycle' }).click();
+	await runFreshCycle(page);
 
 	await expect(page.getByText('Wind Rose Projection')).toBeVisible({ timeout: 10_000 });
 	// The intensity-coded points/labels are drawn on the MapLibre canvas
@@ -25,7 +29,7 @@ test('a coastline point drives a real landfall probability and map marker', asyn
 
 	await page.fill('#coastline-lat-input', '29.3');
 	await page.fill('#coastline-lon-input', '-94.8');
-	await page.getByRole('button', { name: 'Run cycle' }).click();
+	await runFreshCycle(page);
 
 	await expect(page.getByText('Landfall Projection')).toBeVisible({ timeout: 10_000 });
 	await expect(page.getByText('29.3°N 94.8°W')).toBeVisible();
@@ -40,7 +44,7 @@ test('landfall projection shows the no-reference-point fallback until one is set
 	await page.goto('/');
 	await page.locator('a[href^="/storms/"]').first().click();
 	await page.waitForSelector('#cycle-input');
-	await page.getByRole('button', { name: 'Run cycle' }).click();
+	await runFreshCycle(page);
 
 	await expect(page.getByText('Landfall Projection')).toBeVisible({ timeout: 10_000 });
 	await expect(page.getByText(/No coastal reference point was set/)).toBeVisible();

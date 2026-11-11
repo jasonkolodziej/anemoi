@@ -22,11 +22,23 @@
 		createdAt: string | Date;
 	};
 
+	type PasskeySummary = {
+		id: string;
+		name: string | null;
+		createdAt: string | Date;
+		deviceType: string;
+	};
+
 	let keys = $state<ApiKeySummary[]>([]);
 	let loadingKeys = $state(true);
 	let creating = $state(false);
 	let revealedKey = $state<string | null>(null);
 	let errorMsg = $state("");
+
+	let passkeys = $state<PasskeySummary[]>([]);
+	let loadingPasskeys = $state(true);
+	let addingPasskey = $state(false);
+	let passkeyErrorMsg = $state("");
 
 	// Call anemoi-api-real with this key to run forecast cycles and read
 	// storm data -- see docs/api.md ("Authentication and versioning").
@@ -72,12 +84,99 @@
 		await loadKeys();
 	}
 
-	async function signOut() {
-		await fetch("/auth/logout", { method: "POST" });
-		await goto("/");
+	// @better-auth/passkey's `addPasskey`/`listUserPasskeys` are typed on
+	// `authClient.passkey.*`, but `deletePasskey`/`updatePasskey` aren't
+	// (confirmed against the installed package's own client.d.mts, despite
+	// its server-side doc comments claiming otherwise) -- called through
+	// the generic `authClient.$fetch` escape hatch instead, against the
+	// real server endpoint paths/body shapes (node_modules/@better-auth/
+	// passkey/dist/index.mjs).
+	async function loadPasskeys() {
+		loadingPasskeys = true;
+		try {
+			const { data: list, error } = await authClient.$fetch<PasskeySummary[]>(
+				"/passkey/list-user-passkeys",
+				{ method: "GET" },
+			);
+			if (error) {
+				passkeyErrorMsg = error.message ?? "Failed to load passkeys";
+				return;
+			}
+			passkeys = list ?? [];
+		} finally {
+			loadingPasskeys = false;
+		}
 	}
 
-	loadKeys();
+	async function addPasskey() {
+		addingPasskey = true;
+		passkeyErrorMsg = "";
+		try {
+			const { error } = await authClient.passkey.addPasskey({
+				name: `${navigator.platform || "device"}-${new Date().toISOString().slice(0, 10)}`,
+			});
+			if (error) {
+				passkeyErrorMsg = error.message ?? "Failed to add passkey";
+				return;
+			}
+			await loadPasskeys();
+		} catch (err) {
+			// A cancelled WebAuthn ceremony (user dismissed the browser
+			// prompt) throws rather than returning `error` -- not a real
+			// failure worth surfacing as one.
+			if (!(err instanceof Error && err.name === "NotAllowedError")) {
+				passkeyErrorMsg = err instanceof Error ? err.message : "Failed to add passkey";
+			}
+		} finally {
+			addingPasskey = false;
+		}
+	}
+
+	async function removePasskey(id: string) {
+		const { error } = await authClient.$fetch("/passkey/delete-passkey", {
+			method: "POST",
+			body: { id },
+		});
+		if (error) {
+			passkeyErrorMsg = error.message ?? "Failed to remove passkey";
+			return;
+		}
+		await loadPasskeys();
+	}
+
+	let signingOut = $state(false);
+
+	async function signOut() {
+		// Real production bug, caught live: this button had no pending
+		// state, so an impatient re-click fired a second, third, fourth...
+		// concurrent POST /auth/logout against the same session. better-auth
+		// handled the first fine but the platform killed the rest under the
+		// pile-up ("Canceled" in `wrangler tail`, not an error) -- looked
+		// exactly like sign-out "not working" even though a single click
+		// always completed cleanly once nothing was competing with it.
+		if (signingOut) return;
+		signingOut = true;
+		try {
+			await fetch("/auth/logout", { method: "POST" });
+			// See login/+page.svelte's handlePasskeyLogin -- the root layout's
+			// user data doesn't refresh on its own after an in-app auth change.
+			await goto("/", { invalidateAll: true });
+		} finally {
+			signingOut = false;
+		}
+	}
+
+	// Sequenced, not concurrent (no more `loadKeys(); loadPasskeys();`) --
+	// the same pile-up as signOut's, just self-inflicted on every single
+	// profile load instead of needing a rapid re-click: two concurrent
+	// auth-handler requests competing for one isolate, one of which would
+	// intermittently get "Canceled" rather than served.
+	async function loadAll() {
+		await loadKeys();
+		await loadPasskeys();
+	}
+
+	loadAll();
 </script>
 
 <div class="mx-auto flex max-w-lg flex-col gap-6 px-4 py-10">
@@ -87,7 +186,9 @@
 			<CardDescription>{data.user.email}</CardDescription>
 		</CardHeader>
 		<CardFooter>
-			<Button variant="outline" onclick={signOut}>Sign out</Button>
+			<Button variant="outline" onclick={signOut} disabled={signingOut}>
+				{signingOut ? "Signing out…" : "Sign out"}
+			</Button>
 		</CardFooter>
 	</Card>
 
@@ -149,6 +250,53 @@
 		<CardFooter>
 			<Button onclick={createKey} disabled={creating}>
 				{creating ? "Generating…" : "Generate new key"}
+			</Button>
+		</CardFooter>
+	</Card>
+
+	<Card>
+		<CardHeader>
+			<CardTitle>Passkeys</CardTitle>
+			<CardDescription>
+				Sign in with your device's screen lock or security key instead of
+				your current sign-in method. Add one as a backup so losing access
+				to that method doesn't lock you out.
+			</CardDescription>
+		</CardHeader>
+		<CardContent class="flex flex-col gap-4">
+			{#if passkeyErrorMsg}
+				<p class="text-destructive text-sm">{passkeyErrorMsg}</p>
+			{/if}
+
+			{#if loadingPasskeys}
+				<p class="text-muted-foreground text-sm">Loading…</p>
+			{:else if passkeys.length === 0}
+				<p class="text-muted-foreground text-sm">No passkeys yet.</p>
+			{:else}
+				<ul class="flex flex-col gap-2">
+					{#each passkeys as passkey (passkey.id)}
+						<li class="flex items-center justify-between gap-2 text-sm">
+							<span>
+								{passkey.name ?? "Untitled"}
+								<span class="text-muted-foreground">
+									({passkey.deviceType})
+								</span>
+							</span>
+							<Button
+								variant="ghost"
+								size="sm"
+								onclick={() => removePasskey(passkey.id)}
+							>
+								Remove
+							</Button>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</CardContent>
+		<CardFooter>
+			<Button onclick={addPasskey} disabled={addingPasskey}>
+				{addingPasskey ? "Follow your browser's prompt…" : "Add a passkey"}
 			</Button>
 		</CardFooter>
 	</Card>

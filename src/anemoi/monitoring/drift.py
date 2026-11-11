@@ -13,8 +13,24 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .. import config
 from ..data.features import FEATURE_NAMES
 from ..data.sources import Flavor
+
+config.fixed(
+    "monitoring", "drift.reference_flavor", Flavor.GDAS_FINETUNE.value,
+    "live features are compared to the distribution the model was fine-tuned on; "
+    "against ERA5 a constant reanalysis offset would read as drift (§4.6.3)",
+)
+DRIFT_SHIFT_SIGMA: float = config.get("monitoring", "drift.shift_sigma", float)
+DRIFT_VARIANCE_RATIO_LIMIT: float = config.get("monitoring", "drift.variance_ratio_limit", float)
+DRIFT_MIN_SAMPLES: int = config.get("monitoring", "drift.min_samples", int)
+LOSS_THRESHOLD_FRACTION: float = config.get(
+    "monitoring", "drift.validation_loss.threshold_fraction", float
+)
+LOSS_CONSECUTIVE_REQUIRED: int = config.get(
+    "monitoring", "drift.validation_loss.consecutive_required", int
+)
 
 
 class DriftError(RuntimeError):
@@ -93,9 +109,9 @@ def detect_feature_drift(
     reference: ReferenceDistribution,
     live: np.ndarray,
     *,
-    shift_sigma: float = 2.0,
-    variance_ratio_limit: float = 3.0,
-    min_samples: int = 30,
+    shift_sigma: float = DRIFT_SHIFT_SIGMA,
+    variance_ratio_limit: float = DRIFT_VARIANCE_RATIO_LIMIT,
+    min_samples: int = DRIFT_MIN_SAMPLES,
 ) -> DriftReport:
     """Compare live features to the Stage B reference.
 
@@ -135,8 +151,8 @@ def detect_feature_drift(
 class ValidationLossMonitor:
     """The §5.5 drift trigger: validation loss up >15% over 3 consecutive checks."""
 
-    threshold_fraction: float = 0.15
-    consecutive_required: int = 3
+    threshold_fraction: float = LOSS_THRESHOLD_FRACTION
+    consecutive_required: int = LOSS_CONSECUTIVE_REQUIRED
     baseline: float | None = None
     history: list[float] = None  # type: ignore[assignment]
 

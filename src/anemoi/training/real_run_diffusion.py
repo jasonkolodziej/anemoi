@@ -37,14 +37,14 @@ from pathlib import Path
 import numpy as np
 
 from ..data.sources import Flavor
-from ..metrics.track import ForecastPoint, VerificationPair, to_metric_dict, verify
+from ..metrics.track import to_metric_dict, verify
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
 from .curriculum import Curriculum, CurriculumRun, StageResult, stage_b
 from .device import get_device
 from .promotion import MetricSet
 from .real_latents import JointLatentBundle, JointLatentSamples
-from .real_run import displacement_to_latlon
+from .real_run import verification_pairs
 
 
 def _standardize(x: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -217,25 +217,9 @@ def train_diffusion_stage(
             pred_mean_z[i] = members.mean(dim=0).cpu().numpy()
     pred_mean = pred_mean_z * y_std + y_mean
 
-    pairs: list[VerificationPair] = []
-    for si in range(n_val):
-        base_lat, base_lon = val_samples.base_lat[si], val_samples.base_lon[si]
-        for li, lead_hours in enumerate(DEFAULT_LEADS):
-            if not val_samples.mask[si, li]:
-                continue
-            pred_dx, pred_dy, pred_wind = pred_mean[si, li]
-            pred_lat, pred_lon = displacement_to_latlon(base_lat, base_lon, pred_dx, pred_dy)
-            obs_dx, obs_dy, obs_wind = val_samples.y[si, li]
-            obs_lat, obs_lon = displacement_to_latlon(base_lat, base_lon, obs_dx, obs_dy)
-            pairs.append(
-                VerificationPair(
-                    forecast=ForecastPoint(
-                        lead_hours=lead_hours, lat=pred_lat, lon=pred_lon,
-                        max_wind_kt=float(pred_wind),
-                    ),
-                    obs_lat=obs_lat, obs_lon=obs_lon, obs_wind_kt=float(obs_wind),
-                )
-            )
+    pairs = verification_pairs(
+        val_samples.base_lat, val_samples.base_lon, pred_mean, val_samples.y, val_samples.mask,
+    )
 
     if not pairs:
         raise ValueError("no verifiable (lead, sample) pairs in val")

@@ -23,15 +23,25 @@ fine (the eccodes import is deferred into the fetch call, same as
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .. import config
+from ..time_utils import MAX_NWP_LAG_HOURS
 from .besttrack import Track
 from .features import GriddedFields
 from .gridded_cache import FetchCacheReport, FieldsFetcher, filter_tracks_by_min_valid_time
 from .gridded_cache import run_fetch_cache as _run_fetch_cache
 
-__all__ = ["GDAS_ARCHIVE_START", "fetch_one", "run_fetch_cache"]
+__all__ = [
+    "GDAS_ARCHIVE_START",
+    "STAGE_B_NWP_LEAD_HOURS",
+    "CacheLeadMismatch",
+    "cache_nwp_lead_hours",
+    "fetch_one",
+    "run_fetch_cache",
+]
 
 #: Earliest date with real data in noaa-gfs-bdp-pds, verified via direct S3
 #: `list-type=2` listing (2026-09-16) -- the bucket has no documented
@@ -42,29 +52,78 @@ __all__ = ["GDAS_ARCHIVE_START", "fetch_one", "run_fetch_cache"]
 #: 404. See docs/train_infrastructure.md and data.sources's gdas_gfs entry.
 GDAS_ARCHIVE_START = datetime(2021, 1, 1, tzinfo=UTC)
 
+#: Forecast hour of the GFS fields Stage B trains on (#215,
+#: configs/curriculum.yaml `stage_b.nwp_lead_hours`). Live cycles read the
+#: t-6 cycle's f006 -- the t analysis isn't published until ~t+3:30, two
+#: hours after the cycle runs -- so Stage B trains on the same thing. 0
+#: (analyses) is what every cache before #215 holds.
+STAGE_B_NWP_LEAD_HOURS: int = config.get("curriculum", "stage_b.nwp_lead_hours", int)
+if not (0 <= STAGE_B_NWP_LEAD_HOURS <= MAX_NWP_LAG_HOURS and STAGE_B_NWP_LEAD_HOURS % 6 == 0):
+    raise config.ConfigError(
+        "curriculum.yaml: stage_b.nwp_lead_hours must be 0 or a multiple of 6 up to "
+        f"cycle.max_nwp_lag_hours ({MAX_NWP_LAG_HOURS}), got {STAGE_B_NWP_LEAD_HOURS}"
+    )
 
-def _default_fetch_fn(box_deg: float) -> FieldsFetcher:
+#: A cache directory's own record of what it holds; one lead per directory.
+CACHE_META_NAME = "_meta.json"
+
+
+class CacheLeadMismatch(RuntimeError):
+    """A cache directory already holds fields of another forecast hour."""
+
+
+def cache_nwp_lead_hours(cache_dir: Path | str) -> int:
+    """The forecast hour a GDAS cache directory holds: its ``_meta.json``,
+    else 0 -- every cache written before #215 holds analyses."""
+    meta = Path(cache_dir) / CACHE_META_NAME
+    try:
+        return int(json.loads(meta.read_text())["nwp_lead_hours"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return 0
+
+
+def _claim_cache_dir(cache_dir: Path | str, lead_hours: int) -> None:
+    """Record ``lead_hours`` as what ``cache_dir`` holds, refusing a
+    directory that already holds another -- mixing analyses and forecasts
+    under one storm/time key would silently feed training both."""
+    path = Path(cache_dir)
+    meta = path / CACHE_META_NAME
+    holds_files = path.exists() and any(path.rglob("*.npz"))
+    if meta.exists() or holds_files:
+        existing = cache_nwp_lead_hours(path)
+        if existing != lead_hours:
+            raise CacheLeadMismatch(
+                f"{path} holds f{existing:03d} fields; refusing to add f{lead_hours:03d} ones. "
+                "Use a new cache directory, or --nwp-lead-hours "
+                f"{existing} to extend this one."
+            )
+    path.mkdir(parents=True, exist_ok=True)
+    meta.write_text(json.dumps({"nwp_lead_hours": lead_hours}) + "\n")
+
+
+def _default_fetch_fn(box_deg: float, lead_hours: int = 0) -> FieldsFetcher:
     """Build a fetch function sharing one ``requests.Session`` across every
     call -- each sample already makes ~8 requests to the same NOAA host, so
     a shared connection pool matters more here than it does for ERA5's
     single-Zarr-store-open saving."""
     import requests
 
-    from .real_gridded import fetch_gdas_grib2_fields, gdas_to_gridded_fields
+    from .real_gridded import fetch_gdas_grib2_fields, gdas_to_gridded_fields, gfs_url
 
     session = requests.Session()
 
     def fetch(valid_time: datetime, lat: float, lon: float) -> GriddedFields:
-        messages = fetch_gdas_grib2_fields(valid_time, session=session)
+        messages = fetch_gdas_grib2_fields(valid_time, session=session, lead_hours=lead_hours)
         return gdas_to_gridded_fields(
-            messages, center_lat=lat, center_lon=lon, valid_time=valid_time, box_deg=box_deg
+            messages, center_lat=lat, center_lon=lon, valid_time=valid_time, box_deg=box_deg,
+            nwp_lead_hours=lead_hours, source=gfs_url(valid_time, lead_hours),
         )
 
     return fetch
 
 
 def fetch_one(
-    valid_time: datetime, lat: float, lon: float, *, box_deg: float = 10.0
+    valid_time: datetime, lat: float, lon: float, *, box_deg: float = 10.0, lead_hours: int = 0,
 ) -> GriddedFields:
     """Fetch real GDAS GriddedFields for one specific sample, on demand --
     not a batch. `training.real_inference_live`'s on-demand cache-miss
@@ -81,7 +140,7 @@ def fetch_one(
     A single call, not worth sharing a `requests.Session` across -- that
     optimisation is for `run_fetch_cache`'s thousands of calls.
     """
-    return _default_fetch_fn(box_deg)(valid_time, lat, lon)
+    return _default_fetch_fn(box_deg, lead_hours)(valid_time, lat, lon)
 
 
 def run_fetch_cache(
@@ -94,6 +153,7 @@ def run_fetch_cache(
     fetch_fn: FieldsFetcher | None = None,
     progress_every: int = 50,
     min_valid_time: datetime | None = GDAS_ARCHIVE_START,
+    lead_hours: int = STAGE_B_NWP_LEAD_HOURS,
 ) -> FetchCacheReport:
     """Fetch real GDAS GriddedFields for every fix across ``tracks``,
     concurrently, caching each to ``cache_dir``.
@@ -111,8 +171,14 @@ def run_fetch_cache(
     shared with Stage A/ERA5 and go back to 1980, decades before GDAS's real
     archive starts, so an unfiltered ``--split train`` run would spend one
     request per fix discovering each one 404s. Pass ``None`` to disable.
+
+    ``lead_hours`` (#215) picks the GFS file: the analysis (0) or the
+    forecast of that many hours from the cycle that much earlier. Defaults
+    to Stage B's configured lead -- what live cycles read. One lead per
+    ``cache_dir`` (`CacheLeadMismatch` otherwise).
     """
-    fetch_fn = fetch_fn if fetch_fn is not None else _default_fetch_fn(box_deg)
+    _claim_cache_dir(cache_dir, lead_hours)
+    fetch_fn = fetch_fn if fetch_fn is not None else _default_fetch_fn(box_deg, lead_hours)
     if min_valid_time is not None:
         tracks = filter_tracks_by_min_valid_time(tracks, min_valid_time)
     return _run_fetch_cache(

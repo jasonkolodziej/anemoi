@@ -1,18 +1,30 @@
 # Operational cycle configuration (Scope v2.1 §6.2).
+#
+# Read at runtime by anemoi.config (#211): editing a value here changes what
+# runs, once deployed (a change under configs/ redeploys the API). A value the
+# code can't honour -- a fixed key changed, a wrong type, a derived number
+# that disagrees with its inputs -- is refused at import with the file and key
+# named. $ANEMOI_CONFIG_DIR points the code at a different copy.
 
 cycle:
-  synoptic_hours: [0, 6, 12, 18]
+  synoptic_hours: [0, 6, 12, 18]  # fixed: every cycle label is keyed on these
   # Cycle t consumes the t-6 NWP cycle. Never the cycle named t: it publishes
   # ~3.5-4h after its own valid time.
-  nwp_lag_hours: 6
+  nwp_lag_hours: 6  # fixed: one cycle interval
   max_nwp_lag_hours: 12
   nominal_vitals_offset_minutes: 45
   # Derived, not asserted: advisory_offset - reduced_worst_case - margin.
-  vitals_timeout_minutes: 80
+  vitals_timeout_minutes: 80  # fixed: derived; must equal the budgets
   advisory_offset_minutes: 180
   advisory_margin_minutes: 30
   allow_estimated_vitals: true
   allow_load_shedding: true
+  # When production actually runs each cycle: anemoi-api-real's cron
+  # (docker/api/wrangler.jsonc, `30 1,7,13,19 * * *`), 10 minutes past the
+  # vitals timeout so vitals have landed or the estimated fallback applies.
+  # The console's storm page uses the same offset (CYCLE_RUN_DELAY_MIN) to
+  # say when the next cycle is due.
+  scheduled_run_offset_minutes: 90
 
 # Minutes from cycle start. target = healthy path, max = worst case.
 budgets:
@@ -33,19 +45,18 @@ budgets:
     postprocess:   {target: 4,  max: 8}
 
 ensemble:
-  # Mirrors inference.scheduler.DEFAULT_ENSEMBLE_MEMBERS -- kept in sync by
-  # hand, there is no loader. Raised 20 -> 50 in #188: the member count sets
-  # the precision of every SS6.1 product, not just the RI flag.
+  # inference.scheduler.DEFAULT_ENSEMBLE_MEMBERS. Raised 20 -> 50 in #188: the
+  # member count sets the precision of every §6.1 product, not just the RI flag.
   members: 50
+  # REDUCED_ENSEMBLE_MEMBERS, used under load shedding (the 2:1 ratio of #8).
+  reduced_members: 25
   min_members_for_ensemble_cone: 10
   # Below this fraction of the climatological radius at the longest lead, the
   # cone is drawn from climatology instead.
   underdispersion_fraction: 0.5
   # NHC-style 2/3-probability circle radii (nm), current-season (2026) Atlantic
   # basin values from https://www.nhc.noaa.gov/aboutcone.shtml (2021-2025 error
-  # statistics). Documentation only -- there is no config loader yet (see the
-  # wiki Roadmap page's "Config loader" item), so this must be kept in sync by
-  # hand with inference/postprocess.py:CLIMATOLOGICAL_CONE_NM. Re-baseline
+  # statistics). inference/postprocess.py:CLIMATOLOGICAL_CONE_NM. Re-baseline
   # every season.
   climatological_cone_nm:
     12: 25
@@ -57,7 +68,13 @@ ensemble:
     120: 200
 
 products:
-  lead_hours: [12, 24, 36, 48, 72, 96, 120]
+  lead_hours: [12, 24, 36, 48, 72, 96, 120]  # fixed: the trained models' output leads
+  # Ensemble-spread cone radius: this percentile of member distance from the
+  # ensemble mean (a 2/3-probability circle, like NHC's).
+  cone_percentile: 67
+  # Landfall probability: fraction of members passing within this distance of
+  # the requested coastal reference point.
+  landfall_threshold_nm: 60
   ri_threshold_kt: 30
   ri_window_hours: 24
   ri_alert_probability: 0.3

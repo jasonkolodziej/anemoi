@@ -38,7 +38,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ..geo import bearing_deg, cross_along_track_nm
+from ..geo import bearings_deg, cross_along_track_nms
 from .probabilistic import SpreadSkill, rank_histogram, spread_skill
 
 #: The three scalar quantities calibration is measured on.
@@ -93,15 +93,8 @@ def observed_motion_bearings(true_abs: np.ndarray, base: np.ndarray) -> np.ndarr
     lead's real position (or the base fix, for the first lead) to this one.
     Shape (n_cases, n_leads). ``true_abs`` is (n_cases, n_leads, 3) absolute
     (lat, lon, wind); ``base`` is (n_cases, 2) (lat, lon)."""
-    n_cases, n_leads, _ = true_abs.shape
-    out = np.zeros((n_cases, n_leads))
-    for ci in range(n_cases):
-        prev_lat, prev_lon = base[ci]
-        for li in range(n_leads):
-            lat, lon = true_abs[ci, li, 0], true_abs[ci, li, 1]
-            out[ci, li] = bearing_deg(prev_lat, prev_lon, lat, lon)
-            prev_lat, prev_lon = lat, lon
-    return out
+    track = np.concatenate([np.asarray(base, dtype=float)[:, None, :], true_abs[..., :2]], axis=1)
+    return bearings_deg(track[:, :-1, 0], track[:, :-1, 1], track[:, 1:, 0], track[:, 1:, 1])
 
 
 def forecast_motion_bearings(members_abs: np.ndarray, base: np.ndarray) -> np.ndarray:
@@ -114,12 +107,7 @@ def forecast_motion_bearings(members_abs: np.ndarray, base: np.ndarray) -> np.nd
     mean_track = members_abs[..., :2].mean(axis=1)  # (n_cases, n_leads, 2)
     padded = np.concatenate([np.zeros_like(mean_track[:, :1]), mean_track], axis=1)
     padded[:, 0] = base
-    n_cases, n_leads = mean_track.shape[:2]
-    out = np.zeros((n_cases, n_leads))
-    for ci in range(n_cases):
-        for li in range(n_leads):
-            out[ci, li] = bearing_deg(*padded[ci, li], *padded[ci, li + 1])
-    return out
+    return bearings_deg(padded[:, :-1, 0], padded[:, :-1, 1], padded[:, 1:, 0], padded[:, 1:, 1])
 
 
 def recurving_cases(true_abs: np.ndarray, base: np.ndarray, base_bearing: np.ndarray) -> np.ndarray:
@@ -141,10 +129,9 @@ def _scalar_errors(
     """Each quantity's per-member values and the observation to rank them
     against, for one case at one lead."""
     obs_lat, obs_lon, obs_wind = true_abs[ci, li]
-    cross = np.empty(members_abs.shape[1])
-    along = np.empty(members_abs.shape[1])
-    for mi, (lat, lon, _wind) in enumerate(members_abs[ci, :, li]):
-        cross[mi], along[mi] = cross_along_track_nm(lat, lon, obs_lat, obs_lon, bearings[ci, li])
+    cross, along = cross_along_track_nms(
+        members_abs[ci, :, li, 0], members_abs[ci, :, li, 1], obs_lat, obs_lon, bearings[ci, li],
+    )
     return {
         "along_track_nm": (along, 0.0),
         "cross_track_nm": (cross, 0.0),

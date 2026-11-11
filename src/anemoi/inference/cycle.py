@@ -24,7 +24,7 @@ import numpy as np
 from ..data import sources
 from ..data.besttrack import Fix, TrackQuality, assert_input_safe
 from ..data.sources import Flavor
-from ..geo import offset_position
+from ..geo import offset_positions
 from ..time_utils import cycle_label
 from .postprocess import CLIMATOLOGICAL_CONE_NM, EnsembleMember, ForecastProducts, build_products
 from .scheduler import CyclePlan
@@ -72,10 +72,45 @@ class DeterministicForecast:
     #: `per_model_tracks` empty). Never set for the synthetic fallback or
     #: `DemoState`.
     env_features: np.ndarray | None = None
+    #: Provenance (#214). Which registered version of each contributing
+    #: model produced its track, the fusion fused with it (``fusion``
+    #: included when learned fusion ran), how the tracks were combined, and
+    #: the gridded analysis the models read -- what a later comparison or a
+    #: retrain needs to know about this forecast, and none of which was
+    #: recorded before.
+    model_versions: dict[str, int] = field(default_factory=dict)
+    #: ``learned`` (ConsensusFusion), ``inverse_error`` (the non-learned
+    #: consensus, any time fewer than all five models contribute),
+    #: ``synthetic`` (no real model: linear extrapolation), ``demo``, or
+    #: ``unknown`` for a forecast built outside these paths.
+    fusion: str = "unknown"
+    gridded_source: str | None = None
+    #: Gridded models fed fields of a different forecast hour than they were
+    #: trained on, with what each was trained on and fed (#215).
+    input_skew: dict[str, str] = field(default_factory=dict)
 
     def at(self, lead: int) -> tuple[float, float, float]:
         i = self.lead_hours.index(lead)
         return float(self.lats[i]), float(self.lons[i]), float(self.winds_kt[i])
+
+
+@dataclass(frozen=True, slots=True)
+class RunInfo:
+    """Who asked for a cycle, and what they changed (#212).
+
+    ``source`` is ``"scheduled"`` for the operational run the cycle
+    Workflow starts at t+1:30, or ``"manual"`` for one a user started from
+    the console or the API. A scheduled run is the official cycle; a
+    manual one only fills a cycle nothing has run, and the next scheduled
+    run of that label replaces it. ``overrides`` names every request field
+    that changed the inputs away from the operational defaults (``lat``,
+    ``lon``, ``wind_kt``, ``members``, ``worst_case``, ``coastline``), so a
+    reader of the stored cycle -- or a retrain filtering its history --
+    can tell an as-issued forecast from an experiment.
+    """
+
+    source: str
+    overrides: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +126,14 @@ class CycleOutput:
     #: caller didn't supply one, the same condition that leaves `products.
     #: landfall_probability` `None` too.
     coastline: tuple[float, float] | None = None
+    #: Set by the API state that ran the cycle; `None` for a cycle run
+    #: outside the API (tests, replay harnesses).
+    run: RunInfo | None = None
+    #: Set by the API state that ran the cycle (#214): where the initial fix
+    #: came from, the fix itself, basin, start time, commit and config
+    #: digest. Model versions, fusion and gridded source live on
+    #: ``deterministic``. `None` outside the API.
+    provenance: dict | None = None
 
     @property
     def label(self) -> str:
@@ -155,27 +198,28 @@ def climatological_ensemble(
     a probabilistic product on the wire.
     """
     rng = np.random.default_rng(seed)
+    base_lat = np.asarray(deterministic.lats, dtype=float)
+    base_lon = np.asarray(deterministic.lons, dtype=float)
     members: list[EnsembleMember] = []
     for i in range(n_members):
-        lats, lons, winds = [], [], []
+        # Drawn lead by lead in the same order as always (distance, bearing,
+        # wind), so a seed gives the same members; only the position maths
+        # is done for all leads at once.
+        dists, bearings, winds = [], [], []
         for k, lead in enumerate(deterministic.lead_hours):
             radius = CLIMATOLOGICAL_CONE_NM.get(lead, 60.0)
             # 67th-percentile radius -> sigma via the Rayleigh quantile.
             sigma = radius / np.sqrt(-2.0 * np.log(1.0 - 0.67))
-            dist = float(abs(rng.normal(0.0, sigma)))
-            bearing = float(rng.uniform(0.0, 360.0))
-            lat, lon = offset_position(
-                float(deterministic.lats[k]), float(deterministic.lons[k]), dist, bearing
-            )
-            lats.append(lat)
-            lons.append(lon)
+            dists.append(float(abs(rng.normal(0.0, sigma))))
+            bearings.append(float(rng.uniform(0.0, 360.0)))
             winds.append(float(deterministic.winds_kt[k] + rng.normal(0.0, 8.0)))
+        lats, lons = offset_positions(base_lat, base_lon, np.array(dists), np.array(bearings))
         members.append(
             EnsembleMember(
                 member_id=i,
                 lead_hours=deterministic.lead_hours,
-                lats=np.array(lats),
-                lons=np.array(lons),
+                lats=lats,
+                lons=lons,
                 winds_kt=np.clip(np.array(winds), 0.0, None),
             )
         )
@@ -192,6 +236,7 @@ def run_cycle(
     coastline: tuple[float, float] | None = None,
     ensemble_seed: int = 0,
     requested_members: int | None = None,
+    extra_flags: tuple[str, ...] = (),
 ) -> CycleOutput:
     """Run one forecast cycle end to end.
 
@@ -215,8 +260,13 @@ def run_cycle(
     the moment Anemoi-Spread failed and climatology substituted (the
     common case today, see #100/PINN's live-ensemble gap), even though
     the cycle's own ``flags``/``payload`` never signalled anything wrong.
+
+    ``extra_flags`` are degradations only the caller knows about (#214):
+    where the initial fix came from, a synthetic deterministic fallback, an
+    untrained basin. They are recorded like the cycle's own, so they also
+    mark the products degraded.
     """
-    flags: list[str] = []
+    flags: list[str] = list(extra_flags)
 
     assert_input_safe([initial_fix])
     if initial_fix.valid_time != plan.target_time:

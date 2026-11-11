@@ -41,7 +41,7 @@ import numpy as np
 from ..metrics.ensemble_calibration import LeadCalibration, calibrate
 from ..metrics.track import ForecastPoint, VerificationPair, to_metric_dict, verify
 from .real_latents import JointLatentSamples
-from .real_run import displacement_to_latlon
+from .real_run import displacements_to_absolute
 
 
 def _pseudo_huber(diff, c: float):
@@ -262,7 +262,7 @@ def _sample_config(
 ) -> tuple[np.ndarray, float]:
     """Real end-to-end sample for every val case: same conversion pipeline
     `training.spread_backtest.run_spread_backtest` uses (un-standardise,
-    `real_run.displacement_to_latlon`), so results are directly comparable
+    `real_run.displacements_to_absolute`), so results are directly comparable
     to the production #10 backtest's own numbers."""
     import time
 
@@ -281,11 +281,9 @@ def _sample_config(
                 z_t, n_members=n_members, generator=generator, **sample_kwargs
             ).cpu().numpy()
             disp = samples * stats["y_std"] + stats["y_mean"]
-            base_lat, base_lon = val_samples.base_lat[ci], val_samples.base_lon[ci]
-            for li in range(n_leads):
-                for mi in range(n_members):
-                    lat, lon = displacement_to_latlon(base_lat, base_lon, *disp[mi, li, :2])
-                    members_abs[ci, mi, li] = (lat, lon, disp[mi, li, 2])
+            members_abs[ci] = displacements_to_absolute(
+                disp, val_samples.base_lat[ci], val_samples.base_lon[ci]
+            )
     wall_time_s = time.perf_counter() - start
     return members_abs, wall_time_s
 
@@ -332,13 +330,11 @@ def evaluate_step_budget_tradeoff(
         raise ValueError("no validation cases")
 
     base = np.stack([val_samples.base_lat, val_samples.base_lon], axis=1)
-    true_abs = np.zeros((n_cases, n_leads, 3))
-    for ci in range(n_cases):
-        base_lat, base_lon = val_samples.base_lat[ci], val_samples.base_lon[ci]
-        for li in range(n_leads):
-            obs_dx, obs_dy, obs_wind = val_samples.y[ci, li]
-            obs_lat, obs_lon = displacement_to_latlon(base_lat, base_lon, obs_dx, obs_dy)
-            true_abs[ci, li] = (obs_lat, obs_lon, obs_wind)
+    true_abs = displacements_to_absolute(
+        np.asarray(val_samples.y, dtype=float),
+        np.asarray(val_samples.base_lat)[:, None],
+        np.asarray(val_samples.base_lon)[:, None],
+    )
 
     def point_track_error_48h(members_abs: np.ndarray) -> float | None:
         pairs: list[VerificationPair] = []

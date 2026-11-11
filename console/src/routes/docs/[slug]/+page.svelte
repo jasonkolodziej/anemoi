@@ -22,8 +22,15 @@
 	<title>{data.title} · Anemoi Docs</title>
 </svelte:head>
 
-<div class="flex gap-8">
-	<Card class="min-w-0 flex-1">
+<!-- justify-between (not a fixed gap) -- Card is capped at max-w-3xl for a
+     readable line length instead of stretching to fill the layout's own
+     widened flex-1 slot (docs/+layout.svelte), so whatever room that
+     leaves goes entirely between it and OnThisPage, which lands flush
+     against the far edge instead of hugging the content. Matches
+     shadcn-svelte's /docs proportions: a fixed-width reading column with
+     the On This Page rail pushed out to the gutter, not snug beside it. -->
+<div class="flex justify-between gap-6">
+	<Card class="w-full max-w-3xl">
 		<CardContent class="pt-6">
 			<div bind:this={contentEl} class="wiki-prose">
 				<!-- eslint-disable-next-line svelte/no-at-html-tags -->

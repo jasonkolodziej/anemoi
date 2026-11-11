@@ -51,6 +51,90 @@ export function parseCycleLabel(label: string): Date | null {
 	return d;
 }
 
+/** Minutes after its synoptic time that a cycle is scheduled to run:
+ * anemoi-api-real's cron (`30 1,7,13,19 * * *`, docker/api/wrangler.jsonc)
+ * fires at t+1:30. Kept in sync by hand. */
+export const CYCLE_RUN_DELAY_MIN = 90;
+
+/** How far past a storm's latest fix a cycle may start before the API
+ * refuses it as outside the storm's track. Mirrors
+ * anemoi.api.cycle_policy.LIFETIME_GRACE; kept in sync by hand. */
+export const CYCLE_LIFETIME_GRACE_H = 12;
+
+const SIX_HOURS_MS = 6 * 3_600_000;
+
+/** The cycle the storm page's "Run a new cycle" form offers until the user
+ * picks one: the synoptic cycle the clock is in, while that is still inside
+ * the storm's track; for a storm whose track ended long ago, its newest
+ * cycle it doesn't have yet (else its last fix's), since today's label would
+ * only be refused. Recomputed as the clock and the storm move, so a page
+ * left open doesn't keep offering the cycle it was opened in. */
+export function defaultCycleToRun(
+	storm: { latest_fix: { valid_time: string }; history: { valid_time: string }[]; cycles: string[] } | null,
+	now: Date,
+): string {
+	const current = floorSynoptic(now);
+	if (!storm) return cycleLabel(current);
+	const latest = new Date(storm.latest_fix.valid_time);
+	if (current.getTime() <= latest.getTime() + CYCLE_LIFETIME_GRACE_H * 3_600_000) {
+		return cycleLabel(current);
+	}
+	const first = new Date(storm.history[0]?.valid_time ?? storm.latest_fix.valid_time);
+	const have = new Set(storm.cycles);
+	for (let t = floorSynoptic(latest); t >= first; t = new Date(t.getTime() - SIX_HOURS_MS)) {
+		if (!have.has(cycleLabel(t))) return cycleLabel(t);
+	}
+	return cycleLabel(floorSynoptic(latest));
+}
+
+/** The first and last cycle the API will run for this storm right now, or
+ * null when there is none. From its first fix, to whichever comes first:
+ * `CYCLE_LIFETIME_GRACE_H` past its latest fix (`cycle_policy.check_run`),
+ * or the synoptic time the clock is in (`RealState._check_not_started`
+ * refuses a cycle that hasn't begun). A day outside this range, picked from
+ * the calendar, could only be refused. */
+export function runnableCycleRange(
+	storm: { latest_fix: { valid_time: string }; history: { valid_time: string }[] } | null,
+	now: Date,
+): { first: Date; last: Date } | null {
+	if (!storm) return null;
+	const firstFix = new Date(storm.history[0]?.valid_time ?? storm.latest_fix.valid_time);
+	// Rounded up: a fix off the synoptic hours still can't start a cycle
+	// before it.
+	const first = floorSynoptic(firstFix);
+	if (first < firstFix) first.setTime(first.getTime() + SIX_HOURS_MS);
+	const graceEnd = new Date(
+		new Date(storm.latest_fix.valid_time).getTime() + CYCLE_LIFETIME_GRACE_H * 3_600_000,
+	);
+	const last = floorSynoptic(graceEnd < now ? graceEnd : now);
+	return first <= last ? { first, last } : null;
+}
+
+/** Why `label` can't be run as typed, or null when it's a well-formed
+ * synoptic cycle label. */
+export function cycleLabelProblem(label: string): string | null {
+	const parsed = parseCycleLabel(label);
+	if (!parsed) return 'Enter a cycle as YYYYMMDD_HHZ, e.g. 20261015_12Z.';
+	if (!(SYNOPTIC_HOURS as readonly number[]).includes(parsed.getUTCHours())) {
+		return 'Cycles start at 00, 06, 12 or 18Z.';
+	}
+	return null;
+}
+
+/** "08/12Z": day-of-month and hour, UTC -- a forecast point's valid time,
+ * compact enough for a map label. */
+export function formatDayHourZ(d: Date): string {
+	const pad = (n: number) => String(n).padStart(2, '0');
+	return `${pad(d.getUTCDate())}/${pad(d.getUTCHours())}Z`;
+}
+
+/** Valid time of a forecast lead from a cycle label, or null if the label
+ * doesn't parse. */
+export function leadValidTime(cycle: string, leadHours: number): Date | null {
+	const start = parseCycleLabel(cycle);
+	return start ? new Date(start.getTime() + leadHours * 3_600_000) : null;
+}
+
 export function formatUtc(iso: string): string {
 	const d = new Date(iso);
 	const pad = (n: number) => String(n).padStart(2, '0');

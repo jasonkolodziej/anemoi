@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
 
+from .. import config
 from ..tracking.registry import DERIVED_MODELS, GROUP1_MODELS, invalidated_by
 from ..tracking.tags import ExecutionMode, Trigger
 
@@ -102,9 +103,41 @@ def expand_jobs(jobs: list[RetrainJob]) -> list[RetrainJob]:
 # ---- individual trigger evaluators ---------------------------------------
 
 
+#: monitoring.yaml ``triggers``.
+SCHEDULED_MONTHLY_DAY: int = config.get("monitoring", "triggers.scheduled_monthly_day", int)
+if not 1 <= SCHEDULED_MONTHLY_DAY <= 28:
+    raise config.ConfigError(
+        "monitoring.yaml: triggers.scheduled_monthly_day must be 1-28 so it falls "
+        f"in every month, got {SCHEDULED_MONTHLY_DAY}"
+    )
+_PRESEASON = config.get("monitoring", "triggers.preseason_date", str)
+try:
+    # Validated against a leap year so 02-29 is accepted; strptime without a
+    # year is deprecated, hence parsing by hand.
+    _month, _day = (int(p) for p in _PRESEASON.split("-"))
+    date(2024, _month, _day)
+except ValueError as exc:
+    raise config.ConfigError(
+        f"monitoring.yaml: triggers.preseason_date must be MM-DD, got {_PRESEASON!r}"
+    ) from exc
+PRESEASON_MONTH_DAY: tuple[int, int] = (_month, _day)
+DATA_VOLUME_THRESHOLD: int = config.get("monitoring", "triggers.data_volume_threshold", int)
+NIGHTLY_LATENT_HOUR_UTC: int = config.get("monitoring", "triggers.nightly_latent_hour_utc", int)
+if not 0 <= NIGHTLY_LATENT_HOUR_UTC <= 23:
+    raise config.ConfigError(
+        "monitoring.yaml: triggers.nightly_latent_hour_utc must be 0-23, "
+        f"got {NIGHTLY_LATENT_HOUR_UTC}"
+    )
+config.fixed(
+    "monitoring", "triggers.suppress_nightly_latent_during_active_storms", True,
+    "swapping the ensemble generator under a live storm makes consecutive "
+    "advisories' spread uninterpretable (v2.1)",
+)
+
+
 def scheduled_monthly(today: date) -> list[RetrainJob]:
-    """Full parallel retrain on the 1st of each month (§5.5)."""
-    if today.day != 1:
+    """Full parallel retrain on ``SCHEDULED_MONTHLY_DAY`` of each month (§5.5; the 1st)."""
+    if today.day != SCHEDULED_MONTHLY_DAY:
         return []
     return [
         RetrainJob(m, Reason.SCHEDULED_MONTHLY, ExecutionMode.PARALLEL_GROUP1)
@@ -113,8 +146,8 @@ def scheduled_monthly(today: date) -> list[RetrainJob]:
 
 
 def preseason(today: date) -> list[RetrainJob]:
-    """May 1 Atlantic pre-season full refresh (§5.5, §8.1)."""
-    if (today.month, today.day) != (5, 1):
+    """Atlantic pre-season full refresh on ``PRESEASON_MONTH_DAY`` (§5.5, §8.1; May 1)."""
+    if (today.month, today.day) != PRESEASON_MONTH_DAY:
         return []
     return [
         RetrainJob(m, Reason.PRESEASON, ExecutionMode.PARALLEL_GROUP1) for m in GROUP1_MODELS
@@ -150,7 +183,9 @@ def on_latent_desync(model: str) -> list[RetrainJob]:
     return [RetrainJob(model, Reason.LATENT_DESYNC, mode, note=note)]
 
 
-def on_data_volume(new_synoptic_times: int, threshold: int = 500) -> list[RetrainJob]:
+def on_data_volume(
+    new_synoptic_times: int, threshold: int = DATA_VOLUME_THRESHOLD
+) -> list[RetrainJob]:
     """Warm-start retrain once enough new synoptic times have accumulated (§5.5)."""
     if new_synoptic_times < threshold:
         return []
@@ -172,14 +207,15 @@ class SeasonState:
 
 
 def nightly_latent(now: datetime, state: SeasonState) -> list[RetrainJob]:
-    """02:00 UTC diffusion refresh, suppressed while storms are active.
+    """Nightly diffusion refresh at ``NIGHTLY_LATENT_HOUR_UTC`` (02:00), suppressed
+    while storms are active.
 
     v2 ran this unconditionally. Swapping the ensemble generator underneath a
     live storm means consecutive advisories carry forecasts from different
     models, and any spread change is then uninterpretable -- so while a storm is
     active the pinned model set holds and the refresh waits.
     """
-    if now.hour != 2:
+    if now.hour != NIGHTLY_LATENT_HOUR_UTC:
         return []
     if state.storms_active:
         return []

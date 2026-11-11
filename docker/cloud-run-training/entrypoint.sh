@@ -18,7 +18,15 @@ MODELS="${MODELS:-}"
 DIFFUSION_DROPOUT="${DIFFUSION_DROPOUT:-}"
 DIFFUSION_WEIGHT_DECAY="${DIFFUSION_WEIGHT_DECAY:-}"
 
+TRIGGER="${TRIGGER:-manual_sweep}"
+
 mkdir -p "${ERA5_CACHE_DIR}" "${GDAS_CACHE_DIR}" "${REGISTRY_ROOT}"
+
+# The newest HURDAT2 NHC has published, so a season released since the image
+# was built is trained on (#216). On failure the baked-in copy stays.
+if [ "${HURDAT2_REFRESH:-1}" = "1" ]; then
+  anemoi hurdat2-fetch --out "${HURDAT2_PATH}" || echo "hurdat2-fetch failed; keeping the image's HURDAT2" >&2
+fi
 
 if [ ! -f "${HURDAT2_PATH}" ]; then
   echo "HURDAT2 archive not found at ${HURDAT2_PATH}" >&2
@@ -40,6 +48,7 @@ fi
 ARGS=(
   train-schedule
   --mode "${MODE}"
+  --trigger "${TRIGGER}"
   --hurdat2 "${HURDAT2_PATH}"
   --era5-cache-dir "${ERA5_CACHE_DIR}"
   --gdas-cache-dir "${GDAS_CACHE_DIR}"

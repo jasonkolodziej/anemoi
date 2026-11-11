@@ -8,6 +8,7 @@
   import { cycleLabel } from "$lib/utils";
   import { pollWhileVisible } from "$lib/poll";
   import { setWaiterLoading } from "$lib/stores/waiter";
+  import { recall, remember } from "$lib/lastKnown";
 
   let storms = $state<StormSummary[] | null>(null);
   let plans = $state<CyclePlanOut[] | null>(null);
@@ -15,6 +16,16 @@
   // Defaults to the safe assumption (demo) until /v1/health actually
   // answers -- never claims "real" before confirming it.
   let stateMode = $state<"demo" | "real">("demo");
+  // True while the page shows what this browser remembered from its last
+  // visit and the fresh answer hasn't landed yet.
+  let refreshing = $state(false);
+
+  interface Remembered {
+    date: string;
+    storms: StormSummary[];
+    plans: CyclePlanOut[] | null;
+    stateMode: "demo" | "real";
+  }
 
   // Real storm/intensity data and "today" itself both go stale on a tab
   // left open -- neither was ever re-fetched before, only loaded once at
@@ -30,15 +41,20 @@
     try {
       const today = cycleLabel(new Date()).slice(0, 8); // YYYYMMDD
       const isoDate = `${today.slice(0, 4)}-${today.slice(4, 6)}-${today.slice(6, 8)}`;
-      const [s, sched, h] = await Promise.all([
+      // Settled one by one: the storm list is the page, and a cold start or
+      // a 5xx on the schedule or health used to replace a perfectly good
+      // (KV-served) storm list with "Could not reach Anemoi-API" (#212).
+      const [s, sched, h] = await Promise.allSettled([
         listStorms(),
         getSchedule(isoDate),
         health(),
       ]);
-      storms = s;
-      plans = sched.plans;
-      stateMode = h.state_mode;
+      if (s.status === "rejected") throw s.reason;
+      storms = s.value;
+      if (sched.status === "fulfilled") plans = sched.value.plans;
+      if (h.status === "fulfilled") stateMode = h.value.state_mode;
       error = null; // a later successful poll must clear an earlier outage banner
+      remember("home", { date: today, storms: s.value, plans, stateMode });
     } catch (e) {
       error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
     } finally {
@@ -47,14 +63,31 @@
   }
 
   onMount(() => {
-    load();
+    // Draw the last visit's storms at once and refresh behind them, rather
+    // than a blank page under the waiter while the API answers. The
+    // schedule is only reused for the same UTC day.
+    const last = recall<Remembered>("home");
+    if (last) {
+      storms = last.storms;
+      stateMode = last.stateMode;
+      if (last.date === cycleLabel(new Date()).slice(0, 8)) plans = last.plans;
+      refreshing = true;
+      load({ background: true }).finally(() => (refreshing = false));
+    } else {
+      load();
+    }
     return pollWhileVisible(() => load({ background: true }), 60_000);
   });
 </script>
 
 <div class="mx-auto max-w-6xl px-6 py-8">
   <header class="mb-8">
-    <h1 class="font-display text-2xl font-semibold text-text">Active storms</h1>
+    <h1 class="font-display text-2xl font-semibold text-text">
+      Active storms
+      {#if refreshing}
+        <span class="ml-2 align-middle text-xs font-normal text-text-faint" data-testid="refreshing">Updating…</span>
+      {/if}
+    </h1>
     {#if stateMode === "real"}
       <p class="mt-1 text-sm text-text-muted">
         Real HURDAT2 archive + live NHC feed — anemoi.api.real_state.

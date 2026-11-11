@@ -73,10 +73,59 @@
       ".github/workflows/*.yaml"
     ]
   },
+
+  // --- Sveltekit Guard ---
+  "workbench.editor.customLabels.enabled": true,
+  "workbench.editor.customLabels.patterns": {
+    "**/src/routes/**/-guard.{ts,js}": "${dirname} - Guard"
+  },
+
   // --- Python ---
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
-  "python.terminal.activateEnvironment": true
+  "python.terminal.activateEnvironment": true,
 
   // --- Markdown ---
   // "markdownlint.config": { ... } - See `.markdownlint.json`
+
+  // --- ShellCheck ---
+  "shellcheck.enable": true,
+  "shellcheck.enableQuickFix": true,
+  "shellcheck.markdownDiagnostics": false,
+  "shellcheck.run": "onType",
+  "shellcheck.executablePath": "", // Priority: user defined > bundled binary > shellcheck in PATH
+  "shellcheck.exclude": [],
+  "shellcheck.customArgs": [],
+  "shellcheck.ignorePatterns": {
+    "**/*.csh": true,
+    "**/*.cshrc": true,
+    "**/*.fish": true,
+    "**/*.login": true,
+    "**/*.logout": true,
+    "**/*.tcsh": true,
+    "**/*.tcshrc": true,
+    "**/*.xonshrc": true,
+    "**/*.xsh": true,
+    "**/*.zsh": true,
+    "**/*.zshrc": true,
+    "**/zshrc": true,
+    "**/*.zprofile": true,
+    "**/zprofile": true,
+    "**/*.zlogin": true,
+    "**/zlogin": true,
+    "**/*.zlogout": true,
+    "**/zlogout": true,
+    "**/*.zshenv": true,
+    "**/zshenv": true,
+    "**/*.zsh-theme": true
+  }
+  // "shellcheck.ignoreFileSchemes": [
+  //   "git",
+  //   "gitfs",
+  //   "output",
+  //   "review",
+  //   "pr",
+  //   "githubpr",
+  //   "gitpr",
+  //   "githubcommit"
+  // ]
 }

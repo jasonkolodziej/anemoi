@@ -1,0 +1,24 @@
+{
+ "_comment": "Default browser state for e2e specs: the cookie banner already answered (preferences on, analytics off), so it doesn't sit over what a spec clicks. cookie-banner.spec.ts starts from nothing instead.",
+ "cookies": [],
+ "origins": [
+  {
+   "origin": "http://localhost:5173",
+   "localStorage": [
+    {
+     "name": "anemoi:consent:v1",
+     "value": "{\"preferences\":true,\"analytics\":false,\"decidedAt\":\"2026-01-01T00:00:00.000Z\"}"
+    }
+   ]
+  },
+  {
+   "origin": "http://localhost:8787",
+   "localStorage": [
+    {
+     "name": "anemoi:consent:v1",
+     "value": "{\"preferences\":true,\"analytics\":false,\"decidedAt\":\"2026-01-01T00:00:00.000Z\"}"
+    }
+   ]
+  }
+ ]
+}

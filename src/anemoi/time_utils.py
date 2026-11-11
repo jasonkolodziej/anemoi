@@ -12,11 +12,36 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-SYNOPTIC_HOURS: tuple[int, ...] = (0, 6, 12, 18)
+from . import config
+
+#: Fixed, not tunable: every cycle label, cache key and stored result is
+#: keyed on these, and NHC's own products run on them.
+SYNOPTIC_HOURS: tuple[int, ...] = tuple(
+    config.fixed(
+        "inference", "cycle.synoptic_hours", [0, 6, 12, 18],
+        "every cycle label, stored result and NHC product is keyed on these",
+    )
+)
 CYCLE_INTERVAL = timedelta(hours=6)
 
+#: Cycle t consumes the t-6 NWP cycle -- one cycle interval, by construction.
+NWP_LAG_HOURS: int = config.fixed(
+    "inference", "cycle.nwp_lag_hours", 6,
+    "cycle t consumes the NWP cycle one interval earlier; the NWP cycle named t "
+    "publishes ~3.5-4h after its valid time",
+)
+
+#: How far back select_nwp_cycle may fall before giving up (inference.yaml
+#: cycle.max_nwp_lag_hours). Shared by every caller's default.
+MAX_NWP_LAG_HOURS: int = config.get("inference", "cycle.max_nwp_lag_hours", int)
+if MAX_NWP_LAG_HOURS < NWP_LAG_HOURS or MAX_NWP_LAG_HOURS % NWP_LAG_HOURS:
+    raise config.ConfigError(
+        f"inference.yaml: cycle.max_nwp_lag_hours must be a multiple of "
+        f"{NWP_LAG_HOURS} and at least {NWP_LAG_HOURS}, got {MAX_NWP_LAG_HOURS}"
+    )
+
 #: NHC public advisories are issued at 03/09/15/21Z, i.e. t + 3h.
-ADVISORY_OFFSET = timedelta(hours=3)
+ADVISORY_OFFSET = timedelta(minutes=config.get("inference", "cycle.advisory_offset_minutes", int))
 
 
 def is_synoptic(ts: datetime) -> bool:
@@ -119,7 +144,7 @@ def select_nwp_cycle(
     t: datetime,
     available_cycles: set[datetime] | frozenset[datetime],
     *,
-    max_lag_hours: int = 12,
+    max_lag_hours: int = MAX_NWP_LAG_HOURS,
 ) -> NWPCycleSelection:
     """Pick the NWP cycle to drive forecast cycle ``t``.
 
@@ -132,7 +157,7 @@ def select_nwp_cycle(
         NWPUnavailableError: if nothing within ``max_lag_hours`` is available.
     """
     require_synoptic(t)
-    for lag in range(6, max_lag_hours + 1, 6):
+    for lag in range(NWP_LAG_HOURS, max_lag_hours + 1, NWP_LAG_HOURS):
         candidate = t - timedelta(hours=lag)
         if candidate in available_cycles:
             return NWPCycleSelection(

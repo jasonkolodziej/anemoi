@@ -1,9 +1,9 @@
-import { redirect } from "@sveltejs/kit";
 import type { PageServerLoad } from "./$types";
 
-export const load: PageServerLoad = async ({ locals }) => {
-	if (!locals.user) {
-		redirect(303, "/auth/login");
-	}
-	return { user: locals.user };
+// Access control itself lives in ./-guard.ts (svelte-guard, runs in
+// hooks.server.ts before any load) -- by the time this runs, an
+// anonymous request has already been redirected to /auth/login, so
+// `locals.user` is guaranteed non-null here.
+export const load: PageServerLoad = ({ locals }) => {
+	return { user: locals.user! };
 };

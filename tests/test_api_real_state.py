@@ -11,7 +11,7 @@ test_real_inference_ensemble.py already cover in depth.
 from __future__ import annotations
 
 import warnings
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -163,15 +163,26 @@ def test_run_cycle_rejects_a_cycle_that_has_not_started_yet(client):
     assert "has not started yet" in r.json()["detail"]
 
 
-def test_run_cycle_allows_the_in_progress_cycle(client):
+def test_run_cycle_allows_the_in_progress_cycle(client, monkeypatch):
     """A cycle whose synoptic time has already begun -- even if real vitals
     haven't landed yet -- is the existing, honest `vitals_estimated`
     degraded mode, not something this guard should touch."""
+    from anemoi.data.besttrack import Fix, Track, TrackQuality
     from anemoi.time_utils import cycle_label, floor_synoptic
 
-    now_cycle = cycle_label(floor_synoptic(datetime.now(UTC)))
+    # A live storm whose latest fix is the previous synoptic time -- the
+    # in-progress cycle's own vitals haven't landed -- run as the scheduled
+    # cycle (#212: a manual run of a label still due to run is refused).
+    now_start = floor_synoptic(datetime.now(UTC))
+    previous = now_start - timedelta(hours=6)
+    live = Track(storm_id="AL982026", fixes=(
+        Fix(storm_id="AL982026", valid_time=previous, lat=25.0, lon=-70.0,
+            max_wind_kt=50.0, min_pressure_mb=995.0, quality=TrackQuality.WORKING),
+    ))
+    monkeypatch.setattr("anemoi.data.live_atcf.fetch_live_tracks", lambda: [live])
     r = client.post(
-        "/v1/storms/AL012026/cycles", json={"cycle": now_cycle, "members": 4},
+        "/v1/storms/AL982026/cycles", json={"cycle": cycle_label(now_start), "members": 4},
+        headers={"X-Anemoi-Run-Source": "scheduled"},
     )
     assert r.status_code == 201
 
@@ -215,6 +226,50 @@ def test_pacific_storm_is_flagged_as_not_a_trained_basin(client, monkeypatch):
     body = r.json()
     assert body["basin"] == "EP"
     assert body["trained_basin"] is False
+
+
+def test_a_basin_is_trained_once_every_served_model_trained_on_it(client, monkeypatch):
+    """`trained_basin` follows what the champions trained on (their
+    `trained_basins` tag), not a hard-coded list: Eastern Pacific training
+    turns the badge off without a code change (docs/multi_basin.md)."""
+    from anemoi.api import real_state
+    from anemoi.data.besttrack import Fix, Track, TrackQuality
+    from anemoi.data.sources import Flavor
+    from anemoi.tracking.registry import GROUP1_MODELS, Stage
+
+    fix = Fix(
+        storm_id="EP172026", valid_time=datetime(2026, 9, 22, 0, 0, tzinfo=UTC),
+        lat=15.0, lon=-100.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+        quality=TrackQuality.WORKING,
+    )
+    monkeypatch.setattr(
+        "anemoi.data.live_atcf.fetch_live_tracks",
+        lambda: [Track(storm_id="EP172026", fixes=(fix,))],
+    )
+    assert client.get("/v1/storms/EP172026").json()["trained_basin"] is False
+
+    registry = real_state.get_real_state().registry
+    for name in GROUP1_MODELS:
+        v = registry.register(name, run_id=f"run-{name}", input_flavor=Flavor.GDAS_FINETUNE,
+                              metrics={}, tags={"trained_basins": "AL,EP"})
+        registry.transition(name, v.version, Stage.PRODUCTION)
+    assert client.get("/v1/storms/EP172026").json()["trained_basin"] is True
+    listed = {s["storm_id"]: s["trained_basin"] for s in client.get("/v1/storms").json()}
+    assert listed["EP172026"] is True
+
+
+def test_the_storm_routes_refresh_the_registry_before_reading_coverage(client, monkeypatch):
+    """A promotion or rollback made elsewhere (the training job, another
+    replica) must reach `trained_basin` within the registry's refresh
+    interval, as it already does on the registry routes."""
+    from anemoi.api import real_state
+
+    state = real_state.get_real_state()
+    calls: list[str] = []
+    monkeypatch.setattr(state, "refresh_registry_if_stale", lambda: calls.append("refresh"))
+    assert client.get("/v1/storms").status_code == 200
+    assert client.get("/v1/storms/AL012026").status_code == 200
+    assert calls == ["refresh", "refresh"]
 
 
 def test_debug_last_deterministic_error_route_needs_opt_in(tmp_path, hurdat2_file, monkeypatch):
@@ -271,13 +326,17 @@ def test_real_state_merges_a_live_storm(client, monkeypatch):
     storm, with a `working` quality latest_fix (not `final`), and be
     reachable by run_cycle the same way an archive storm is."""
     from anemoi.data.besttrack import Fix, Track, TrackQuality
+    from anemoi.time_utils import floor_synoptic
 
     live_track = Track(
         storm_id="AL992026",
         fixes=(
             Fix(
                 storm_id="AL992026",
-                valid_time=datetime(2026, 9, 22, 0, 0, tzinfo=UTC),
+                # Relative to now: `active` is "latest fix within the last
+                # 14 days", so a hardcoded date stopped counting as active
+                # two weeks after it was written.
+                valid_time=floor_synoptic(datetime.now(UTC)),
                 lat=25.0,
                 lon=-70.0,
                 max_wind_kt=50.0,
@@ -300,8 +359,14 @@ def test_real_state_merges_a_live_storm(client, monkeypatch):
     assert r.status_code == 200
     assert r.json()["storm_id"] == "AL992026"
 
+    from anemoi.time_utils import cycle_label
+
     r = client.post(
-        "/v1/storms/AL992026/cycles", json={"cycle": "20260922_00Z", "members": 4},
+        "/v1/storms/AL992026/cycles",
+        json={"cycle": cycle_label(floor_synoptic(datetime.now(UTC))), "members": 4},
+        # The scheduled run: a manual one of a label still due to run by the
+        # cron is refused (#212, test_cycle_policy.py).
+        headers={"X-Anemoi-Run-Source": "scheduled"},
     )
     assert r.status_code == 201
 
@@ -1024,3 +1089,100 @@ def test_monitoring_calibration_route_does_not_500(client):
     r = client.get("/v1/monitoring/calibration")
     assert r.status_code == 200
     assert r.json() == []
+
+
+def test_listing_storms_never_runs_the_calibration_audit(client, monkeypatch):
+    """The audit downloads stored cycles from R2. It used to run inside
+    whichever console request found the live feed stale; now only the
+    Worker's post-cycle call runs it."""
+    from anemoi.data.besttrack import Fix, Track, TrackQuality
+
+    calls = []
+    monkeypatch.setattr(
+        "anemoi.monitoring.calibration_audit.audit_storm",
+        lambda *a, **k: calls.append(a) or [],
+    )
+    live_track = Track(
+        storm_id="AL992026",
+        fixes=(
+            Fix(
+                storm_id="AL992026", valid_time=datetime(2026, 9, 22, tzinfo=UTC),
+                lat=25.0, lon=-70.0, max_wind_kt=50.0, min_pressure_mb=995.0,
+                quality=TrackQuality.WORKING,
+            ),
+        ),
+    )
+    monkeypatch.setattr("anemoi.data.live_atcf.fetch_live_tracks", lambda: [live_track])
+
+    assert client.get("/v1/storms").status_code == 200
+    assert client.get("/v1/storms/AL992026").status_code == 200
+    assert calls == []
+
+
+def test_internal_calibration_audit_route_reports_new_samples(client, monkeypatch):
+    from anemoi.api import real_state
+
+    monkeypatch.setattr(real_state.RealState, "_audit_calibration_due", lambda self: 3)
+    r = client.post("/v1/internal/calibration-audit")
+    assert r.status_code == 200
+    assert r.json() == {"new_samples": 3}
+
+
+def test_internal_routes_are_not_in_the_public_schema(client):
+    paths = client.get("/openapi.json").json()["paths"]
+    assert not any(p.startswith("/v1/internal") for p in paths)
+
+
+def test_concurrent_requests_share_one_live_feed_fetch(client, monkeypatch):
+    """The console fires several requests at once on a cold container; each
+    one used to fetch NHC itself while the first fetch was still in flight."""
+    import threading
+    import time
+
+    from anemoi.api.real_state import get_real_state
+
+    fetches = []
+
+    def slow_fetch():
+        fetches.append(1)
+        time.sleep(0.2)
+        return []
+
+    monkeypatch.setattr("anemoi.data.live_atcf.fetch_live_tracks", slow_fetch)
+    state = get_real_state()
+    threads = [threading.Thread(target=state.list_storms) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(fetches) == 1
+
+
+def test_a_stale_refresh_in_flight_serves_known_storms_without_waiting(client, monkeypatch):
+    import threading
+    from datetime import timedelta
+
+    from anemoi.api import real_state
+
+    state = real_state.get_real_state()
+    state.list_storms()  # first fetch done
+    state._live_storms_fetched_at -= real_state._LIVE_STORMS_TTL + timedelta(minutes=1)
+
+    started, release = threading.Event(), threading.Event()
+
+    def blocked_fetch():
+        started.set()
+        release.wait(5)
+        return []
+
+    monkeypatch.setattr("anemoi.data.live_atcf.fetch_live_tracks", blocked_fetch)
+    refresher = threading.Thread(target=state.list_storms)
+    refresher.start()
+    assert started.wait(5)
+    try:
+        done = threading.Event()
+        threading.Thread(target=lambda: (state.list_storms(), done.set())).start()
+        assert done.wait(1), "a second caller blocked on the in-flight refresh"
+    finally:
+        release.set()
+        refresher.join()

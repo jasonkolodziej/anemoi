@@ -132,11 +132,37 @@ export interface CycleProducts {
 	degraded: boolean;
 }
 
+/** Who ran a cycle and what they changed (#212). `scheduled` is the
+ * official run; `manual` fills a cycle nothing ran, until the scheduled run
+ * replaces it. */
+export interface RunInfo {
+	source: 'scheduled' | 'manual';
+	overrides: string[];
+}
+
+/** What a cycle actually ran on (#214). */
+export interface ProvenanceOut {
+	fix_source: 'tcvitals' | 'final_best_track' | 'extrapolated' | 'persisted';
+	fix: FixOut;
+	model_versions: Record<string, number>;
+	fusion: string;
+	gridded_source: string | null;
+	basin: string;
+	trained_basin: boolean;
+	started_at: string;
+	git_sha: string | null;
+	config_sha256: string;
+}
+
 export interface CycleResult {
 	storm_id: string;
 	payload: CyclePayload;
 	products: CycleProducts;
 	on_time: boolean;
+	/** `null` for a cycle stored before #212. */
+	run?: RunInfo | null;
+	/** `null` for a cycle stored before #214. */
+	provenance?: ProvenanceOut | null;
 }
 
 export interface FixOut {
@@ -179,6 +205,8 @@ export interface RunCycleRequest {
 	worst_case?: boolean;
 	coastline_lat?: number | null;
 	coastline_lon?: number | null;
+	/** Re-run an existing cycle -- operators only (#212). */
+	replace?: boolean;
 }
 
 export interface ModelVersionOut {

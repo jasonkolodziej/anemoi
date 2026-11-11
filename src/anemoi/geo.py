@@ -37,29 +37,64 @@ def haversine_nm(
     a = np.sin(dlat / 2.0) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0) ** 2
     dist_km = 2.0 * EARTH_RADIUS_KM * np.arcsin(np.sqrt(np.clip(a, 0.0, 1.0)))
     out = dist_km / KM_PER_NM
-    return float(out) if np.isscalar(lat1) or out.ndim == 0 else out
+    # Scalar only when the *result* is: a scalar first point against an
+    # array of second points is an array of distances. Judging by `lat1`
+    # alone called `float()` on that array (#218).
+    return float(out) if np.ndim(out) == 0 else out
+
+
+# The scalar helpers below each delegate to an array form that broadcasts,
+# so there is one formula per quantity. Use the array forms for anything
+# per-member or per-lead: a Python loop of scalar calls costs ~10 us a point
+# in NumPy call overhead, which was most of a training run's verification
+# time and of a cycle's product building (#218).
+
+
+def bearings_deg(
+    lat1: float | np.ndarray,
+    lon1: float | np.ndarray,
+    lat2: float | np.ndarray,
+    lon2: float | np.ndarray,
+) -> np.ndarray:
+    """Initial great-circle bearing from point 1 to point 2, degrees clockwise
+    from north. Broadcasts over arrays."""
+    phi1 = np.radians(np.asarray(lat1, dtype=float))
+    phi2 = np.radians(np.asarray(lat2, dtype=float))
+    dlon = np.radians(np.asarray(lon2, dtype=float) - np.asarray(lon1, dtype=float))
+    y = np.sin(dlon) * np.cos(phi2)
+    x = np.cos(phi1) * np.sin(phi2) - np.sin(phi1) * np.cos(phi2) * np.cos(dlon)
+    return (np.degrees(np.arctan2(y, x)) + 360.0) % 360.0
 
 
 def bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Initial great-circle bearing from point 1 to point 2, degrees clockwise from north."""
-    phi1, phi2 = np.radians(lat1), np.radians(lat2)
-    dlon = np.radians(lon2 - lon1)
-    y = np.sin(dlon) * np.cos(phi2)
-    x = np.cos(phi1) * np.sin(phi2) - np.sin(phi1) * np.cos(phi2) * np.cos(dlon)
-    return float((np.degrees(np.arctan2(y, x)) + 360.0) % 360.0)
+    return float(bearings_deg(lat1, lon1, lat2, lon2))
 
 
-def offset_position(lat: float, lon: float, distance_nm: float, bearing: float) -> tuple[float, float]:
-    """Displace a position by ``distance_nm`` along ``bearing`` (deg from north)."""
-    ang = nm_to_km(distance_nm) / EARTH_RADIUS_KM
-    phi1, lam1 = np.radians(lat), np.radians(lon)
-    theta = np.radians(bearing)
+def offset_positions(
+    lat: float | np.ndarray,
+    lon: float | np.ndarray,
+    distance_nm: float | np.ndarray,
+    bearing: float | np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Displace positions by ``distance_nm`` along ``bearing`` (deg from
+    north). Broadcasts over arrays; returns ``(lat, lon)`` arrays."""
+    ang = np.asarray(distance_nm, dtype=float) * KM_PER_NM / EARTH_RADIUS_KM
+    phi1 = np.radians(np.asarray(lat, dtype=float))
+    lam1 = np.radians(np.asarray(lon, dtype=float))
+    theta = np.radians(np.asarray(bearing, dtype=float))
     phi2 = np.arcsin(np.sin(phi1) * np.cos(ang) + np.cos(phi1) * np.sin(ang) * np.cos(theta))
     lam2 = lam1 + np.arctan2(
         np.sin(theta) * np.sin(ang) * np.cos(phi1),
         np.cos(ang) - np.sin(phi1) * np.sin(phi2),
     )
-    return float(np.degrees(phi2)), float(wrap_longitude(np.degrees(lam2)))
+    return np.degrees(phi2), wrap_longitude(np.degrees(lam2))
+
+
+def offset_position(lat: float, lon: float, distance_nm: float, bearing: float) -> tuple[float, float]:
+    """Displace a position by ``distance_nm`` along ``bearing`` (deg from north)."""
+    lat2, lon2 = offset_positions(lat, lon, distance_nm, bearing)
+    return float(lat2), float(lon2)
 
 
 def wrap_longitude(lon: float | np.ndarray) -> float | np.ndarray:
@@ -81,7 +116,20 @@ def cross_along_track_nm(
     decomposition is what makes a bias diagnosable (a fast bias and a rightward
     bias have completely different causes).
     """
-    dist = haversine_nm(obs_lat, obs_lon, fcst_lat, fcst_lon)
-    brg = bearing_deg(obs_lat, obs_lon, fcst_lat, fcst_lon)
-    delta = np.radians(brg - motion_bearing)
-    return float(dist * np.sin(delta)), float(dist * np.cos(delta))
+    cross, along = cross_along_track_nms(fcst_lat, fcst_lon, obs_lat, obs_lon, motion_bearing)
+    return float(cross), float(along)
+
+
+def cross_along_track_nms(
+    fcst_lat: float | np.ndarray,
+    fcst_lon: float | np.ndarray,
+    obs_lat: float | np.ndarray,
+    obs_lon: float | np.ndarray,
+    motion_bearing: float | np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Array form of `cross_along_track_nm`: broadcasts over arrays and
+    returns ``(cross, along)`` arrays."""
+    dist = np.asarray(haversine_nm(obs_lat, obs_lon, fcst_lat, fcst_lon), dtype=float)
+    brg = bearings_deg(obs_lat, obs_lon, fcst_lat, fcst_lon)
+    delta = np.radians(brg - np.asarray(motion_bearing, dtype=float))
+    return dist * np.sin(delta), dist * np.cos(delta)

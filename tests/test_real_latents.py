@@ -95,6 +95,9 @@ def test_extract_joint_latents_lines_up_all_five_models_on_real_windows(tmp_path
     tracks = [
         make_track("AL012021", season=2021, n=26, seed=0),
         make_track("AL022021", season=2021, n=26, seed=1),
+        # Stage B validation since #216 (data.splits.season_boundaries: with
+        # 2023 the newest season, 2022 is validation and 2023 the test season).
+        make_track("AL012022", season=2022, n=26, seed=7),
         make_track("AL012023", season=2023, n=26, seed=2),
     ]
     cache_dir = tmp_path / "gdas_cache"

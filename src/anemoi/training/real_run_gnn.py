@@ -58,7 +58,7 @@ from .promotion import MetricSet
 from .real_run import (
     LEAD_STEPS,
     RunArtifacts,
-    boundaries_for_flavor,
+    boundaries_for_tracks,
     displacement_to_latlon,
     freeze_encoder,
     iter_stage_windows,
@@ -615,7 +615,7 @@ def run_gnn_curriculum(
     val_metrics: MetricSet | None = None
     for stage in curriculum.stages:
         cache_dir = era5_cache_dir if stage.flavor is Flavor.ERA5_PRETRAIN else gdas_cache_dir
-        boundaries = boundaries_for_flavor(stage.flavor)
+        boundaries = boundaries_for_tracks(stage.flavor, tracks)
         assignment = assign_splits(tracks, boundaries)
         train_tracks = filter_tracks(tracks, assignment, Split.TRAIN)
         val_tracks = filter_tracks(tracks, assignment, Split.VAL)

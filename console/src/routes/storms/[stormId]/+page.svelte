@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import type { PageData } from "./$types";
@@ -9,6 +9,8 @@
   import { listRegistry } from "$lib/api/endpoints";
   import { pollWhileVisible } from "$lib/poll";
   import { setWaiterLoading } from "$lib/stores/waiter";
+  import { recall, remember } from "$lib/lastKnown";
+  import { loginHref } from "$lib/auth-return";
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge";
   import {
@@ -25,10 +27,15 @@
   import CycleDateTimePicker from "$lib/components/anemoi/CycleDateTimePicker.svelte";
   import {
     cn,
+    CYCLE_RUN_DELAY_MIN,
     cycleLabel,
+    cycleLabelProblem,
+    defaultCycleToRun,
     floorSynoptic,
     formatLatLon,
     formatUtc,
+    parseCycleLabel,
+    runnableCycleRange,
   } from "$lib/utils";
 
   let { data }: { data: PageData } = $props();
@@ -51,7 +58,15 @@
   let viewedLabel = $state<string | null>(null);
   let error = $state<string | null>(null);
   let running = $state(false);
-  let cycleInput = $state(cycleLabel(floorSynoptic(new Date())));
+  // Advanced on every load/poll, so "is the next cycle due yet" and the
+  // form's default cycle move with the clock while the page sits open.
+  let now = $state(new Date());
+  // The cycle the user typed or picked in the run form; `null` until they
+  // do, and the form follows `defaultCycleToRun` -- which moves with the
+  // clock and the storm. A label fixed at mount kept offering the cycle the
+  // page was opened in, hours later: usually one the storm already had, so
+  // "Run cycle" could only 409.
+  let cycleDraft = $state<string | null>(null);
   let members = $state(MAX_MEMBERS);
   let worstCase = $state(false);
   // Optional -- landfall_probability is null unless a coastal reference
@@ -74,6 +89,66 @@
       ? [...storm.cycles].sort().at(-1)!
       : null,
   );
+
+  const cycleInput = $derived(cycleDraft ?? defaultCycleToRun(storm, now));
+  const cycleProblem = $derived(cycleLabelProblem(cycleInput));
+  // The cycles the API would accept for this storm now: the date picker
+  // disables every day and hour outside it.
+  const cycleRange = $derived(runnableCycleRange(storm, now));
+  // A label this storm already has can't be run again (409 `exists`,
+  // #212): the form offers to show it instead.
+  const cycleExists = $derived(
+    cycleProblem === null && storm !== null && storm.cycles.includes(cycleInput),
+  );
+
+  function setCycleInput(value: string) {
+    cycleDraft = value;
+    // A banner left by the last attempt is about a cycle no longer asked for.
+    error = null;
+  }
+
+  function describe(e: unknown): string {
+    return e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
+  }
+
+  // The synoptic cycle the clock is in, when this active storm doesn't have
+  // it yet -- e.g. at 07:00Z the 06Z cycle exists on the calendar but the
+  // cron only runs it at 07:30Z, so the newest forecast is still 00Z. Said
+  // out loud because otherwise nothing on the page explains why the latest
+  // fix (06Z) is newer than the forecast shown.
+  const pendingCycle = $derived.by(() => {
+    if (!storm?.active) return null;
+    const label = cycleLabel(floorSynoptic(now));
+    if (latestLabel !== null && latestLabel >= label) return null;
+    const start = parseCycleLabel(label);
+    if (!start) return null;
+    const due = new Date(start.getTime() + CYCLE_RUN_DELAY_MIN * 60_000);
+    const lateMin = (now.getTime() - due.getTime()) / 60_000;
+    // A run takes minutes; well past that, it most likely failed.
+    const status = lateMin < 0 ? "scheduled" : lateMin < 45 ? "running" : "overdue";
+    return { label, due, status };
+  });
+
+  // #214: what the cycle actually ran on, in words.
+  const FIX_SOURCE_TEXT: Record<string, string> = {
+    tcvitals: "the storm's TC-Vitals fix at the cycle time",
+    final_best_track: "the final best-track fix (an archive storm — not an as-issued forecast)",
+    extrapolated: "a fix extrapolated from earlier ones (vitals hadn't landed)",
+    persisted: "the last earlier fix, held in place (too little history to extrapolate)",
+  };
+  const FUSION_TEXT: Record<string, string> = {
+    learned: "all five models, combined by the learned fusion",
+    inverse_error: "the models available, combined by their validation error",
+    synthetic: "no trained model could run — a straight-line placeholder",
+    demo: "demo models",
+  };
+
+  function formatHourMinute(d: Date): string {
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const local = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}Z (${local} your time)`;
+  }
+
   const viewingOlderCycle = $derived(
     viewedLabel !== null && latestLabel !== null && viewedLabel !== latestLabel,
   );
@@ -88,37 +163,102 @@
     // its initial mount before this fix) is a bigger risk than skipping
     // one tick while a run is genuinely in progress.
     if (running) return;
+    // Every await below re-checks this: a response for the storm the page
+    // showed before a client-side switch must not land on the new one.
+    const id = stormId;
+    now = new Date();
     error = null;
     if (!background) setWaiterLoading(true);
     try {
-      storm = await getStorm(stormId);
+      // When the label to show is already known (a pinned one, or the
+      // newest from the last poll or visit), fetch it alongside the storm
+      // rather than after it; only a label the storm turns out to have
+      // moved past needs a second round trip.
+      const known = viewedLabel ?? latestLabel;
+      const [s, early] = await Promise.all([
+        getStorm(id),
+        known ? getCycle(id, known).catch(() => null) : null,
+      ]);
+      if (id !== stormId) return;
+      storm = s;
+      remember(`storm:${id}`, s);
       // Refresh whichever cycle is actually being viewed. Only follow the
       // newest label while the user hasn't pinned one (#186).
       const label = viewedLabel ?? latestLabel;
-      if (label) cycle = await getCycle(stormId, label);
+      if (label) {
+        const fetched = label === known && early ? early : await getCycle(id, label);
+        // The user may have picked another cycle while this was in flight.
+        if (id !== stormId || label !== (viewedLabel ?? latestLabel)) return;
+        cycle = fetched;
+        remember(`cycle:${id}`, fetched);
+      }
       getSkew()
         .then((r) => (skew = r))
         .catch(() => {});
     } catch (e) {
-      error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
+      if (id === stormId) error = describe(e);
     } finally {
       if (!background) setWaiterLoading(false);
     }
   }
 
+  // Only the newest click's answer is shown, so clicking two chips in
+  // quick succession can't end on the first.
+  let viewRequest = 0;
+
   async function viewCycle(label: string | null) {
-    viewedLabel = label;
     const target = label ?? latestLabel;
     if (!target) return;
+    const id = stormId;
+    const request = ++viewRequest;
+    error = null;
     try {
-      cycle = await getCycle(stormId, target);
+      const fetched = await getCycle(id, target);
+      if (id !== stormId || request !== viewRequest) return;
+      // Pinned only once the cycle has loaded: pinning first left the
+      // chip and "Viewing an older cycle" claiming a cycle the panel and
+      // map weren't showing whenever the fetch failed.
+      viewedLabel = label;
+      cycle = fetched;
     } catch (e) {
-      error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
+      if (id === stormId && request === viewRequest) error = describe(e);
     }
   }
 
+  // Everything on this page belongs to one storm. Moving to another is a
+  // client-side navigation on the same route, which reuses this component
+  // rather than mounting a new one -- so start the new storm from nothing
+  // here, or its page showed the last storm's pinned cycle, form, and error.
+  function openStorm(id: string) {
+    storm = null;
+    cycle = null;
+    viewedLabel = null;
+    error = null;
+    running = false;
+    cycleDraft = null;
+    members = MAX_MEMBERS;
+    worstCase = false;
+    coastlineLat = "";
+    coastlineLon = "";
+    hoveredModel = null;
+    viewRequest++;
+    // Draw this storm as it was on the last visit and refresh behind it,
+    // rather than an empty page under the waiter while the API answers.
+    const lastStorm = recall<StormDetail>(`storm:${id}`);
+    if (lastStorm?.storm_id === id) {
+      storm = lastStorm;
+      const lastCycle = recall<CycleResult>(`cycle:${id}`);
+      if (lastCycle?.payload.cycle === latestLabel) cycle = lastCycle;
+    }
+    load({ background: storm !== null });
+  }
+
+  $effect(() => {
+    const id = stormId;
+    untrack(() => openStorm(id));
+  });
+
   onMount(() => {
-    load();
     listRegistry()
       .then((entries) => {
         const skiron = entries.find((entry) => entry.model === "skiron");
@@ -129,9 +269,10 @@
     // operator has already run the next cycle, can both change while
     // this page just sits open -- watching an active storm is exactly
     // the case this page is for, so it must not require a manual
-    // reload to show that. Deliberately does not touch cycleInput/
+    // reload to show that. Deliberately does not touch cycleDraft/
     // members/coastlineLat/coastlineLon -- a poll must never overwrite
-    // an in-progress form edit.
+    // an in-progress form edit (the default cycle it advances is only
+    // shown until the user picks one).
     return pollWhileVisible(() => load({ background: true }), 60_000);
   });
 
@@ -141,9 +282,12 @@
     // a fetch -- send them to log in instead of a raw error surfacing
     // from a click that could never have worked.
     if (!data.user) {
-      await goto("/auth/login");
+      // Back to this storm afterwards, not /profile.
+      await goto(loginHref(`/storms/${stormId}`));
       return;
     }
+    if (cycleProblem !== null || cycleExists) return;
+    const id = stormId;
     running = true;
     error = null;
     try {
@@ -153,7 +297,7 @@
       // or pasted -- clamp for real, so the request can't be refused by
       // the API's own bound (#187).
       members = Math.min(Math.max(Math.round(members), 1), MAX_MEMBERS);
-      const result = await runCycle(stormId, {
+      const result = await runCycle(id, {
         cycle: cycleInput,
         members,
         worst_case: worstCase,
@@ -169,13 +313,32 @@
       // exists. Pinning before the await meant a failed run left the view
       // pinned to a label that was never created, and every 60s poll then
       // 404'd on it and rewrote `error` (Copilot review, #190).
+      // A result for a storm the user has since left belongs to that storm
+      // only (Copilot review, #217).
+      if (id !== stormId) return;
       cycle = result;
-      viewedLabel = cycleInput;
-      storm = await getStorm(stormId);
+      // The label the API actually stored, not what was typed: it accepts
+      // `20261015_6Z` and stores `20261015_06Z`, and pinning the typed form
+      // made every later poll 404 on a label that doesn't exist (#212).
+      viewedLabel = result.payload.cycle;
+      viewRequest++;
+      const fresh = await getStorm(id, { fresh: true });
+      if (id === stormId) storm = fresh;
     } catch (e) {
-      error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
+      if (id !== stormId) return;
+      error = describe(e);
+      // A 409 usually means the storm has moved on since this page last
+      // read it (the cron, or another visitor, ran that cycle): re-read it
+      // so Past cycles lists it and the form offers to show it.
+      if (e instanceof ApiError && e.status === 409) {
+        getStorm(id, { fresh: true })
+          .then((s) => {
+            if (id === stormId) storm = s;
+          })
+          .catch(() => {});
+      }
     } finally {
-      running = false;
+      if (id === stormId) running = false;
     }
   }
 </script>
@@ -188,6 +351,7 @@
   {#if error}
     <div
       class="mt-4 rounded-md border border-eurus/30 bg-eurus/5 px-4 py-3 text-sm text-eurus"
+      data-testid="page-error"
     >
       {error}
     </div>
@@ -232,25 +396,95 @@
           {/if}
         </div>
         <p class="mt-1 font-data text-sm text-text-muted">
+          <span class="font-sans text-xs text-text-faint">latest fix</span>
           {formatLatLon(storm.latest_fix.lat, storm.latest_fix.lon)} · {storm
             .latest_fix.max_wind_kt}kt · {formatUtc(
             storm.latest_fix.valid_time,
           )}
         </p>
+        {#if cycle || pendingCycle}
+        <div
+          class="mt-3 max-w-xl rounded-md border border-border-strong bg-surface-raised px-4 py-3 text-sm"
+          data-testid="cycle-context"
+        >
+          {#if cycle}
+            <p class="text-text">
+              Showing forecast cycle
+              <span class="font-data font-medium">{cycle.payload.cycle}</span>
+              {#if cycle.payload.cycle === latestLabel}
+                <span class="text-text-muted">— the latest run</span>
+              {:else}
+                <span class="text-status-degraded"
+                  >— an older run; the latest is
+                  <span class="font-data">{latestLabel}</span></span
+                >
+                <button
+                  class="ml-1 text-fusion underline underline-offset-2 hover:text-text"
+                  onclick={() => viewCycle(null)}>Show latest</button
+                >
+              {/if}
+            </p>
+            {#if cycle.run?.source === "manual"}
+              <p class="mt-1 text-xs text-status-degraded" data-testid="manual-run">
+                A manual run{cycle.run.overrides.length > 0
+                  ? ` (changed: ${cycle.run.overrides.join(", ")})`
+                  : ""}, not the scheduled one — the scheduled run replaces it.
+              </p>
+            {/if}
+            {#if cycle.provenance}
+              <p class="mt-1 text-xs text-text-muted" data-testid="cycle-provenance">
+                Started from {FIX_SOURCE_TEXT[cycle.provenance.fix_source]};
+                {FUSION_TEXT[cycle.provenance.fusion] ?? cycle.provenance.fusion}.
+              </p>
+            {/if}
+            <p class="mt-1 text-xs text-text-muted">
+              Map times are when each forecast point is valid, counted from
+              {cycle.payload.cycle.slice(-3)} — not from the latest fix ({formatUtc(
+                storm.latest_fix.valid_time,
+              )}).
+            </p>
+          {/if}
+          {#if pendingCycle}
+            <p class={cn("text-xs text-text-muted", cycle && "mt-1")} data-testid="pending-cycle">
+              The <span class="font-data">{pendingCycle.label}</span> cycle hasn't
+              run yet —
+              {#if pendingCycle.status === "scheduled"}
+                it's scheduled for {formatHourMinute(pendingCycle.due)}.
+              {:else if pendingCycle.status === "running"}
+                it started at {formatHourMinute(pendingCycle.due)} and should appear
+                within a few minutes.
+              {:else}
+                it was due at {formatHourMinute(pendingCycle.due)} and is overdue;
+                the scheduled run may have failed.
+              {/if}
+            </p>
+          {/if}
+        </div>
+        {/if}
       </div>
-      <div class="flex flex-wrap items-end gap-2">
+      <!-- A form for running another cycle, not a readout of the one shown
+           below: its label follows the current synoptic time (see
+           `defaultCycleToRun`), which is usually newer than the newest
+           cycle run so far, until the user picks one. -->
+      <fieldset
+        class="flex flex-wrap items-end gap-2 rounded-md border border-border px-3 pt-1 pb-3"
+      >
+        <legend class="px-1 text-[11px] text-text-faint">Run a new cycle</legend>
         <div>
           <label
             for="cycle-input"
-            class="mb-1 block text-[11px] text-text-faint">cycle label</label
+            class="mb-1 block text-[11px] text-text-faint">cycle to run</label
           >
           <input
             id="cycle-input"
-            bind:value={cycleInput}
+            bind:value={() => cycleInput, setCycleInput}
             class="font-data w-40 rounded-md border border-border-strong bg-bg px-2.5 py-1.5 text-xs text-text"
           />
         </div>
-        <CycleDateTimePicker bind:value={cycleInput} />
+        <CycleDateTimePicker
+          bind:value={() => cycleInput, setCycleInput}
+          range={cycleRange}
+        />
         <div>
           <label
             for="members-input"
@@ -298,11 +532,44 @@
             />
           </div>
         </div>
-        <Button onclick={handleRunCycle} disabled={running}>
+        <Button
+          onclick={handleRunCycle}
+          disabled={running || cycleProblem !== null || cycleExists}
+        >
           {running ? "Running…" : "Run cycle"}
         </Button>
-      </div>
+        {#if !data.user}
+          <p class="w-full text-[11px] text-text-muted" data-testid="sign-in-to-run">
+            Running a cycle needs an account —
+            <a
+              href={loginHref(`/storms/${stormId}`)}
+              class="text-fusion underline underline-offset-2 hover:text-text">sign in</a
+            >
+            and you'll come back here.
+          </p>
+        {/if}
+        {#if cycleProblem}
+          <p class="w-full text-[11px] text-status-degraded" data-testid="cycle-input-problem">
+            {cycleProblem}
+          </p>
+        {:else if cycleExists}
+          <p class="w-full text-[11px] text-text-muted" data-testid="cycle-exists">
+            <span class="font-data">{cycleInput}</span> has already run{cycleInput ===
+            cycle?.payload.cycle
+              ? " — it's the one shown"
+              : ""}.
+            {#if cycleInput !== cycle?.payload.cycle}
+              <button
+                class="ml-1 text-fusion underline underline-offset-2 hover:text-text"
+                onclick={() => viewCycle(cycleInput === latestLabel ? null : cycleInput)}
+                >View it</button
+              >
+            {/if}
+          </p>
+        {/if}
+      </fieldset>
     </header>
+
 
     {#if cycle}
       <div class="mb-6">
@@ -512,7 +779,7 @@
             </p>
           {/if}
         </div>
-        <div class="mt-2 flex flex-wrap gap-2">
+        <div class="mt-2 flex flex-wrap gap-2" data-testid="past-cycles">
           {#each [...storm.cycles].sort().reverse() as label (label)}
             <button
               class={cn(

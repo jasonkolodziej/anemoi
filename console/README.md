@@ -63,9 +63,26 @@ from it; only this Worker writes):
 pnpm exec wrangler d1 create anemoi_auth
 # put the printed database_id into wrangler.jsonc's d1_databases AND
 # ../docker/api/wrangler.jsonc's d1_databases -- both must match exactly
-pnpm exec wrangler d1 execute anemoi_auth --remote --file=./schemas/better-auth.sql
-pnpm exec wrangler d1 execute anemoi_auth --remote --file=./schemas/anemoi.sql
+pnpm exec wrangler d1 migrations apply anemoi_auth --remote
 ```
+
+Schema changes go in a new numbered file under `migrations/`
+(`pnpm exec wrangler d1 migrations create anemoi_auth <name>`). D1 records
+each applied file in its `d1_migrations` table, so each one runs exactly
+once per database: `.github/workflows/deploy.yml` applies new ones
+to production on merge, and `e2e/global-setup.ts` applies them locally.
+Two rules, because migrations are applied *before* the new Worker
+version goes live and there's no automatic down-migration:
+
+- **Additive only.** Add tables, nullable/defaulted columns and indexes.
+  The still-running previous Worker must keep working against the new
+  schema. Renames/drops take two deploys: stop using it, then drop it.
+- **Never edit an applied migration** -- add a new one. A changed file
+  isn't re-run anywhere it's already recorded.
+
+If a migration does go wrong, the deploy log prints a D1 Time Travel
+bookmark from just before it ran:
+`pnpm exec wrangler d1 time-travel restore anemoi_auth --bookmark=<id>`.
 
 ### Secrets
 
@@ -96,9 +113,45 @@ pnpm run cf:deploy
 Live at `https://anemoi.systems` (custom domain, `console/wrangler.jsonc`'s
 `routes`) and `https://anemoi-console.jasonkolodziej.workers.dev`.
 
+### Cookies and Cloudflare Web Analytics
+
+A visitor's first page shows a cookie banner (`src/lib/components/site/cookie-banner.svelte`,
+state in `src/lib/consent.svelte.ts`). Until they choose, nothing optional is
+stored or loaded:
+
+| Category | What | Default |
+|---|---|---|
+| Necessary | better-auth's session cookie (only once someone signs in), and the choice itself (`localStorage` `anemoi:consent:v1`) | always on |
+| Preferences | `lastKnown`'s copy of the last pages drawn (`anemoi:last:*`), and `UserState`'s extras (`user-extra-prefs`) | off |
+| Analytics | Cloudflare Web Analytics' beacon (`static.cloudflareinsights.com/beacon.min.js`) | off |
+
+"Cookie settings" in the footer (and the mobile menu) reopens the banner.
+Withdrawing preferences deletes what they stored; withdrawing analytics
+reloads the page, since a loaded script can't be taken out.
+
+The beacon is loaded by the page, and only after consent
+(`src/lib/components/site/cloudflare-analytics.svelte`). Cloudflare's own
+**automatic** setup injects it into every response at the edge, before any
+choice, so the site must use the JS-snippet setup instead:
+
+1. In the Cloudflare dashboard's Web Analytics, edit the `anemoi.systems`
+   site and turn off automatic setup, so the beacon is installed by JS
+   snippet only. Then check a fresh page's HTML has no
+   `cloudflareinsights` script before anyone has accepted.
+2. Copy the site's token from its JS snippet (`data-cf-beacon='{"token": "…"}'`)
+   and set it as a plain var, not a secret (the token ships in every page):
+
+   ```sh
+   pnpm exec wrangler deploy --var PUBLIC_CF_WEB_ANALYTICS_TOKEN:<token>
+   ```
+
+   or add `"vars": { "PUBLIC_CF_WEB_ANALYTICS_TOKEN": "<token>" }` to
+   `wrangler.jsonc`. With no token, the analytics toggle still saves the
+   visitor's choice but nothing loads.
+
 ## Docs (`/docs`)
 
-The [Anemoi wiki](https://github.com/jasonkolodziej/anemoi.wiki) rendered inside the console, in its own theme rather than GitHub's. `scripts/sync-wiki.mjs` runs before every `dev`/`build`/`check` (idempotent -- skips if content already exists, `--force` refetches): shallow-clones the wiki repo, renders each page to real HTML via `unified`/`remark`/`rehype` (GFM tables, wiki-style `[Text](Page-Name)` links rewritten to `/docs/<slug>`, heading ids via `rehype-slug`), and writes `static/wiki/*.html` (genuinely static content, fetched/read as files, not Svelte-component source) plus a small `src/lib/wiki-content/manifest.json` (slug -> title, the one piece `docs/[slug]/+page.server.ts`'s `entries()` needs as a build-time import for prerendering). No mdsvex, no Velite -- these are plain wiki pages with no frontmatter, so a Svelte-aware markdown compiler or a schema-validated content-collection tool buys nothing a plain `unified` pipeline doesn't already give directly.
+The [Anemoi wiki](https://github.com/jasonkolodziej/anemoi.wiki) rendered inside the console, in its own theme rather than GitHub's. Its source is the repo's own `wiki/` folder (published to the GitHub wiki by `.github/workflows/wiki.yml`), so `/docs` always matches the commit being deployed. `scripts/sync-wiki.mjs` runs before every `dev`/`build`/`check` (idempotent -- skips if content already exists, `--force` re-renders): reads `../wiki` (shallow-cloning the wiki repo only if that folder is missing), renders each page to real HTML via `unified`/`remark`/`rehype` (GFM tables, wiki-style `[Text](Page-Name)` links rewritten to `/docs/<slug>`, heading ids via `rehype-slug`), and writes `static/wiki/*.html` (genuinely static content, fetched/read as files, not Svelte-component source) plus a small `src/lib/wiki-content/manifest.json` (slug -> title, the one piece `docs/[slug]/+page.server.ts`'s `entries()` needs as a build-time import for prerendering). No mdsvex, no Velite -- these are plain wiki pages with no frontmatter, so a Svelte-aware markdown compiler or a schema-validated content-collection tool buys nothing a plain `unified` pipeline doesn't already give directly.
 
 `/docs/[slug]` opts back into SSR (`export const ssr = true`) to override the app-wide `ssr = false` in the root layout -- without it, prerendering only captures the empty client shell for each slug, not the actual content (found the hard way, first build).
 

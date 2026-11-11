@@ -9,15 +9,22 @@
  * valid per-customer API key (console-issued, verified against the same
  * D1 database console binds as AUTH_DB) before it reaches the container --
  * a rejected request never wakes the billed container. `scheduled()`'s
- * `runDueCycles` is unaffected: it calls `container.fetch()` directly on
- * the Durable Object binding, bypassing this gate entirely (see below).
- * Demo-vs-real routing and edge caching described in #91's "Proposed
- * scope of work" step 3 remain a follow-up.
+ * cycle Workflow is unaffected: it calls `container.fetch()` directly on
+ * the Durable Object binding, bypassing this gate entirely.
+ * Reads of the storm list, a storm, and a stored cycle are served from KV
+ * (src/readCache.ts) without waking the container; every cycle run --
+ * cron or manual POST -- refreshes what they serve. Demo-vs-real routing
+ * from #91's "Proposed scope of work" step 3 remains a follow-up.
  */
 import { Container, getContainer } from '@cloudflare/containers';
 import type { DurableObject } from 'cloudflare:workers';
 import { verifyApiKey } from './auth';
 import { recordCycleRun } from './metering';
+import { RUN_SOURCE_HEADER, cycleRunStormId, isInternalPath } from './routing';
+import { cycleInstanceId } from './cycleWorkflow';
+import { type ContainerFetch, putCycleResult, readThrough, refreshStormSnapshot } from './readCache';
+
+export { CycleWorkflow } from './cycleWorkflow';
 
 /**
  * `wrangler secret put` sets Worker-level bindings, not container
@@ -54,6 +61,9 @@ interface RealApiEnv extends Env {
 	S3_ARTIFACT_ACCESS_KEYID: string;
 	S3_ARTIFACT_SECRET_ACCESS_KEY: string;
 	INTERNAL_PROXY_SECRET: string;
+	/** Comma-separated user ids allowed to re-run an existing cycle
+	 * (`api.cycle_policy`, #212). Optional: unset means no operators. */
+	ANEMOI_OPERATOR_USER_IDS?: string;
 }
 
 const SLEEP_DEADLINE_KEY = 'sleepAfterMs';
@@ -78,6 +88,7 @@ export class AnemoiRealApi extends Container<RealApiEnv> {
 				S3_ARTIFACT_BUCKET: env.S3_ARTIFACT_BUCKET,
 				S3_ARTIFACT_ACCESS_KEYID: env.S3_ARTIFACT_ACCESS_KEYID,
 				S3_ARTIFACT_SECRET_ACCESS_KEY: env.S3_ARTIFACT_SECRET_ACCESS_KEY,
+				ANEMOI_OPERATOR_USER_IDS: env.ANEMOI_OPERATOR_USER_IDS ?? '',
 			},
 		});
 	}
@@ -136,83 +147,32 @@ function currentCycleLabel(now: Date): string {
 	return `${y}${m}${d}_${String(hour).padStart(2, '0')}Z`;
 }
 
-interface StormSummaryOut {
-	storm_id: string;
-	active: boolean;
-	last_cycle: string | null;
-}
-
 /**
- * Runs the real operational cycle for every currently-active storm (#178:
- * nothing triggered a real cycle automatically -- every one in
- * production so far was a manual `POST .../cycles`, which is also why
- * drift/skew monitoring had almost no real samples to report on). Scheduled
- * `t+1:30` after each synoptic time (`wrangler.jsonc`'s cron), 10 minutes
- * past `scheduler.derive_vitals_timeout()`'s own real `t+1:20` -- by firing
- * time, TC-Vitals has either landed or the real `vitals_estimated` fallback
- * `RealState.run_cycle` already has is the honest answer, not a race against
- * it. Idempotent against `last_cycle` so a retried/duplicate invocation
- * (Cron Triggers are at-least-once) doesn't double-run a cycle; one storm's
- * failure is logged and does not stop the rest (`wrangler tail` is where
- * this becomes visible -- there is no dashboard for it otherwise).
+ * Start the operational cycle for every active storm (#178) as a durable
+ * Workflow instance (src/cycleWorkflow.ts). Scheduled `t+1:30` after each
+ * synoptic time (`wrangler.jsonc`'s cron), 10 minutes past
+ * `scheduler.derive_vitals_timeout()`'s own real `t+1:20` -- by firing time,
+ * TC-Vitals has either landed or `RealState.run_cycle`'s `vitals_estimated`
+ * fallback is the honest answer, not a race against it.
+ *
+ * The instance id is the cycle label, so a duplicate cron firing (Cron
+ * Triggers are at-least-once) finds the instance already exists instead of
+ * starting a second run.
  */
-async function runDueCycles(env: Env, cycleLabel: string): Promise<void> {
-	const container = getContainer(env.ANEMOI_REAL_API);
-	let storms: StormSummaryOut[];
+async function startCycleWorkflow(env: Env, cycleLabel: string): Promise<void> {
+	const id = cycleInstanceId(cycleLabel);
 	try {
-		const stormsRes = await container.fetch(new Request('https://internal/v1/storms'));
-		if (!stormsRes.ok) {
-			console.error(`scheduled cycle: GET /v1/storms -> ${stormsRes.status}, aborting`);
-			return;
-		}
-		const body: unknown = await stormsRes.json();
-		if (!Array.isArray(body)) {
-			console.error('scheduled cycle: GET /v1/storms did not return an array, aborting', body);
-			return;
-		}
-		storms = body as StormSummaryOut[];
+		await env.CYCLE_WORKFLOW.create({ id, params: { cycleLabel } });
+		console.log(`scheduled cycle ${cycleLabel}: started workflow instance ${id}`);
 	} catch (err) {
-		// Network error, or the container never woke up -- a per-storm try/
-		// catch further down can't help here, since there's no list to loop
-		// over yet. Real gap Copilot review caught on this PR (#179): an
-		// unhandled throw here previously took the whole scheduled
-		// invocation down noisily instead of a clear logged abort.
-		console.error('scheduled cycle: GET /v1/storms threw, aborting', err);
-		return;
-	}
-	const active = storms.filter((s) => s.active);
-	console.log(`scheduled cycle ${cycleLabel}: ${active.length}/${storms.length} storm(s) active`);
-
-	for (const storm of active) {
-		if (storm.last_cycle === cycleLabel) {
-			console.log(`scheduled cycle ${cycleLabel}: ${storm.storm_id} already has it, skipping`);
-			continue;
-		}
 		try {
-			const res = await container.fetch(
-				new Request(`https://internal/v1/storms/${storm.storm_id}/cycles`, {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ cycle: cycleLabel, members: 20 }),
-				}),
-			);
-			if (!res.ok) {
-				console.error(
-					`scheduled cycle ${cycleLabel}: ${storm.storm_id} -> ${res.status} ${await res.text()}`,
-				);
-			} else {
-				console.log(`scheduled cycle ${cycleLabel}: ${storm.storm_id} -> ${res.status}`);
-			}
-		} catch (err) {
-			console.error(`scheduled cycle ${cycleLabel}: ${storm.storm_id} threw`, err);
+			const existing = await env.CYCLE_WORKFLOW.get(id);
+			console.log(`scheduled cycle ${cycleLabel}: ${id} already exists (${(await existing.status()).status}), not restarting`);
+		} catch {
+			console.error(`scheduled cycle ${cycleLabel}: could not start ${id}`, err);
 		}
 	}
 }
-
-/** Matches `POST /v1/storms/{storm_id}/cycles` -- the route that wakes
- * the billed container and runs real inference, gated tighter than
- * everything else. */
-const CYCLE_POST_RE = /^\/v1\/storms\/([^/]+)\/cycles\/?$/;
 
 /**
  * Resolve the calling user id, trying two paths:
@@ -230,19 +190,26 @@ const CYCLE_POST_RE = /^\/v1\/storms\/([^/]+)\/cycles\/?$/;
  * fixed, operator-controlled value compared once per request, not a
  * per-user credential where timing leaks matter across many attempts.
  */
-async function resolveUserId(request: Request, env: RealApiEnv): Promise<string | null> {
+async function resolveUserId(
+	request: Request,
+	env: RealApiEnv,
+	ctx: ExecutionContext,
+): Promise<string | null> {
 	const internalSecret = request.headers.get('X-Anemoi-Internal-Secret');
 	if (internalSecret && env.INTERNAL_PROXY_SECRET && internalSecret === env.INTERNAL_PROXY_SECRET) {
 		return request.headers.get('X-Anemoi-User-Id');
 	}
 	const apiKey = request.headers.get('X-Anemoi-Api-Key');
-	return verifyApiKey(env.AUTH_DB, apiKey);
+	return verifyApiKey(env.AUTH_DB, ctx, apiKey);
 }
 
 export default {
-	async fetch(request, env) {
+	async fetch(request, env, ctx) {
 		const url = new URL(request.url);
-		const cycleMatch = request.method === 'POST' ? url.pathname.match(CYCLE_POST_RE) : null;
+		if (isInternalPath(url.pathname)) {
+			return new Response('not found', { status: 404 });
+		}
+		const cycleStormId = cycleRunStormId(request.method, url.pathname);
 
 		// #171's Phase 0 acceptance criterion is specifically "POST .../cycles
 		// no longer runnable anonymously" -- the route that wakes the billed
@@ -252,8 +219,8 @@ export default {
 		// question, which this pass doesn't resolve either way. Identity is
 		// still resolved for everyone so a caller that *does* send a key
 		// gets it forwarded downstream, but only a cycle POST requires one.
-		const userId = await resolveUserId(request, env);
-		if (cycleMatch) {
+		const userId = await resolveUserId(request, env, ctx);
+		if (cycleStormId) {
 			if (!userId) {
 				return new Response('invalid or missing X-Anemoi-Api-Key', { status: 401 });
 			}
@@ -266,7 +233,7 @@ export default {
 		// Cloned before `forwarded` is built below -- constructing a new
 		// Request from `request` consumes its body, so reading it again
 		// afterward would throw "body already used".
-		const bodyForMetering = cycleMatch ? request.clone() : null;
+		const bodyForMetering = cycleStormId ? request.clone() : null;
 
 		const forwarded = new Request(request, {
 			headers: new Headers(request.headers),
@@ -281,23 +248,50 @@ export default {
 		if (userId) forwarded.headers.set('X-Anemoi-User-Id', userId);
 		forwarded.headers.delete('X-Anemoi-Internal-Secret');
 		forwarded.headers.delete('X-Anemoi-Api-Key');
+		forwarded.headers.delete(RUN_SOURCE_HEADER);
 
 		const container = getContainer(env.ANEMOI_REAL_API);
+		const fetchContainer: ContainerFetch = (req) => container.fetch(req);
+
+		// Only a signed-in caller may skip the cache: an anonymous
+		// `Cache-Control: no-cache` (DevTools' "Disable cache" sends one) would
+		// otherwise wake the container on every read (#212).
+		const cached = await readThrough(forwarded, env.READ_CACHE, ctx, fetchContainer, {
+			allowBypass: userId !== null,
+		});
+		if (cached) return cached;
+
 		const response = await container.fetch(forwarded);
 
-		if (cycleMatch && userId && bodyForMetering && response.ok) {
+		if (cycleStormId && userId && bodyForMetering && response.ok) {
 			// cycleLabel comes from the request body, not the URL -- storms.py's
-			// run_cycle route takes it as JSON, same shape runDueCycles below
+			// run_cycle route takes it as JSON, same shape the cycle Workflow
 			// already sends. Best-effort: never let a malformed/unreadable body
 			// block a response that's already succeeded.
 			try {
 				const body = (await bodyForMetering.json()) as { cycle?: string };
 				if (body?.cycle) {
-					await recordCycleRun(env.AUTH_DB, userId, cycleMatch[1], body.cycle);
+					await recordCycleRun(env.AUTH_DB, userId, cycleStormId, body.cycle);
 				}
 			} catch (err) {
 				console.error('recordCycleRun: could not read request body', err);
 			}
+		}
+
+		if (cycleStormId && response.ok) {
+			// The container is awake and just changed this storm: refresh what
+			// the read cache serves for it, in the background. KV reads can lag
+			// this write by up to a minute, so the page that ran the cycle
+			// re-reads the storm with `Cache-Control: no-cache` instead of
+			// relying on it (console's getStorm `fresh` option).
+			const stormId = cycleStormId;
+			const forCache = response.clone();
+			ctx.waitUntil(
+				(async () => {
+					await putCycleResult(env.READ_CACHE, stormId, await forCache.text());
+					await refreshStormSnapshot(env.READ_CACHE, fetchContainer, [stormId]);
+				})().catch((err) => console.error('read-cache update after cycle POST threw', err)),
+			);
 		}
 
 		return response;
@@ -305,6 +299,6 @@ export default {
 
 	async scheduled(controller, env, ctx) {
 		const cycleLabel = currentCycleLabel(new Date(controller.scheduledTime));
-		ctx.waitUntil(runDueCycles(env, cycleLabel));
+		ctx.waitUntil(startCycleWorkflow(env, cycleLabel));
 	},
 } satisfies ExportedHandler<RealApiEnv>;

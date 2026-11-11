@@ -50,6 +50,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --extra gridded
 
 COPY . /app
+# build-info.json: the commit this image was built from, written by CI
+# before every build (anemoi.provenance, #214). `{}` for a local build, so
+# the runtime COPY below always has a file and provenance says "unknown"
+# rather than inventing one.
+RUN test -f /app/build-info.json || echo '{}' > /app/build-info.json
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked \
@@ -60,7 +65,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Baked in at build time under the filename docker/cloud-run-training's
 # entrypoint.sh expects (HURDAT2_PATH default).
-RUN mkdir -p /app/data && python3 -c "import urllib.request; urllib.request.urlretrieve('https://www.nhc.noaa.gov/data/hurdat/hurdat2-atl-1851-2023-042624.txt', '/app/data/hurdat2-atl.txt')"
+# The newest Atlantic HURDAT2 NHC has published, with a manifest
+# (hurdat2-atl.json: file, sha256, last season) beside it -- not a pinned
+# 2023 file every training run re-read (#216). Training jobs refresh it again
+# at start (entrypoint.sh).
+RUN mkdir -p /app/data && ANEMOI_CONFIG_DIR=/app/configs /app/.venv/bin/anemoi hurdat2-fetch --out /app/data/hurdat2-atl.txt
 
 # ---------------------------------------------------------------------------
 # api-builder: CPU-only torch -- Cloudflare Containers has no GPUs, and real
@@ -80,6 +89,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --extra torch-cpu
 
 COPY . /app
+# See training-builder.
+RUN test -f /app/build-info.json || echo '{}' > /app/build-info.json
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked \
@@ -89,7 +100,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --extra gridded \
       --extra torch-cpu
 
-RUN mkdir -p /app/data && python3 -c "import urllib.request; urllib.request.urlretrieve('https://www.nhc.noaa.gov/data/hurdat/hurdat2-atl-1851-2023-042624.txt', '/app/data/hurdat2.txt')"
+# See training-builder: the newest HURDAT2, for the archive storms served.
+RUN mkdir -p /app/data && ANEMOI_CONFIG_DIR=/app/configs /app/.venv/bin/anemoi hurdat2-fetch --out /app/data/hurdat2.txt
 
 # ---------------------------------------------------------------------------
 # runtime-base: apt packages common to both final images. libeccodes0 is the
@@ -141,6 +153,11 @@ ENV IMAGE_TAG=latest
 COPY --from=training-builder /app/.venv /app/.venv
 COPY --from=training-builder /app/src /app/src
 COPY --from=training-builder /app/data /app/data
+# Read at import by anemoi.config (#211): curriculum, schedule and monitoring
+# settings. Without it every anemoi import fails with a ConfigError.
+COPY --from=training-builder /app/configs /app/configs
+# The commit this image was built from (anemoi.provenance, #214).
+COPY --from=training-builder /app/build-info.json /app/build-info.json
 COPY docker/cloud-run-training/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
@@ -157,6 +174,9 @@ RUN groupadd --system --gid 10001 app \
 
 ENV ANEMOI_API_REAL_STATE=1
 ENV HURDAT2_PATH=/app/data/hurdat2.txt
+# A manual cycle POST must carry the user id the Worker resolved (#212,
+# api.cycle_policy); the cycle Workflow marks its own runs instead.
+ENV ANEMOI_REQUIRE_CALLER=1
 # The deployed console's origins (its custom domain and workers.dev, both
 # serving the same build) plus local dev, so a local `pnpm dev` console can
 # also talk to this API.
@@ -173,6 +193,10 @@ ENV ANEMOI_API_CORS_ORIGINS="https://anemoi.systems,https://anemoi-console.jason
 COPY --from=api-builder /app/.venv /app/.venv
 COPY --from=api-builder --chown=app:app /app/src /app/src
 COPY --from=api-builder --chown=app:app /app/data /app/data
+# Read at import by anemoi.config (#211); the API won't start without it.
+COPY --from=api-builder --chown=app:app /app/configs /app/configs
+# The commit this image was built from (anemoi.provenance, #214).
+COPY --from=api-builder /app/build-info.json /app/build-info.json
 
 USER app
 

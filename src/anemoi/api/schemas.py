@@ -10,6 +10,7 @@ would recognise. Everything else here is additive.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -162,11 +163,11 @@ class CycleProducts(BaseModel):
     degraded: bool
 
 
-class CycleResult(BaseModel):
-    storm_id: str
-    payload: CyclePayload
-    products: CycleProducts
-    on_time: bool
+class RunInfoOut(BaseModel):
+    """Who ran a cycle and what they changed -- see `inference.cycle.RunInfo`."""
+
+    source: Literal["scheduled", "manual"]
+    overrides: list[str] = Field(default_factory=list)
 
 
 class FixOut(BaseModel):
@@ -176,6 +177,51 @@ class FixOut(BaseModel):
     max_wind_kt: float
     min_pressure_mb: float
     quality: str
+
+
+class ProvenanceOut(BaseModel):
+    """What a cycle actually ran on, and with what (#214). Stored with the
+    result, so a later comparison or a retrain can slice by any of it."""
+
+    #: Where the initial fix came from: ``tcvitals`` (the storm's own
+    #: working fix at the cycle time), ``final_best_track`` (an archive
+    #: storm's label standing in for vitals), ``extrapolated`` (last motion
+    #: vector, vitals late or withheld) or ``persisted`` (too little history
+    #: to extrapolate). Overrides are on ``run``.
+    fix_source: Literal["tcvitals", "final_best_track", "extrapolated", "persisted"]
+    fix: FixOut
+    #: Registered version of each contributing model (``fusion`` included
+    #: when learned fusion ran).
+    model_versions: dict[str, int] = Field(default_factory=dict)
+    #: ``learned``, ``inverse_error``, ``synthetic`` (no real model ran) or ``demo``.
+    fusion: str
+    #: The gridded fields the models read (a GFS object URL); ``None`` when
+    #: none were available.
+    gridded_source: str | None = None
+    #: The GFS cycle and forecast hour those came from (#215): normally the
+    #: ``t-6`` cycle's ``f006``; ``t-12``/``f012`` when that was missing.
+    nwp_cycle: datetime | None = None
+    nwp_forecast_hour: int | None = None
+    #: Gridded models fed a different forecast hour than they trained on.
+    input_skew: dict[str, str] = Field(default_factory=dict)
+    basin: str
+    trained_basin: bool
+    started_at: datetime
+    git_sha: str | None = None
+    config_sha256: str
+
+
+class CycleResult(BaseModel):
+    storm_id: str
+    payload: CyclePayload
+    products: CycleProducts
+    on_time: bool
+    #: `None` for a cycle stored before #212 recorded this. Those were all
+    #: run before manual runs were restricted, so nothing says which they
+    #: were; `api.cycle_policy` treats them as official.
+    run: RunInfoOut | None = None
+    #: `None` for a cycle stored before #214, or run outside the real state.
+    provenance: ProvenanceOut | None = None
 
 
 class StormSummary(BaseModel):
@@ -192,9 +238,9 @@ class StormSummary(BaseModel):
     #: Two-letter ATCF basin code, e.g. "AL"/"EP" -- a direct slice of
     #: storm_id (see `data.atcf.storm_basin`), not a new data source.
     basin: str
-    #: False for any basin outside `data.atcf.TRAINED_BASINS` -- real storm
-    #: data (the live feed and HURDAT2 both cover more than the Atlantic),
-    #: but genuinely out-of-distribution for every currently trained model.
+    #: False for any basin the served models didn't all train on
+    #: (`ModelRegistry.trained_basins`) -- real storm data, but out of
+    #: distribution for at least one model the forecast may combine.
     trained_basin: bool
 
 
@@ -224,6 +270,13 @@ class RunCycleRequest(BaseModel):
     worst_case: bool = False
     coastline_lat: float | None = None
     coastline_lon: float | None = None
+    replace: bool = Field(
+        default=False,
+        description=(
+            "Re-run a cycle that already exists. Honoured only for an operator "
+            "(ANEMOI_OPERATOR_USER_IDS); anyone else gets 409 for an existing cycle."
+        ),
+    )
 
 
 class ModelVersionOut(BaseModel):

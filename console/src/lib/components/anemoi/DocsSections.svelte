@@ -7,7 +7,8 @@
 	 * convention (github.com/shadcn-svelte, /docs/forms reference) -- this
 	 * is a lighter, purpose-built version of it rather than the full
 	 * generic collapsible/icon-mode/cookie-persisted primitive system,
-	 * same call as MobileNav's over the full shadcn Sidebar earlier.
+	 * same call as site/mobile-sidebar.svelte's over the full shadcn
+	 * Sidebar earlier.
 	 *
 	 * lg+: a persistent sticky rail. Below that: a native <details>
 	 * disclosure -- zero JS needed for the mobile case, no extra state to

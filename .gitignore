@@ -192,3 +192,6 @@ cython_debug/
 logs/
 era5_cache/
 gdas_cache/
+
+# Written by CI before image builds (anemoi.provenance)
+build-info.json

@@ -27,9 +27,20 @@ def crps_ensemble(members: np.ndarray, observation: float) -> float:
     x = np.asarray(members, dtype=float).ravel()
     if x.size == 0:
         raise ValueError("empty ensemble")
-    term1 = np.abs(x - observation).mean()
-    term2 = np.abs(x[:, None] - x[None, :]).mean()
-    return float(term1 - 0.5 * term2)
+    return float(_crps_rows(x[None, :], np.array([observation], dtype=float))[0])
+
+
+def _crps_rows(members: np.ndarray, observations: np.ndarray) -> np.ndarray:
+    """CRPS of each row of ``members`` (n_cases, n_members) against its
+    observation, the kernel form above. ``E|X - X'|`` comes from the sorted
+    members -- ``2 * sum_i (2i - m - 1) x_(i) / m^2`` over 1-based ranks,
+    the same mean over all m^2 ordered pairs -- in O(m log m) per case
+    rather than the O(m^2) pairwise matrix."""
+    m = members.shape[1]
+    term1 = np.abs(members - observations[:, None]).mean(axis=1)
+    weights = 2.0 * np.arange(1, m + 1) - m - 1
+    term2 = 2.0 * (np.sort(members, axis=1) * weights).sum(axis=1) / (m * m)
+    return term1 - 0.5 * term2
 
 
 def crps_series(members: np.ndarray, observations: np.ndarray) -> float:
@@ -40,7 +51,9 @@ def crps_series(members: np.ndarray, observations: np.ndarray) -> float:
         raise ValueError("members must be 2-D (n_cases, n_members)")
     if members.shape[0] != observations.shape[0]:
         raise ValueError("case count mismatch between members and observations")
-    return float(np.mean([crps_ensemble(m, o) for m, o in zip(members, observations, strict=True)]))
+    if members.shape[1] == 0:
+        raise ValueError("empty ensemble")
+    return float(np.mean(_crps_rows(members, observations)))
 
 
 def brier_score(probabilities: np.ndarray, outcomes: np.ndarray) -> float:
@@ -118,11 +131,11 @@ def rank_histogram(members: np.ndarray, observations: np.ndarray) -> np.ndarray:
     observations = np.asarray(observations, dtype=float)
     if members.ndim != 2:
         raise ValueError("members must be 2-D")
+    if members.shape[0] != observations.shape[0]:
+        raise ValueError("case count mismatch between members and observations")
     n_members = members.shape[1]
-    counts = np.zeros(n_members + 1, dtype=int)
-    for row, obs in zip(members, observations, strict=True):
-        counts[int(np.sum(np.sort(row) < obs))] += 1
-    return counts
+    ranks = (members < observations[:, None]).sum(axis=1)
+    return np.bincount(ranks, minlength=n_members + 1).astype(int)
 
 
 def reliability(probabilities: np.ndarray, outcomes: np.ndarray, bins: int = 10):

@@ -2,7 +2,7 @@
  * #171 Phase 2 groundwork: one row per accepted cycle run. Nothing reads
  * this yet (no quota enforcement, no billing) -- it exists now so that
  * work is additive later instead of needing a migration plus a backfill
- * once there are real customers. Schema: console/schemas/anemoi.sql.
+ * once there are real customers. Schema: console/migrations/.
  */
 export async function recordCycleRun(
 	d1: D1Database,

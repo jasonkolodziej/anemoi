@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { runFreshCycle, signIn } from './helpers/storm';
 
 // The storm cycle map (ConeMap.svelte) is a real interactive MapLibre map,
 // not a static SVG -- this drives a real cycle run and checks the map
@@ -9,6 +10,9 @@ import { test, expect } from '@playwright/test';
 // enough to trip Svelte's effect_update_depth_exceeded guard the moment a
 // user interacted with the map. This test would have caught it.
 
+// Running a cycle needs an account (#171).
+test.beforeEach(async ({ page }) => signIn(page));
+
 test('cycle map renders and survives pan/zoom without throwing', async ({ page }) => {
 	const pageErrors: string[] = [];
 	page.on('pageerror', (err) => pageErrors.push(err.message));
@@ -16,7 +20,7 @@ test('cycle map renders and survives pan/zoom without throwing', async ({ page }
 	await page.goto('/');
 	await page.locator('a[href^="/storms/"]').first().click();
 	await page.waitForSelector('#cycle-input');
-	await page.getByRole('button', { name: 'Run cycle' }).click();
+	await runFreshCycle(page);
 
 	const canvas = page.locator('canvas').first();
 	await expect(canvas).toBeVisible({ timeout: 10_000 });
@@ -48,7 +52,7 @@ test('legend is real and clickable -- toggling the uncertainty cone changes aria
 	await page.goto('/');
 	await page.locator('a[href^="/storms/"]').first().click();
 	await page.waitForSelector('#cycle-input');
-	await page.getByRole('button', { name: 'Run cycle' }).click();
+	await runFreshCycle(page);
 	await expect(page.locator('canvas').first()).toBeVisible({ timeout: 10_000 });
 
 	const coneToggle = page.getByRole('button', { name: /uncertainty cone/ });
@@ -75,7 +79,7 @@ test('individual model tracks toggle does not appear without real per-model data
 	await page.goto('/');
 	await page.locator('a[href^="/storms/"]').first().click();
 	await page.waitForSelector('#cycle-input');
-	await page.getByRole('button', { name: 'Run cycle' }).click();
+	await runFreshCycle(page);
 	await expect(page.locator('canvas').first()).toBeVisible({ timeout: 10_000 });
 
 	await expect(page.getByRole('button', { name: /individual model tracks/ })).toHaveCount(0);
@@ -94,7 +98,7 @@ test('a background data refresh does not reset the user\'s own pan/zoom', async 
 	await page.locator('a[href^="/storms/"]').first().click();
 	const stormUrl = page.url();
 	await page.waitForSelector('#cycle-input');
-	await page.getByRole('button', { name: 'Run cycle' }).click();
+	await runFreshCycle(page);
 
 	const canvas = page.locator('canvas').first();
 	await expect(canvas).toBeVisible({ timeout: 10_000 });

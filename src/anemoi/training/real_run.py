@@ -22,7 +22,6 @@ archive doesn't overlap `DEFAULT_BOUNDARIES`' train window at all).
 
 from __future__ import annotations
 
-import math
 import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -34,13 +33,16 @@ from ..data.besttrack import Track, WorkingTrackNoise, augment_track
 from ..data.sources import Flavor
 from ..data.splits import (
     DEFAULT_BOUNDARIES,
+    MIN_LATEST_SEASON,
     STAGE_B_BOUNDARIES,
     Split,
     assign_splits,
     filter_tracks,
+    latest_final_season,
+    season_boundaries,
 )
 from ..data.storm_relative import STORM_RELATIVE_COLUMNS, displacement_nm, storm_relative_sequence
-from ..geo import offset_position
+from ..geo import offset_positions
 from ..metrics.track import ForecastPoint, VerificationPair, to_metric_dict, verify
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
@@ -54,15 +56,33 @@ LEAD_STEPS: tuple[int, ...] = tuple(h // 6 for h in DEFAULT_LEADS)
 _MAX_LEAD_STEPS = LEAD_STEPS[-1]
 
 
-def boundaries_for_flavor(flavor: Flavor) -> dict[Split, tuple[int, int]]:
+def boundaries_for_flavor(
+    flavor: Flavor, latest_season: int | None = None,
+) -> dict[Split, tuple[int, int]]:
     """Which `data.splits` boundary scheme a stage's real data comes from.
 
-    Mirrors `cli.cmd_era5_cache`/`cmd_gdas_cache`'s choice: ERA5_PRETRAIN
-    uses the default (decades-deep) window, GDAS_FINETUNE uses
-    STAGE_B_BOUNDARIES (GDAS's real archive has zero overlap with the
-    default train window -- see that constant's docstring).
+    With ``latest_season`` -- the newest season the HURDAT2 being trained on
+    has (`data.splits.latest_final_season`) -- the boundaries move with the
+    archive (`data.splits.season_boundaries`, #216); every real training
+    entry point passes it. Without, the fixed tables: ERA5_PRETRAIN uses the
+    default (decades-deep) window, GDAS_FINETUNE STAGE_B_BOUNDARIES.
     """
+    if latest_season is not None:
+        stage_a, stage_b = season_boundaries(latest_season)
+        return stage_b if flavor is Flavor.GDAS_FINETUNE else stage_a
     return STAGE_B_BOUNDARIES if flavor is Flavor.GDAS_FINETUNE else DEFAULT_BOUNDARIES
+
+
+def boundaries_for_tracks(flavor: Flavor, tracks: list[Track]) -> dict[Split, tuple[int, int]]:
+    """`boundaries_for_flavor` for the archive actually being trained on:
+    derived from its newest season (#216) whenever it reaches the first
+    season a Stage B split can be cut from (`MIN_LATEST_SEASON`, the same
+    threshold `season_boundaries` enforces); the fixed tables only for
+    small synthetic archives that don't."""
+    latest = latest_final_season(tracks) if tracks else None
+    if latest is None or latest < MIN_LATEST_SEASON:
+        return boundaries_for_flavor(flavor)
+    return boundaries_for_flavor(flavor, latest)
 
 
 def displacement_to_latlon(
@@ -70,11 +90,78 @@ def displacement_to_latlon(
 ) -> tuple[float, float]:
     """Inverse of `storm_relative.displacement_nm`: recover an absolute
     position from an (east, north) displacement in nm."""
-    distance_nm = math.hypot(dx_east_nm, dy_north_nm)
-    if distance_nm < 1e-9:
-        return base_lat, base_lon
-    bearing = math.degrees(math.atan2(dx_east_nm, dy_north_nm)) % 360.0
-    return offset_position(base_lat, base_lon, distance_nm, bearing)
+    lat, lon = displacements_to_latlon(base_lat, base_lon, dx_east_nm, dy_north_nm)
+    return float(lat), float(lon)
+
+
+def displacements_to_latlon(
+    base_lat: float | np.ndarray,
+    base_lon: float | np.ndarray,
+    dx_east_nm: float | np.ndarray,
+    dy_north_nm: float | np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Array form of `displacement_to_latlon`: broadcasts, so a whole
+    ``(n_samples, n_leads)`` block converts in one call (pass the bases as
+    ``base[:, None]``). A zero displacement returns its base unchanged."""
+    dx = np.asarray(dx_east_nm, dtype=float)
+    dy = np.asarray(dy_north_nm, dtype=float)
+    base_lat = np.asarray(base_lat, dtype=float)
+    base_lon = np.asarray(base_lon, dtype=float)
+    distance_nm = np.hypot(dx, dy)
+    bearing = np.degrees(np.arctan2(dx, dy)) % 360.0
+    lat, lon = offset_positions(base_lat, base_lon, distance_nm, bearing)
+    still = distance_nm < 1e-9
+    return np.where(still, base_lat, lat), np.where(still, base_lon, lon)
+
+
+def displacements_to_absolute(
+    disp: np.ndarray, base_lat: float | np.ndarray, base_lon: float | np.ndarray
+) -> np.ndarray:
+    """``disp`` is ``(..., 3)`` = (dx_east_nm, dy_north_nm, wind_kt); returns
+    the same shape as (lat, lon, wind_kt). The bases broadcast against
+    ``disp[..., 0]`` -- e.g. ``(n,)`` bases for ``(n, n_leads, 3)`` need
+    ``base[:, None]``; a single base needs nothing."""
+    disp = np.asarray(disp)
+    lat, lon = displacements_to_latlon(base_lat, base_lon, disp[..., 0], disp[..., 1])
+    out = np.empty(disp.shape, dtype=np.result_type(disp.dtype, np.float64))
+    out[..., 0] = lat
+    out[..., 1] = lon
+    out[..., 2] = disp[..., 2]
+    return out
+
+
+def verification_pairs(
+    base_lat: np.ndarray,
+    base_lon: np.ndarray,
+    pred: np.ndarray,
+    obs: np.ndarray,
+    mask: np.ndarray,
+    lead_hours: tuple[int, ...] = DEFAULT_LEADS,
+) -> list[VerificationPair]:
+    """One `VerificationPair` per unmasked (sample, lead): ``pred`` and
+    ``obs`` are ``(n, n_leads, 3)`` displacements (dx, dy, wind) from each
+    sample's base fix, ``mask`` is ``(n, n_leads)``. Positions are converted
+    for the whole block at once, not point by point."""
+    base_lat = np.asarray(base_lat, dtype=float)[:, None]
+    base_lon = np.asarray(base_lon, dtype=float)[:, None]
+    pred_abs = displacements_to_absolute(pred, base_lat, base_lon)
+    obs_abs = displacements_to_absolute(obs, base_lat, base_lon)
+    pairs: list[VerificationPair] = []
+    for si, li in zip(*np.nonzero(np.asarray(mask, dtype=bool)), strict=True):
+        plat, plon, pwind = pred_abs[si, li]
+        olat, olon, owind = obs_abs[si, li]
+        pairs.append(
+            VerificationPair(
+                forecast=ForecastPoint(
+                    lead_hours=lead_hours[li], lat=float(plat), lon=float(plon),
+                    max_wind_kt=float(pwind),
+                ),
+                obs_lat=float(olat),
+                obs_lon=float(olon),
+                obs_wind_kt=float(owind),
+            )
+        )
+    return pairs
 
 
 @dataclass(frozen=True, slots=True)
@@ -363,27 +450,9 @@ def train_lstm_stage(
         val_loss = float(masked_mse(pred_val_z, yv, mv).item())
         pred_val = pred_val_z.cpu().numpy() * y_std + y_mean
 
-    pairs: list[VerificationPair] = []
-    for si in range(len(val_samples)):
-        base_lat, base_lon = val_samples.base_lat[si], val_samples.base_lon[si]
-        for li, lead_hours in enumerate(DEFAULT_LEADS):
-            if not val_samples.mask[si, li]:
-                continue
-            pred_dx, pred_dy, pred_wind = pred_val[si, li]
-            pred_lat, pred_lon = displacement_to_latlon(base_lat, base_lon, pred_dx, pred_dy)
-            obs_dx, obs_dy, obs_wind = val_samples.y[si, li]
-            obs_lat, obs_lon = displacement_to_latlon(base_lat, base_lon, obs_dx, obs_dy)
-            pairs.append(
-                VerificationPair(
-                    forecast=ForecastPoint(
-                        lead_hours=lead_hours, lat=pred_lat, lon=pred_lon,
-                        max_wind_kt=float(pred_wind),
-                    ),
-                    obs_lat=obs_lat,
-                    obs_lon=obs_lon,
-                    obs_wind_kt=float(obs_wind),
-                )
-            )
+    pairs = verification_pairs(
+        val_samples.base_lat, val_samples.base_lon, pred_val, val_samples.y, val_samples.mask,
+    )
 
     if not pairs:
         raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
@@ -501,27 +570,13 @@ def train_lstm_stage_streaming(
         val_loss = val_diff2 / max(val_mask, 1.0)
         pred_val = np.concatenate(pred_val_rows, axis=0) * y_std + y_mean
 
-    pairs: list[VerificationPair] = []
-    for si, sw in enumerate(val_windows):
-        base_lat, base_lon = sw.current.lat, sw.current.lon
-        for li, lead_hours in enumerate(DEFAULT_LEADS):
-            if not sw.mask[li]:
-                continue
-            pred_dx, pred_dy, pred_wind = pred_val[si, li]
-            pred_lat, pred_lon = displacement_to_latlon(base_lat, base_lon, pred_dx, pred_dy)
-            obs_dx, obs_dy, obs_wind = sw.y[li]
-            obs_lat, obs_lon = displacement_to_latlon(base_lat, base_lon, obs_dx, obs_dy)
-            pairs.append(
-                VerificationPair(
-                    forecast=ForecastPoint(
-                        lead_hours=lead_hours, lat=pred_lat, lon=pred_lon,
-                        max_wind_kt=float(pred_wind),
-                    ),
-                    obs_lat=obs_lat,
-                    obs_lon=obs_lon,
-                    obs_wind_kt=float(obs_wind),
-                )
-            )
+    pairs = verification_pairs(
+        np.array([sw.current.lat for sw in val_windows]),
+        np.array([sw.current.lon for sw in val_windows]),
+        pred_val,
+        np.stack([sw.y for sw in val_windows]),
+        np.stack([sw.mask for sw in val_windows]),
+    )
 
     if not pairs:
         raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
@@ -579,7 +634,7 @@ def run_lstm_curriculum(
     model = None
     val_metrics: MetricSet | None = None
     for stage in curriculum.stages:
-        boundaries = boundaries_for_flavor(stage.flavor)
+        boundaries = boundaries_for_tracks(stage.flavor, tracks)
         assignment = assign_splits(tracks, boundaries)
         train_tracks = filter_tracks(tracks, assignment, Split.TRAIN)
         val_tracks = filter_tracks(tracks, assignment, Split.VAL)

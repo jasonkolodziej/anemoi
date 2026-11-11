@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from .. import config
 from ..data.sources import Flavor, Role, get as get_source
 
 
@@ -77,18 +78,44 @@ class StageSpec:
         return self.flavor is Flavor.GDAS_FINETUNE
 
 
+def _stage_config(key: str, name: str, flavor: Flavor) -> dict:
+    """curriculum.yaml ``<key>``: the stage's name and flavor are fixed (they
+    are what assert_deployable and the registry check), the rest tunable --
+    StageSpec still validates every source's role on construction."""
+    config.fixed("curriculum", f"{key}.name", name, "stage names are recorded in every run's tags")
+    config.fixed(
+        "curriculum", f"{key}.flavor", flavor.value,
+        "Stage A is the ERA5 pretrain and Stage B the operational fine-tune (§4.6.1)",
+    )
+    season = config.get_list("curriculum", f"{key}.season_range", int)
+    if len(season) != 2:
+        raise config.ConfigError(f"curriculum.yaml: {key}.season_range must be [first, last]")
+    return {
+        "input_sources": tuple(config.get_list("curriculum", f"{key}.input_sources", str)),
+        "label_source": config.get("curriculum", f"{key}.label_source", str),
+        "season_range": (season[0], season[1]),
+        "epochs": config.get("curriculum", f"{key}.epochs", int),
+        "learning_rate": config.get("curriculum", f"{key}.learning_rate", float),
+    }
+
+
+_STAGE_A = _stage_config("stage_a", "A", Flavor.ERA5_PRETRAIN)
+_STAGE_B = _stage_config("stage_b", "B", Flavor.GDAS_FINETUNE)
+_STAGE_B_FROZEN = tuple(config.get_list("curriculum", "stage_b.frozen_modules", str))
+
+
 def stage_a(
     *,
-    epochs: int = 60,
-    learning_rate: float = 1e-3,
-    season_range: tuple[int, int] = (1980, 2019),
+    epochs: int = _STAGE_A["epochs"],
+    learning_rate: float = _STAGE_A["learning_rate"],
+    season_range: tuple[int, int] = _STAGE_A["season_range"],
 ) -> StageSpec:
-    """Canonical Stage A: ERA5 pretraining."""
+    """Canonical Stage A: ERA5 pretraining (curriculum.yaml ``stage_a``)."""
     return StageSpec(
         name="A",
         flavor=Flavor.ERA5_PRETRAIN,
-        input_sources=("era5", "besttrack_working"),
-        label_source="besttrack_final",
+        input_sources=_STAGE_A["input_sources"],
+        label_source=_STAGE_A["label_source"],
         season_range=season_range,
         epochs=epochs,
         learning_rate=learning_rate,
@@ -97,19 +124,20 @@ def stage_a(
 
 def stage_b(
     *,
-    epochs: int = 20,
-    learning_rate: float = 1e-4,
-    season_range: tuple[int, int] = (2021, 2023),
-    frozen_modules: tuple[str, ...] = ("encoder",),
+    epochs: int = _STAGE_B["epochs"],
+    learning_rate: float = _STAGE_B["learning_rate"],
+    season_range: tuple[int, int] = _STAGE_B["season_range"],
+    frozen_modules: tuple[str, ...] = _STAGE_B_FROZEN,
 ) -> StageSpec:
-    """Canonical Stage B: GDAS fine-tuning on operational-quality inputs.
+    """Canonical Stage B: GDAS fine-tuning on operational-quality inputs
+    (curriculum.yaml ``stage_b``).
 
-    The default learning rate is an order of magnitude below Stage A's: the aim
-    is to re-seat the model on the operational distribution, not to relearn the
+    The learning rate is an order of magnitude below Stage A's: the aim is to
+    re-seat the model on the operational distribution, not to relearn the
     representation on a decade of data.
 
-    ``season_range`` defaults to (2021, 2023): 2021 is GDAS's verified real
-    archive start in ``noaa-gfs-bdp-pds`` (no data exists before it, see
+    ``season_range`` is (2021, 2023): 2021 is GDAS's verified real archive
+    start in ``noaa-gfs-bdp-pds`` (no data exists before it, see
     ``data.sources``'s ``gdas_gfs`` entry); 2023 is the latest season this
     project's HURDAT2 archive (``hurdat2-atl-1851-2023-042624.txt``) has
     final best-track labels for -- Stage B needs both a real GDAS input and a
@@ -118,8 +146,8 @@ def stage_b(
     return StageSpec(
         name="B",
         flavor=Flavor.GDAS_FINETUNE,
-        input_sources=("gdas_gfs", "besttrack_working", "goes", "sst_ohc"),
-        label_source="besttrack_final",
+        input_sources=_STAGE_B["input_sources"],
+        label_source=_STAGE_B["label_source"],
         season_range=season_range,
         epochs=epochs,
         learning_rate=learning_rate,

@@ -207,17 +207,37 @@ Also not done, per #91's remaining scope:
 
 ## Automatic cycle triggering
 
-`src/index.ts`'s `scheduled` handler runs the real operational cycle for
-every currently-active storm, gated on `wrangler.jsonc`'s cron trigger
-(`30 1,7,13,19 * * *`, UTC): `t+1:30` after each synoptic time
-(00/06/12/18Z), 10 minutes past `scheduler.derive_vitals_timeout()`'s own
-real `t+1:20` -- by fire time, TC-Vitals has either landed or
-`RealState.run_cycle`'s honest `vitals_estimated` fallback is the real
-answer, not a race against it. It's idempotent against each storm's
-`last_cycle` (Cron Triggers are at-least-once, and the trigger could also
-overlap a cycle someone ran by hand), and one storm's failure is logged
-and doesn't stop the rest -- there's no dashboard for this, `wrangler
-tail` is where a run's real per-storm outcome is visible.
+`wrangler.jsonc`'s cron trigger (`30 1,7,13,19 * * *`, UTC) starts one
+instance of the `anemoi-cycle` Workflow (`src/cycleWorkflow.ts`) per
+synoptic time: `t+1:30` after 00/06/12/18Z, 10 minutes past
+`scheduler.derive_vitals_timeout()`'s own real `t+1:20` -- by fire time,
+TC-Vitals has either landed or `RealState.run_cycle`'s honest
+`vitals_estimated` fallback is the real answer, not a race against it.
+
+Each instance is a chain of durable steps:
+
+1. **find due storms** -- active storms whose `last_cycle` isn't this cycle
+   yet (the cron could overlap a cycle someone ran by hand).
+2. **run cycle {storm}**, one step per storm -- retried twice (2 min
+   exponential backoff, 20 min timeout each) on a 5xx or a container that
+   didn't answer; a 4xx is recorded as `refused`, not retried. A retry
+   first checks the storm's cycle list, so an attempt that ran but lost
+   its response isn't run twice. One storm's failure never stops the rest.
+3. **refresh read cache** -- the KV snapshot below.
+4. **calibration audit** -- `POST /v1/internal/calibration-audit`, which
+   audits stored cycles against the latest fixes. It used to run inside
+   whichever console request found the live feed stale.
+
+The instance id is `cycle-<label>` (e.g. `cycle-20261008_06Z`), so a
+duplicate cron firing (Cron Triggers are at-least-once) finds it already
+exists and doesn't start a second run. Instance status, per-step outcomes
+and retries are in the Cloudflare dashboard under **Workers & Pages →
+Workflows → anemoi-cycle** (its own sidebar entry, not a tab on the
+`anemoi-api-real` Worker; empty until the first cron after a deploy), or
+`wrangler workflows instances list anemoi-cycle`; the instance's output
+summarises every storm's outcome. Each step attempt logs one line to
+`wrangler tail` as `cycle workflow <label>: ...` (logged from inside the
+steps, so a replay of finished steps doesn't repeat them).
 
 Runs for **every** active storm, trained basin or not -- an untrained
 basin (only `AL` has real trained models, `data.atcf.TRAINED_BASINS`)
@@ -229,13 +249,29 @@ TypeScript reimplementation of `time_utils.cycle_label(time_utils
 .floor_synoptic(now))` -- verified to agree with the real Python function
 at every synoptic-hour boundary (`:00` and `:59` of hours 0, 6, 12, 18,
 plus the hours in between), since there's no way to import the Python
-module across the container boundary. The whole `runDueCycles` flow was
-also verified against the real deployed API directly (not just unit
-logic): a dry run correctly identified which of the real live storms
-were due, then a real run issued real `201`s for the due ones and
-correctly skipped the one already-current storm, and running it again
-immediately afterward skipped all three -- real, live proof of
-idempotency, not just the intent of the code.
+module across the container boundary. Before it became a Workflow, the
+same flow (as `runDueCycles`, #178) was verified against the real deployed
+API: a real run issued real `201`s for the due storms and skipped the one
+already-current storm, and an immediate second run skipped all three.
+
+## Read cache (KV)
+
+`GET /v1/storms`, `GET /v1/storms/{id}` and `GET /v1/storms/{id}/cycles/{label}`
+are served from the `READ_CACHE` KV namespace (`src/readCache.ts`) without
+waking the container. The cron and every successful `POST .../cycles`
+write to it; a storm-list or storm entry older than 30 minutes is still
+served, and refreshed in the background; entries expire after 7 hours if
+nothing refreshes them. Cycle results are stored once and kept 90 days.
+
+- `X-Anemoi-Cache: hit|stale|miss|bypass` on each of those responses shows
+  which path served it (visible in `wrangler tail` and browser devtools).
+- `Cache-Control: no-cache` on a request skips the cache and refills it.
+  The console sends it only for the storm re-read right after a cycle run,
+  since KV reads can lag a write by up to a minute.
+- `/v1/internal/*` is 404 on the public route; only the cron reaches it,
+  through the container binding.
+- To clear the cache: `wrangler kv key list --binding READ_CACHE --remote`
+  and delete keys, or just wait for the next cron run to overwrite them.
 
 ## Local build/run
 
@@ -255,6 +291,13 @@ archive at build time and sets it via `ENV` (see the Dockerfile). Pass
 *different* archive than the one baked in.
 
 ## Deploying
+
+Since #211 the image must carry `configs/` (the code reads it at import), so
+CI builds the `api` target and starts it before anything ships:
+`.github/scripts/smoke-test-image.sh` runs the image's own `CMD` and waits for
+`/v1/health`. That runs in the "Test: docker/api" job on every PR touching the
+API or `configs/`, and before every production deploy. A config-only change
+redeploys the API.
 
 ```bash
 cd docker/api
@@ -280,6 +323,11 @@ request, since better-auth never returns an API key's raw value after
 creation for console to attach one itself (see `src/auth.ts`,
 `src/index.ts`'s `resolveUserId`). Generate it once with something like
 `openssl rand -base64 32` and set the same value in both places.
+
+Optional: `ANEMOI_OPERATOR_USER_IDS` (comma-separated console user ids)
+lets those users re-run a cycle that already exists, with `"replace": true`
+(#212, `src/anemoi/api/cycle_policy.py`). Unset, nobody can -- a cycle,
+once its scheduled run has happened, stays as issued.
 
 `AUTH_DB` (`d1_databases` in `wrangler.jsonc`) must point at the same D1
 database console's own `wrangler.jsonc` creates -- see console/README.md's
@@ -320,15 +368,17 @@ builds and pushes the image as part of it.
 
 ### Automated deploy (#97)
 
-`.github/workflows/deploy-docker-api.yml` runs this exact `pnpm run
-cf:deploy` on every push to `main` that touches what the image or Worker
-is built from -- `docker/api/**` (except markdown), `src/**`,
-`pyproject.toml`, or `uv.lock` -- but
-it's gated behind the `cloudflare-production` GitHub Environment (a
-required reviewer, the repo owner), so a merge *queues* the deploy and
-nothing real ships until that's approved in the Actions run. Approving
-runs the identical command a manual deploy would, just from CI instead
-of a local machine.
+`.github/workflows/deploy.yml` (shared with the console) runs this exact
+`pnpm run cf:deploy` when what the image or Worker is built from --
+`docker/api/**` (except markdown), `docker/multistage.Dockerfile`,
+`src/**`, `pyproject.toml`, or `uv.lock` -- has changed since the last
+successful API deploy (the `deployed/api` git tag), after the API's tests
+pass. It's gated behind the `cloudflare-production` GitHub Environment (a
+required reviewer, the repo owner): one approval covers everything that
+run deploys (console and/or API), and nothing real ships until then.
+Approving runs the identical command a manual deploy would, just from CI
+instead of a local machine. To redeploy without a code change, use **Run
+workflow** on the Deploy workflow.
 
 It uses two secrets on that environment (Settings -> Environments ->
 `cloudflare-production` -> Environment secrets), both set as of

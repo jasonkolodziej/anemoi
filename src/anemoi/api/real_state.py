@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import os
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -39,15 +39,24 @@ import numpy as np
 if TYPE_CHECKING:
     from ..training.triggers import RetrainJob
 
+from .. import provenance
 from ..data.availability import LatencyOracle
 from ..data.besttrack import Fix, Track, TrackQuality
-from ..inference.cycle import CycleError, CycleOutput, DeterministicForecast, run_cycle
+from ..inference.cycle import (
+    CycleError,
+    CycleOutput,
+    DeterministicForecast,
+    extrapolate_fix,
+    run_cycle,
+)
 from ..inference.scheduler import plan_cycle
 from ..monitoring.calibration_audit import CalibrationSample, LeadProductCalibration
 from ..monitoring.drift import DriftError, DriftReport, ReferenceDistribution, detect_feature_drift
 from ..monitoring.skew import SkewMonitor, SkewReport, SkewSample
+from ..time_utils import cycle_label
 from ..tracking.registry import ALL_MODELS, ModelRegistry
 from . import schemas
+from .cycle_policy import InFlight, RunRequest, check_run
 from .cycle_store import CycleHistory
 
 #: How recently a storm's latest real fix must be to count as "active" --
@@ -78,10 +87,10 @@ _SKEW_SAMPLES_TTL = timedelta(hours=6)
 
 #: How long the real calibration-sample corpus (#166's live-monitoring
 #: follow-up) stays valid before a process re-pulls it from durable
-#: storage. New real samples land whenever `_audit_calibration_due`
-#: (piggybacked on `_refresh_live_storms`, every `_LIVE_STORMS_TTL`) finds
-#: a newly-due lead -- more often than skew's offline audit, but still far
-#: less often than every request, so this sits between the two.
+#: storage. New real samples land whenever `run_calibration_audit` (called
+#: by the Worker after each synoptic cycle's runs) finds a newly-due lead --
+#: more often than skew's offline audit, but still far less often than every
+#: request, so this sits between the two.
 _CALIBRATION_SAMPLES_TTL = timedelta(hours=1)
 
 #: Real forecast lead times every real deterministic_fn/ensemble_fn this
@@ -127,7 +136,63 @@ def _synthetic_fallback_deterministic(plan, fix) -> DeterministicForecast:
         lats=fix.lat + 0.9 * steps, lons=fix.lon - 1.1 * steps,
         winds_kt=np.clip(fix.max_wind_kt + 4.0 * steps - 0.4 * steps**2, 15.0, None),
         contributors={},
+        fusion="synthetic",
     )
+
+
+#: Where a cycle's initial fix came from (#214), recorded in its provenance.
+#: Before, every cycle used the storm's *latest* fix relabelled as the
+#: target time -- for a past label, a position from days later -- and
+#: reported `vitals: observed` whatever happened.
+FIX_SOURCES = ("tcvitals", "final_best_track", "extrapolated", "persisted")
+
+
+def initial_fix(
+    track: Track,
+    target: datetime,
+    *,
+    lat: float | None = None,
+    lon: float | None = None,
+    wind_kt: float | None = None,
+    withhold_vitals: bool = False,
+) -> tuple[Fix, str]:
+    """The cycle's initial fix, and where it came from.
+
+    * The storm's own fix at ``target``, as a WORKING fix (a live storm's
+      TC-Vitals, or -- for an archive storm -- its final best-track fix,
+      which is a label standing in for vitals nobody kept).
+    * Otherwise the last motion vector extrapolated to ``target``
+      (`inference.cycle.extrapolate_fix`, §6.2.2), ESTIMATED.
+    * Otherwise, with fewer than two earlier fixes, the latest earlier fix
+      held at its position, ESTIMATED.
+
+    ``withhold_vitals`` (the API's ``worst_case``) skips the first, as if
+    TC-Vitals hadn't landed. ``lat``/``lon``/``wind_kt`` override the
+    result (recorded on the run as overrides).
+    """
+    prior = tuple(f for f in track.fixes if f.valid_time <= target)
+    if not prior:
+        raise CycleError(f"{track.storm_id} has no fix at or before {target:%Y-%m-%d %HZ}")
+    at = prior[-1] if prior[-1].valid_time == target and not withhold_vitals else None
+    if at is not None:
+        base, quality = at, TrackQuality.WORKING
+        source = "final_best_track" if at.quality is TrackQuality.FINAL else "tcvitals"
+    else:
+        history = tuple(f for f in prior if f.valid_time < target)
+        if len(history) >= 2:
+            base, source = extrapolate_fix(history, target), "extrapolated"
+        else:
+            base, source = history[-1] if history else prior[-1], "persisted"
+        quality = TrackQuality.ESTIMATED
+    return Fix(
+        storm_id=track.storm_id,
+        valid_time=target,
+        lat=lat if lat is not None else base.lat,
+        lon=lon if lon is not None else base.lon,
+        max_wind_kt=wind_kt if wind_kt is not None else base.max_wind_kt,
+        min_pressure_mb=base.min_pressure_mb,
+        quality=quality,
+    ), source
 
 
 class RealState:
@@ -173,6 +238,10 @@ class RealState:
         #: storm or disturb the archive storms.
         self._live_storms: dict[str, RealStormState] = {}
         self._live_storms_fetched_at: datetime | None = None
+        #: Single-flight guard for `_refresh_live_storms`: the console fires
+        #: several requests at once, and without this each one that arrived
+        #: while the first fetch was in flight re-fetched NHC too.
+        self._live_refresh_lock = threading.Lock()
 
         registry_root = registry_root or os.environ.get(
             "REGISTRY_ROOT", str(Path.home() / ".anemoi" / "registry"),
@@ -199,6 +268,8 @@ class RealState:
             "GDAS_CACHE_DIR", str(Path.home() / "gdas_cache"),
         )
         self._lock = threading.Lock()
+        #: One run per (storm, label) at a time (#212, `api.cycle_policy`).
+        self._in_flight = InFlight()
         #: Why the most recent real deterministic_fn attempt degraded to
         #: the synthetic fallback, if it did -- InferenceCycleError's own
         #: message already carries a real per-model breakdown (#100), this
@@ -269,37 +340,98 @@ class RealState:
         just keeps whatever live storms were already known, exactly the
         "no real X available must degrade, never crash" contract every
         other real-data fetch in this codebase follows -- see
-        `data.live_atcf.fetch_live_tracks`, which itself never raises."""
-        now = datetime.now(UTC)
-        if (
-            self._live_storms_fetched_at is not None
-            and now - self._live_storms_fetched_at < _LIVE_STORMS_TTL
-        ):
+        `data.live_atcf.fetch_live_tracks`, which itself never raises.
+
+        Single-flight: while one request is fetching, others serve the live
+        storms already known instead of fetching again. Only the very first
+        fetch of a process makes concurrent callers wait, since until it
+        lands there is nothing to serve."""
+        if not self._live_storms_stale():
             return
-        from ..data.live_atcf import fetch_live_tracks
+        if not self._live_refresh_lock.acquire(blocking=self._live_storms_fetched_at is None):
+            return
+        try:
+            if not self._live_storms_stale():
+                return  # another caller refreshed while this one waited
+            from ..data.live_atcf import fetch_live_tracks
 
-        tracks = fetch_live_tracks()
-        if tracks:
-            # Carry each storm's cycle history over: rebuilding it empty
-            # dropped every cycle run on a live storm on each refresh (#175).
-            self._live_storms = {
-                t.storm_id: self._new_storm_state(t, self._live_storms.get(t.storm_id))
-                for t in tracks
-            }
-        self._live_storms_fetched_at = now
-        self._audit_calibration_due()
+            tracks = fetch_live_tracks()
+            if tracks:
+                # Carry each storm's cycle history over: rebuilding it empty
+                # dropped every cycle run on a live storm on each refresh (#175).
+                self._live_storms = {
+                    t.storm_id: self._new_storm_state(t, self._live_storms.get(t.storm_id))
+                    for t in tracks
+                }
+            self._live_storms_fetched_at = datetime.now(UTC)
+        finally:
+            self._live_refresh_lock.release()
 
-    def _audit_calibration_due(self) -> None:
-        """Real calibration audit pass (#166's live-monitoring follow-up),
-        piggybacked on the real live-feed refresh above rather than a
-        separate offline CLI/cron -- see `monitoring.calibration_audit`'s
-        own module docstring for why the real truth this needs (what a
-        storm actually did next) is already arriving via this exact
-        refresh, not published days later by a separate pipeline the way
-        skew's ERA5T is. Best-effort throughout: a failure here must
-        never break a live-storm refresh, the same contract
-        `_record_drift_sample`/`_record_skew_sample` already establish
-        for real monitoring hooks attached to `run_cycle`.
+    def _live_storms_stale(self) -> bool:
+        return (
+            self._live_storms_fetched_at is None
+            or datetime.now(UTC) - self._live_storms_fetched_at >= _LIVE_STORMS_TTL
+        )
+
+    def run_calibration_audit(self) -> int:
+        """Refresh the live feed if stale, then audit every live storm's
+        stored cycles; returns how many new samples landed. The Worker calls
+        this (`POST /v1/internal/calibration-audit`) after each synoptic
+        cycle's runs -- it used to run inside `_refresh_live_storms`, i.e.
+        inside whichever console request happened to find the feed stale,
+        downloading every stored cycle of every live storm from R2 while
+        that request waited."""
+        self._refresh_live_storms()
+        return self._audit_calibration_due()
+
+    def run_skew_audit(self, max_records: int = 6) -> dict:
+        """One bounded skew-audit pass (§4.6.3, #216): replay up to
+        ``max_records`` recorded cycles that ERA5T has caught up with, in this
+        same image and code that served them. The Worker's cycle Workflow
+        calls it (`POST /v1/internal/skew-audit`) after each synoptic cycle;
+        nothing scheduled `anemoi skew-audit` before, so the skew monitor
+        never had samples. Reports, rather than raises, a missing store."""
+        from ..monitoring.skew_audit import audit_run
+
+        try:
+            store = self._checkpoint_store
+        except Exception as exc:  # noqa: BLE001 - no durable store configured
+            return {"error": f"no durable store: {exc}"}
+        self.refresh_registry_if_stale()
+        summary = audit_run(
+            self.registry, store, Path(self.registry.root) / "skew_cache", self.registry.root,
+            max_records=max_records,
+        )
+        if summary.get("n_samples_added"):
+            self._skew_samples = None  # re-read the corpus on the next report
+        return summary
+
+    def archive_atcf(self) -> dict:
+        """Copy NHC's as-issued storm files to durable storage (#213,
+        `data.atcf_archive`). The Worker's cycle Workflow calls this
+        (`POST /v1/internal/archive-atcf`) after each synoptic cycle's runs,
+        off the request path. Reports, rather than raises, a missing store or
+        an unreachable NHC, so the Workflow's output says why."""
+        from ..data.atcf_archive import archive_atcf
+
+        try:
+            store = self._checkpoint_store
+        except Exception as exc:  # noqa: BLE001 - no durable store configured
+            return {"error": f"no durable store: {exc}"}
+        try:
+            return archive_atcf(store).as_dict()
+        except Exception as exc:  # noqa: BLE001 - NHC's index unreachable; next pass retries
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
+    def _audit_calibration_due(self) -> int:
+        """Real calibration audit pass (#166's live-monitoring follow-up) --
+        see `monitoring.calibration_audit`'s own module docstring for why
+        the real truth this needs (what a storm actually did next) is
+        already arriving via the live feed refresh, not published days
+        later by a separate pipeline the way skew's ERA5T is. Best-effort
+        throughout: one storm's failure must not sink another's, the same
+        contract `_record_drift_sample`/`_record_skew_sample` already
+        establish for real monitoring hooks attached to `run_cycle`.
 
         `_ensure_cycle_index` runs first (idempotent after its own first
         real success) so a due cycle registered by an *earlier* container
@@ -313,15 +445,19 @@ class RealState:
         try:
             store = self._checkpoint_store
         except Exception:  # noqa: BLE001 - no real store configured -- nothing to audit against
-            return
-        for storm in self._live_storms.values():
+            return 0
+        added = 0
+        for storm in list(self._live_storms.values()):
             try:
-                audit_storm(
+                added += len(audit_storm(
                     storm.storm_id, tuple(storm.cycles), storm.track.fixes,
-                    store, self.registry.root,
-                )
+                    store, self.registry.root, lead_hours=_LEAD_HOURS,
+                ))
             except Exception:  # noqa: BLE001 - one storm's audit failure must not sink another's
                 continue
+        if added:
+            self._calibration_samples = None  # re-read the corpus on next report
+        return added
 
     def _new_storm_state(
         self, track: Track, previous: RealStormState | None = None,
@@ -429,15 +565,33 @@ class RealState:
         members: int,
         worst_case: bool,
         coastline: tuple[float, float] | None,
+        run: RunRequest | None = None,
     ) -> CycleOutput:
+        """Run (or refuse) one cycle -- see `api.cycle_policy` for who may run
+        what. ``run`` defaults to a manual request with no user, the most
+        restricted kind."""
         from ..time_utils import parse_cycle_label
-        from ..training.real_inference_cycle import build_real_deterministic_fn
-        from ..training.real_inference_ensemble import build_real_ensemble_fn
 
-        self.refresh_registry_if_stale()
-        self._ensure_drift_restored()
-        storm = self.get_storm(storm_id)
+        run = run or RunRequest()
         target = parse_cycle_label(cycle)
+        storm = self.get_storm(storm_id)
+        label = cycle_label(target)
+        with self._in_flight.hold(storm_id, label):
+            self._check_not_started(cycle, target)
+            check_run(
+                storm_id=storm_id, target=target,
+                first_fix=storm.track.fixes[0].valid_time,
+                latest_fix=storm.latest_fix.valid_time,
+                active=storm.active, cycles=storm.cycles, request=run,
+                now=datetime.now(UTC),
+            )
+            return self._run_cycle(
+                storm, target, lat=lat, lon=lon, wind_kt=wind_kt, members=members,
+                worst_case=worst_case, coastline=coastline, run=run,
+            )
+
+    @staticmethod
+    def _check_not_started(cycle: str, target: datetime) -> None:
         # `LatencyOracle`/`plan_cycle` have no wall-clock concept of "now" --
         # by design, since a replay harness needs to plan a cycle before it
         # happens using only a hypothetical `as_of`. But this is the one real
@@ -461,26 +615,72 @@ class RealState:
                 f"{now:%Y-%m-%d %H:%M}Z); a forecast cycle can only be issued "
                 "for a synoptic time that has already begun"
             )
-        oracle = LatencyOracle(use_max_latency=worst_case)
-        plan = plan_cycle(target, oracle)
 
-        base = storm.latest_fix
-        fix = Fix(
-            storm_id=storm_id,
-            valid_time=target,
-            lat=lat if lat is not None else base.lat,
-            lon=lon if lon is not None else base.lon,
-            max_wind_kt=wind_kt if wind_kt is not None else base.max_wind_kt,
-            min_pressure_mb=base.min_pressure_mb,
-            # A FINAL-quality archive fix is never a model input (§4.6.2) --
-            # mint a fresh WORKING/ESTIMATED fix at the same position.
-            quality=TrackQuality.ESTIMATED if plan.vitals_estimated else TrackQuality.WORKING,
+    def _run_cycle(
+        self,
+        storm: RealStormState,
+        target: datetime,
+        *,
+        lat: float | None,
+        lon: float | None,
+        wind_kt: float | None,
+        members: int,
+        worst_case: bool,
+        coastline: tuple[float, float] | None,
+        run: RunRequest,
+    ) -> CycleOutput:
+        from ..data.atcf import storm_basin
+        from ..data.gdas_cache import GDAS_ARCHIVE_START
+        from ..training.real_inference_cycle import build_real_deterministic_fn
+        from ..training.real_inference_ensemble import build_real_ensemble_fn
+        from ..training.real_inference_live import fetch_live_nwp
+
+        started_at = datetime.now(UTC)
+        self.refresh_registry_if_stale()
+        self._ensure_drift_restored()
+        storm_id = storm.storm_id
+        oracle = LatencyOracle(use_max_latency=worst_case)
+        fix, fix_source = initial_fix(
+            storm.track, target, lat=lat, lon=lon, wind_kt=wind_kt, withhold_vitals=worst_case,
         )
+        # The plan's `vitals_estimated` comes from a latency model; whether
+        # this cycle's vitals were really estimated is known here (#214).
+        plan = replace(
+            plan_cycle(target, oracle),
+            vitals_estimated=fix.quality is TrackQuality.ESTIMATED,
+        )
+        extra_flags = []
+        if storm.track.quality is TrackQuality.FINAL:
+            # An archive storm: its fixes are the final best track -- the
+            # training *labels* -- standing in for vitals that were never
+            # kept. Fine for a demonstration, never an as-issued forecast.
+            extra_flags.append("input:final_best_track")
+        if fix_source == "persisted":
+            extra_flags.append("vitals_source:persisted")
+        basin = storm_basin(storm_id)
+        trained_basin = basin in self.registry.trained_basins()
+        if not trained_basin:
+            extra_flags.append(f"basin_untrained:{basin}")
+
+        # The gridded fields, fetched once, before anything runs (#215): the
+        # NWP cycle they come from -- t-6, or t-12 if that's missing -- is
+        # what the plan, the payload's `nwp_cycle_lag_hours` and the
+        # `nwp_stale` flag should say, instead of the latency model's guess.
+        nwp_fields, nwp = fetch_live_nwp(storm.track, fix, self._cache_dir)
+        if nwp is not None:
+            plan = replace(plan, inputs=replace(plan.inputs, nwp=nwp))
+        elif target >= GDAS_ARCHIVE_START:
+            extra_flags.append("nwp_unavailable")
+        fields: dict[str, object] = {"fields": nwp_fields}
+
+        def live_fields(track_, current_, cache_dir_):
+            return nwp_fields
 
         def deterministic(plan_, fix_):
             try:
                 real_deterministic = build_real_deterministic_fn(
                     storm.track, self.registry, self._checkpoint_store, self._cache_dir,
+                    fields_fetcher=live_fields,
                 )
                 return real_deterministic(plan_, fix_)
             except Exception as exc:  # noqa: BLE001 - no real model contributing must degrade
@@ -506,6 +706,34 @@ class RealState:
         output = run_cycle(
             plan, fix, deterministic, ensemble,
             coastline=coastline, requested_members=members,
+            extra_flags=tuple(extra_flags),
+            # The real time it finished, so `issued_at`/`on_time` are what
+            # happened rather than the plan's target (#214).
+            now=datetime.now(UTC),
+        )
+        if output.deterministic.input_skew:
+            output = replace(output, flags=(
+                *output.flags, "input_skew:" + ",".join(sorted(output.deterministic.input_skew)),
+            ))
+        if output.deterministic.fusion == "synthetic":
+            # No real model ran: say so on the cycle, not only in a debug field.
+            output = replace(
+                output,
+                flags=(*output.flags, "deterministic_fallback:synthetic"),
+                products=replace(output.products, degraded=True),
+            )
+        output = replace(
+            output,
+            run=run.info(),
+            provenance={
+                "fix_source": fix_source,
+                "fix": fix,
+                "basin": basin,
+                "trained_basin": trained_basin,
+                "started_at": started_at,
+                "nwp": nwp,
+                **provenance.summary(),
+            },
         )
         with self._lock:
             storm.cycles[output.label] = output
@@ -521,8 +749,24 @@ class RealState:
         # storage, not to any dict this class guards.
         self._record_skew_sample(storm, fix, output)
         self._persist_cycle(storm_id, output)
+        self._persist_inputs(storm, output, fields.get("fields"))
         self._persist_drift_live()
         return output
+
+    def _persist_inputs(self, storm: RealStormState, output: CycleOutput, fields) -> None:
+        """Best-effort durable record of what this cycle ran on (#214,
+        `api.cycle_store.save_cycle_inputs`): written for every run, real
+        model or synthetic fallback, scheduled or manual."""
+        from . import convert
+        from .cycle_store import save_cycle_inputs
+
+        try:
+            save_cycle_inputs(
+                self._checkpoint_store, convert.cycle_result_out(storm.storm_id, output),
+                storm.track, fields,
+            )
+        except Exception:  # noqa: BLE001 - best-effort, never fail a cycle over this
+            pass
 
     def _persist_cycle(self, storm_id: str, output: CycleOutput) -> None:
         """Best-effort durable copy of the served result (#175), outside the

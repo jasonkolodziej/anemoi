@@ -25,6 +25,7 @@ from enum import Enum
 
 import numpy as np
 
+from .. import config
 from ..geo import offset_position
 from ..time_utils import require_synoptic
 
@@ -152,9 +153,16 @@ class Track:
 # 10 kt for tropical storms and 12 kt for category 1-2, with pressure uncertainty
 # from 7 to 12 mb by intensity -- roughly double the scope's figures, and more
 # for pressure. See WorkingTrackNoise.from_literature().
-DEFAULT_POSITION_RMS_NM = 15.0
-DEFAULT_INTENSITY_RMS_KT = 5.0
-DEFAULT_PRESSURE_RMS_MB = 3.0
+DEFAULT_POSITION_RMS_NM: float = config.get(
+    "curriculum", "working_track_noise.position_rms_nm", float
+)
+DEFAULT_INTENSITY_RMS_KT: float = config.get(
+    "curriculum", "working_track_noise.intensity_rms_kt", float
+)
+DEFAULT_PRESSURE_RMS_MB: float = config.get(
+    "curriculum", "working_track_noise.pressure_rms_mb", float
+)
+DEFAULT_QUANTISE: bool = config.get("curriculum", "working_track_noise.quantise", bool)
 
 # Torn and Snyder (2012), satellite-only regime. Their estimates are
 # intensity-dependent -- position uncertainty falls with intensity while
@@ -174,7 +182,7 @@ class WorkingTrackNoise:
     intensity_rms_kt: float = DEFAULT_INTENSITY_RMS_KT
     pressure_rms_mb: float = DEFAULT_PRESSURE_RMS_MB
     #: Working fixes are quantised: positions to 0.1 deg, winds to 5 kt.
-    quantise: bool = True
+    quantise: bool = DEFAULT_QUANTISE
 
     def __post_init__(self) -> None:
         for name in ("position_rms_nm", "intensity_rms_kt", "pressure_rms_mb"):

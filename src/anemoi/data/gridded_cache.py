@@ -100,6 +100,8 @@ def save_cached_fields(path: Path, fields: GriddedFields, task: FetchTask) -> No
         lat=task.lat,
         lon=task.lon,
         flavor=fields.flavor.value,
+        nwp_lead_hours=fields.nwp_lead_hours,
+        source=fields.source,
         **arrays,
     )
 
@@ -109,6 +111,9 @@ def load_cached_fields(path: Path | str) -> GriddedFields:
         return GriddedFields(
             valid_time=datetime.fromisoformat(str(data["valid_time"])),
             flavor=Flavor(str(data["flavor"])),
+            # Absent from caches written before #215: those are analyses.
+            nwp_lead_hours=int(data["nwp_lead_hours"]) if "nwp_lead_hours" in data else 0,
+            source=str(data["source"]) if "source" in data else "",
             **{name: data[name] for name in _ARRAY_FIELDS},
         )
 

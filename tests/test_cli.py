@@ -426,8 +426,10 @@ def test_retrain_check_computes_real_data_volume_from_hurdat2(tmp_path, monkeypa
     old_version.created_at = "2020-01-01T00:00:00+00:00"
     registry._save()  # noqa: SLF001 - test-only, to backdate created_at realistically
 
-    # 501 distinct, real, strictly-increasing synoptic times (6h apart).
-    base = datetime(2020, 1, 2, tzinfo=UTC)
+    # 501 distinct, real, strictly-increasing synoptic times (6h apart), in
+    # a season newer than the version trained on (#216: no tag = the pinned
+    # 2023 file).
+    base = datetime(2024, 6, 1, tzinfo=UTC)
     fixes = tuple(
         Fix(
             storm_id="AL99", valid_time=base + timedelta(hours=6 * (i + 1)),
@@ -464,7 +466,7 @@ def test_retrain_check_dispatches_the_real_schedule_when_a_trigger_fires(
     old_version.created_at = "2020-01-01T00:00:00+00:00"
     registry._save()  # noqa: SLF001
 
-    base = datetime(2020, 1, 2, tzinfo=UTC)
+    base = datetime(2024, 6, 1, tzinfo=UTC)
     fixes = tuple(
         Fix(
             storm_id="AL99", valid_time=base + timedelta(hours=6 * (i + 1)),
@@ -503,8 +505,37 @@ def test_retrain_check_dispatches_the_real_schedule_when_a_trigger_fires(
     args = _retrain_check_args(tmp_path, now="2026-09-15T00:00:00+00:00", dry_run=False)
     assert cli.cmd_retrain_check(args) == 0
     assert captured["schedule_models"] == ["cnn", "gnn", "lstm", "pinn", "transformer"]
+    # Tagged with what fired (#216), via RetrainJob.trigger_tag.
+    assert captured["runner_kwargs"]["trigger"].value == "data_volume"
     out = capsys.readouterr().out
     assert "succeeded:" in out
+
+
+def test_data_volume_counts_seasons_newer_than_any_model_trained_on(tmp_path):
+    """#216: it counted fixes valid after the newest registration -- but a
+    season's final labels arrive the next spring, all dated last year, so a
+    newly published season counted 0. Now: fixes in seasons newer than the
+    `hurdat2_last_season` tag (no tag = the pinned 2023 file)."""
+    def track(storm_id, season, n):
+        return Track(storm_id=storm_id, fixes=tuple(
+            Fix(storm_id=storm_id,
+                valid_time=datetime(season, 8, 1, tzinfo=UTC) + timedelta(hours=6 * i),
+                lat=20.0, lon=-60.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+                quality=TrackQuality.FINAL)
+            for i in range(n)
+        ))
+
+    tracks = [track("AL012023", 2023, 10), track("AL012024", 2024, 7), track("AL012025", 2025, 5)]
+    registry = ModelRegistry(tmp_path / "registry")
+    assert cli.count_untrained_fixes(tracks, registry) == 0  # nothing trained yet
+
+    registry.register("lstm", run_id="a", input_flavor=Flavor.GDAS_FINETUNE,
+                      metrics={"track_error_48h_nm": 100.0})
+    assert cli.count_untrained_fixes(tracks, registry) == 12  # 2024 + 2025
+
+    registry.register("cnn", run_id="b", input_flavor=Flavor.GDAS_FINETUNE,
+                      metrics={"track_error_48h_nm": 100.0}, tags={"hurdat2_last_season": "2024"})
+    assert cli.count_untrained_fixes(tracks, registry) == 5  # only 2025 is new
 
 
 def test_retrain_check_degrades_to_an_empty_season_when_the_api_is_unreachable(

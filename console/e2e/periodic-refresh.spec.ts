@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { freeCycleLabel, signIn } from './helpers/storm';
 
 // Real, found gap: both the homepage and the storm detail page fetched
 // their data exactly once, in onMount, with no refresh -- a tab left open
@@ -56,6 +57,7 @@ test('storm detail poll does not fire while a cycle run is in flight', async ({ 
 	// A poll landing mid-run could clobber the cycle handleRunCycle just
 	// produced with a slightly different snapshot -- `load()` must skip
 	// itself entirely while `running` is true, not just risk a race.
+	await signIn(page);
 	await page.goto('/');
 	await page.locator('a[href^="/storms/"]').first().click();
 	await page.waitForSelector('#cycle-input');
@@ -67,6 +69,7 @@ test('storm detail poll does not fire while a cycle run is in flight', async ({ 
 		await route.continue();
 	});
 
+	await page.locator('#cycle-input').fill(await freeCycleLabel(page));
 	const runButton = page.getByRole('button', { name: /Run cycle/i });
 	await runButton.click();
 	await expect(page.getByRole('button', { name: 'Running…' })).toBeVisible();
@@ -115,21 +118,25 @@ test('a background poll leaves the cycle the user selected in place', async ({ p
 	// #186: the poll always re-fetched `[...cycles].sort().at(-1)`, so
 	// picking an older cycle was undone within 60s -- usually landing on a
 	// newer climatology-fallback cycle the user never asked to see.
+	await signIn(page);
 	await page.goto('/');
 	await page.locator('a[href^="/storms/"]').first().click();
 	await page.waitForSelector('#cycle-input');
 
-	// Two real stored cycles, so "older" and "newest" actually differ.
+	// Two real stored cycles, so "older" and "newest" actually differ --
+	// labels this storm doesn't have yet, or the form won't run them.
+	const first = await freeCycleLabel(page);
+	const [olderLabel, newerLabel] = [first, await freeCycleLabel(page, [first])].sort();
 	const runButton = page.getByRole('button', { name: /Run cycle/i });
-	await page.locator('#cycle-input').fill('20260806_06Z');
+	await page.locator('#cycle-input').fill(olderLabel);
 	await runButton.click();
 	await expect(page.getByRole('button', { name: 'Running…' })).toBeHidden();
-	await page.locator('#cycle-input').fill('20260806_12Z');
+	await page.locator('#cycle-input').fill(newerLabel);
 	await runButton.click();
 	await expect(page.getByRole('button', { name: 'Running…' })).toBeHidden();
 
 	const pastCycles = page.locator('section', { hasText: 'Past cycles' }).last();
-	const older = page.getByRole('button', { name: '20260806_06Z', exact: true });
+	const older = page.getByRole('button', { name: olderLabel, exact: true });
 	await older.click();
 	await expect(older).toHaveAttribute('aria-current', 'true');
 	await expect(page.getByText(/Viewing an older cycle/)).toBeVisible();
@@ -138,7 +145,7 @@ test('a background poll leaves the cycle the user selected in place', async ({ p
 	await page.clock.fastForward('02:01'); // two poll intervals
 	await page.waitForTimeout(500);
 
-	// Still the older cycle, not yanked forward to 20260806_12Z.
+	// Still the older cycle, not yanked forward to the newer one.
 	await expect(older).toHaveAttribute('aria-current', 'true');
 
 	// And "Back to latest" is a real way out, not just a label. The list
@@ -159,6 +166,7 @@ test('a failed run does not pin the view to a cycle that was never created', asy
 	// POST was awaited, so a failed run pinned the view to a label with no
 	// cycle behind it -- and every 60s poll then 404'd on that label and
 	// overwrote `error`, once a minute, forever.
+	await signIn(page);
 	await page.goto('/');
 	await page.locator('a[href^="/storms/"]').first().click();
 	await page.waitForSelector('#cycle-input');
@@ -168,7 +176,7 @@ test('a failed run does not pin the view to a cycle that was never created', asy
 			? route.fulfill({ status: 500, body: '{"detail":"boom"}' })
 			: route.continue(),
 	);
-	await page.locator('#cycle-input').fill('20260806_18Z');
+	await page.locator('#cycle-input').fill(await freeCycleLabel(page));
 	await page.getByRole('button', { name: /Run cycle/i }).click();
 	await expect(page.getByRole('button', { name: 'Running…' })).toBeHidden();
 

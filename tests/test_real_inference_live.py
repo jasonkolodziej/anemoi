@@ -9,7 +9,7 @@ import pytest
 
 from anemoi.data.besttrack import Fix, Track, TrackQuality
 from anemoi.data.features import GriddedFields
-from anemoi.data.gridded_cache import FetchTask, cache_path, save_cached_fields
+from anemoi.data.gridded_cache import FetchTask, save_cached_fields
 from anemoi.data.sources import Flavor
 from anemoi.data.storm_relative import storm_relative_sequence
 from anemoi.training.capacity_ablation import SEQUENCE_LENGTH
@@ -20,6 +20,7 @@ from anemoi.training.real_inference_live import (
     build_live_pinn_x,
     build_live_transformer_x,
     gdas_likely_unpublished,
+    live_cache_path,
 )
 
 torch_installed = pytest.importorskip("torch", reason="needs the torch extra")
@@ -54,7 +55,11 @@ def make_fields(valid_time: datetime, shape=(41, 41)) -> GriddedFields:
 
 def cache_current_fix(cache_dir, track: Track, fix: Fix, shape=(41, 41)) -> None:
     task = FetchTask(storm_id=track.storm_id, valid_time=fix.valid_time, lat=fix.lat, lon=fix.lon)
-    save_cached_fields(cache_path(cache_dir, task), make_fields(fix.valid_time, shape), task)
+    save_cached_fields(
+        live_cache_path(cache_dir, track.storm_id, fix, 6),
+        make_fields(fix.valid_time, shape),
+        task,
+    )
 
 
 # --- LSTM (no gridded fields needed) -----------------------------------------
@@ -218,7 +223,7 @@ def test_build_live_pinn_x_is_none_when_the_storm_is_entirely_over_land(tmp_path
         t700=np.full((41, 41), 281.0), mslp=np.full((41, 41), 1012.0),
         sst=np.full((41, 41), np.nan), ohc=np.full((41, 41), 60.0),
     )
-    save_cached_fields(cache_path(tmp_path, task), land_fields, task)
+    save_cached_fields(live_cache_path(tmp_path, track.storm_id, current, 6), land_fields, task)
 
     assert build_live_pinn_x(track, current, candidate_model, tmp_path) is None
 
@@ -239,19 +244,17 @@ def test_current_fields_fetches_on_demand_and_caches_the_result(tmp_path, monkey
     calls: list[tuple] = []
 
     def fake_fetch_one(valid_time, lat, lon, **kwargs):
-        calls.append((valid_time, lat, lon))
+        calls.append((valid_time, lat, lon, kwargs.get("lead_hours")))
         return fetched
 
     monkeypatch.setattr("anemoi.data.gdas_cache.fetch_one", fake_fetch_one)
 
     result = _current_fields(track, current, tmp_path)
 
-    assert calls == [(current.valid_time, current.lat, current.lon)]
+    assert calls == [(current.valid_time, current.lat, current.lon, 6)]  # the t-6 f006 (#215)
     assert result is fetched
-    task = FetchTask(
-        storm_id=track.storm_id, valid_time=current.valid_time, lat=current.lat, lon=current.lon,
-    )
-    assert cache_path(tmp_path, task).exists()  # saved for next time, not re-fetched
+    # Saved for next time, keyed by position and forecast hour too.
+    assert live_cache_path(tmp_path, track.storm_id, current, 6).exists()
 
     # A second call must hit the now-warm cache, not fetch again.
     calls.clear()
@@ -285,7 +288,11 @@ def test_gdas_likely_unpublished_true_within_real_typical_latency():
     only 1h before `now` is still inside that window."""
     valid_time = datetime(2026, 9, 22, 6, 0, tzinfo=UTC)
     now = valid_time + timedelta(hours=1)
-    assert gdas_likely_unpublished(valid_time, now=now) is True
+    assert gdas_likely_unpublished(valid_time, now=now, lead_hours=0) is True
+    # The t-6 cycle's f006 -- what live cycles read since #215 -- has long
+    # landed by the time a cycle runs (~t-2:30 vs t+1:30).
+    assert gdas_likely_unpublished(valid_time, now=valid_time + timedelta(minutes=90)) is False
+    assert gdas_likely_unpublished(valid_time, now=valid_time - timedelta(hours=4)) is True
 
 
 def test_gdas_likely_unpublished_false_once_real_typical_latency_has_passed():
