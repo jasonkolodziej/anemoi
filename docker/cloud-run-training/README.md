@@ -87,6 +87,7 @@ The script does the following:
    - read a failed build's log (`logging.viewer`);
    - upload the build's source (`storage.admin` on `gs://anemoi-training_cloudbuild` only);
    - run the build and the job as the default compute account (`iam.serviceAccountUser` on that account only);
+   - read the image repository (`artifactregistry.reader` on the `anemoi` repository only). Cloud Run checks that whoever updates a job can pull the image it's pointed at;
    - update `anemoi-train-schedule` (`run.developer` on that job only).
 5. Sets the two repository variables below.
 

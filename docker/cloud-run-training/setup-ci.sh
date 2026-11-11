@@ -74,6 +74,10 @@ retry gcloud storage buckets add-iam-policy-binding "gs://${PROJECT_ID}_cloudbui
 # Run the build, and the job, as the runtime account.
 retry gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" --project "${PROJECT_ID}" \
 	--member "serviceAccount:${CI_SA}" --role roles/iam.serviceAccountUser
+# Read the image repository: Cloud Run checks whoever updates a job can
+# pull the image it's pointed at.
+retry gcloud artifacts repositories add-iam-policy-binding anemoi --project "${PROJECT_ID}" --location "${REGION}" \
+	--member "serviceAccount:${CI_SA}" --role roles/artifactregistry.reader
 # Point this one job at the new image.
 retry gcloud run jobs add-iam-policy-binding "${JOB}" --project "${PROJECT_ID}" --region "${REGION}" \
 	--member "serviceAccount:${CI_SA}" --role roles/run.developer
