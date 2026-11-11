@@ -93,22 +93,12 @@ jobs:
     name: "Build training image${{ github.event_name == 'pull_request' && ' (check only)' || '' }}"
     runs-on: ubuntu-latest
     # A cold CUDA build (no cache: first run, a uv.lock change, every PR
-    # run) is the slow case.
+    # run) is the slow case: ~6 min on ubuntu-latest, which has room for it
+    # (88 GB free) without clearing anything.
     timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
-
-      - name: Free disk space
-        # The CUDA dependencies are several GB, held by the builder and again
-        # by the image loaded for the smoke test. The runner's preinstalled
-        # SDKs this workflow never uses free ~30 GB.
-        run: |
-          df -h / | tail -1
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
-            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/powershell
-          sudo docker image prune --all --force >/dev/null
-          df -h / | tail -1
 
       - name: Check the repository variables are set
         if: env.PUBLISH == 'true'
@@ -201,11 +191,14 @@ jobs:
                       if p["name"] == "torch" and p.get("source", {}).get("registry") == "https://pypi.org/simple"}
           assert len(versions) == 1, versions
           print(versions.pop())')
+          # PyPI's Linux wheel reports a local suffix uv.lock doesn't record
+          # (2.14.0+cu130); the CPU build would be +cpu.
           docker run --rm --entrypoint python -e EXPECTED="$expected" anemoi-train:smoke -c '
           import os, torch
           print("torch", torch.__version__, "| CUDA", torch.version.cuda, "| expected", os.environ["EXPECTED"])
-          assert torch.__version__ == os.environ["EXPECTED"], "not the locked torch"
-          assert torch.version.cuda, "torch has no CUDA build"'
+          base, _, local = torch.__version__.partition("+")
+          assert base == os.environ["EXPECTED"], "not the locked torch"
+          assert torch.version.cuda and local != "cpu", "torch has no CUDA build"'
 
       - name: Push image
         id: push
