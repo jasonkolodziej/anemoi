@@ -296,6 +296,20 @@ def test_a_basin_is_in_distribution_once_every_served_model_is_verified_in_it(
     assert listed["EP172026"] is True
 
 
+def test_the_storm_routes_refresh_the_registry_before_reading_coverage(client, monkeypatch):
+    """A promotion or rollback made elsewhere (the training job, another
+    replica) must reach `trained_basin` within the registry's refresh
+    interval, as it already does on the registry routes."""
+    from anemoi.api import real_state
+
+    state = real_state.get_real_state()
+    calls: list[str] = []
+    monkeypatch.setattr(state, "refresh_registry_if_stale", lambda: calls.append("refresh"))
+    assert client.get("/v1/storms").status_code == 200
+    assert client.get("/v1/storms/AL012026").status_code == 200
+    assert calls == ["refresh", "refresh"]
+
+
 def test_debug_last_deterministic_error_route_needs_opt_in(tmp_path, hurdat2_file, monkeypatch):
     """The route must not exist at all (404, not a real endpoint returning
     empty data) unless ANEMOI_API_DEBUG is set -- real failure detail is

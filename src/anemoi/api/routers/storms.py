@@ -47,9 +47,18 @@ def _storm_summary(storm, verified_basins: frozenset[str]) -> schemas.StormSumma
     )
 
 
+def _served_basins(state) -> frozenset[str]:
+    """`ModelRegistry.verified_basins` -- the basins a forecast is in
+    distribution for -- after the same refresh the registry routes do: a
+    promotion or rollback made elsewhere shows up here within the
+    registry's refresh interval, not only after a restart."""
+    state.refresh_registry_if_stale()
+    return state.registry.verified_basins()
+
+
 @router.get("", response_model=list[schemas.StormSummary])
 def list_storms(state=Depends(state_dependency)) -> list[schemas.StormSummary]:
-    verified = state.registry.verified_basins()
+    verified = _served_basins(state)
     return [_storm_summary(s, verified) for s in state.list_storms()]
 
 
@@ -59,7 +68,7 @@ def get_storm(storm_id: str, state=Depends(state_dependency)) -> schemas.StormDe
         storm = state.get_storm(storm_id)
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
-    summary = _storm_summary(storm, state.registry.verified_basins())
+    summary = _storm_summary(storm, _served_basins(state))
     return schemas.StormDetail(
         **summary.model_dump(),
         history=[

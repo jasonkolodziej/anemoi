@@ -753,9 +753,9 @@ The API job in `deploy.yml` runs it, since the cycle's product maths is what the
 
 **Fix.**
 
-- Every training run records the basins of the storms it trained on as the registry tag `trained_basins` (`"AL"`, `"AL,CP,EP"`), alongside `hurdat2_last_season`.
+- A version's registry tag `trained_basins` (`"AL"`, `"AL,CP,EP"`) says which basins it trained on. It must come from the examples training consumed -- the archive a run is given also holds held-out seasons and storms a model may skip -- so the archive's provenance (`training_data_tags`) never sets it; phase 1's runners do, from their sample counts.
 - `ModelRegistry.trained_basins()` is the basins **every** Group 1 champion trained on, since a cycle can combine any of them. A champion without the tag counts as Atlantic-only (`LEGACY_TRAINED_BASINS`), which every version so far is.
-- The storm list, the storm page and the cycle (`basin_untrained:<basin>`, `provenance.trained_basin`) read it. The constant is gone.
+- The storm list, the storm page and the cycle (`basin_untrained:<basin>`, `provenance.trained_basin`) read it; the storm routes refresh the registry first, as the registry routes do, so a promotion or rollback made elsewhere shows within its refresh interval. The constant is gone.
 
 **Plan.** `docs/multi_basin.md` proposes how the other basins come in: one model per architecture rather than per basin, Southern Hemisphere storms mirrored into the Northern, the basin as an input, 1-minute winds only (JTWC's columns in IBTrACS outside NHC's basins), and per-basin promotion gates with the Atlantic unable to regress. Phases: Eastern/Central Pacific, then Western Pacific and North Indian, then the Southern Hemisphere.
 

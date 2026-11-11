@@ -294,16 +294,18 @@ def test_run_tags_record_the_commit_split_and_trigger(monkeypatch):
 
     data = training_data_tags(None, [_track("AL012024", 2024)])
     assert data["hurdat2_last_season"] == "2024" and len(data["config_sha256"]) == 64
-    assert data["trained_basins"] == "AL"
+    assert "trained_basins" not in data
 
 
-def test_a_run_records_every_basin_it_trained_on():
-    """What `ModelRegistry.trained_basins` reads to say which storms a
-    forecast is in distribution for (docs/multi_basin.md)."""
+def test_the_archive_a_run_was_given_is_not_what_it_trained_on():
+    """Basins only in held-out seasons, or whose samples were all skipped,
+    are in the archive but weren't trained on. Saying a version trained on
+    them would clear their out-of-distribution warning, so the archive's
+    provenance never sets `trained_basins` (docs/multi_basin.md)."""
     from anemoi.tracking.experiment_tracking import training_data_tags
 
     tracks = [_track("EP052023", 2023), _track("AL012024", 2024), _track("CP012023", 2023)]
-    assert training_data_tags(None, tracks)["trained_basins"] == "AL,CP,EP"
+    assert "trained_basins" not in training_data_tags(None, tracks)
 
 
 # ---- wiring -----------------------------------------------------------------------
