@@ -228,6 +228,36 @@ def test_pacific_storm_is_flagged_as_not_a_trained_basin(client, monkeypatch):
     assert body["trained_basin"] is False
 
 
+def test_a_basin_is_trained_once_every_served_model_trained_on_it(client, monkeypatch):
+    """`trained_basin` follows what the champions trained on (their
+    `trained_basins` tag), not a hard-coded list: Eastern Pacific training
+    turns the badge off without a code change (docs/multi_basin.md)."""
+    from anemoi.api import real_state
+    from anemoi.data.besttrack import Fix, Track, TrackQuality
+    from anemoi.data.sources import Flavor
+    from anemoi.tracking.registry import GROUP1_MODELS, Stage
+
+    fix = Fix(
+        storm_id="EP172026", valid_time=datetime(2026, 9, 22, 0, 0, tzinfo=UTC),
+        lat=15.0, lon=-100.0, max_wind_kt=60.0, min_pressure_mb=990.0,
+        quality=TrackQuality.WORKING,
+    )
+    monkeypatch.setattr(
+        "anemoi.data.live_atcf.fetch_live_tracks",
+        lambda: [Track(storm_id="EP172026", fixes=(fix,))],
+    )
+    assert client.get("/v1/storms/EP172026").json()["trained_basin"] is False
+
+    registry = real_state.get_real_state().registry
+    for name in GROUP1_MODELS:
+        v = registry.register(name, run_id=f"run-{name}", input_flavor=Flavor.GDAS_FINETUNE,
+                              metrics={}, tags={"trained_basins": "AL,EP"})
+        registry.transition(name, v.version, Stage.PRODUCTION)
+    assert client.get("/v1/storms/EP172026").json()["trained_basin"] is True
+    listed = {s["storm_id"]: s["trained_basin"] for s in client.get("/v1/storms").json()}
+    assert listed["EP172026"] is True
+
+
 def test_debug_last_deterministic_error_route_needs_opt_in(tmp_path, hurdat2_file, monkeypatch):
     """The route must not exist at all (404, not a real endpoint returning
     empty data) unless ANEMOI_API_DEBUG is set -- real failure detail is

@@ -48,25 +48,21 @@ TCVITALS_BASIN_MAP = {
     "S": "SH",  # Southern Hemisphere
 }
 
-#: Real basins every trained model has actually seen. `docs/train_infrastructure
-#: .md` curls only `hurdat2-atl-...` for both Stage A (ERA5 pretraining) and
-#: Stage B (GDAS fine-tuning) -- confirmed by grep, zero reference anywhere in
-#: this codebase to NHC's separate `hurdat2-nepac-...` archive. A storm from
-#: any other basin is real data (the live feed and HURDAT2 both cover more
-#: than the Atlantic), but genuinely out-of-distribution inference: e.g. an
-#: Atlantic-trained model learns "coastal storms curve toward increasing
-#: longitude," true in the Atlantic and backwards in the Eastern Pacific.
-TRAINED_BASINS = frozenset({"AL"})
-
-
 def storm_basin(storm_id: str) -> str:
     """The two-letter ATCF basin code a storm_id was minted with.
 
     Every storm_id in this codebase is built as ``basin + cyclone_number +
     year`` (see the parsers below), so this is a direct slice, not a lookup
     -- basin is already encoded in the id.
+
+    Which basins the served models trained on is the registry's to say
+    (`tracking.registry.ModelRegistry.trained_basins`), not a constant: a
+    storm from any other basin is real data, but out of distribution -- an
+    Atlantic-trained model learns "coastal storms curve toward increasing
+    longitude", true in the Atlantic and backwards in the Eastern Pacific.
     """
     return storm_id[:2]
+
 
 #: 1 m/s = this many knots. TC-Vitals reports wind in whole m/s; every other
 #: source in this codebase (ATCF, HURDAT2) uses knots.

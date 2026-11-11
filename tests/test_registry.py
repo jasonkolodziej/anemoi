@@ -687,3 +687,51 @@ def test_pull_is_a_noop_when_the_key_does_not_exist_remotely_yet(tmp_path):
 
     reg = ModelRegistry(tmp_path, checkpoint_store=EmptyStore())
     assert reg.versions("lstm") == []
+
+
+# ---- trained basins (docs/multi_basin.md) ----------------------------------------
+
+
+def _champions_tagged(reg, tags_by_model):
+    for name in GROUP1_MODELS:
+        tags = tags_by_model.get(name)
+        v = reg.register(name, run_id=f"run-{name}", input_flavor=Flavor.GDAS_FINETUNE,
+                         metrics=METRICS, tags={} if tags is None else {"trained_basins": tags})
+        reg.transition(name, v.version, Stage.PRODUCTION)
+
+
+def test_trained_basins_without_champions_is_the_atlantic(tmp_path):
+    assert ModelRegistry(tmp_path).trained_basins() == frozenset({"AL"})
+
+
+def test_a_champion_without_the_tag_counts_as_atlantic_only(tmp_path):
+    """Every version registered before the tag trained on the Atlantic
+    HURDAT2 file alone."""
+    reg = ModelRegistry(tmp_path)
+    _champions_tagged(reg, {})
+    assert reg.trained_basins() == frozenset({"AL"})
+
+
+def test_trained_basins_come_from_the_champions_tags(tmp_path):
+    reg = ModelRegistry(tmp_path)
+    _champions_tagged(reg, {name: "AL,CP,EP" for name in GROUP1_MODELS})
+    assert reg.trained_basins() == frozenset({"AL", "CP", "EP"})
+
+
+def test_a_basin_counts_only_when_every_champion_trained_on_it(tmp_path):
+    """A cycle can combine any Group 1 model, so one Atlantic-only champion
+    keeps the Eastern Pacific out of distribution."""
+    reg = ModelRegistry(tmp_path)
+    tags = {name: "AL,EP" for name in GROUP1_MODELS}
+    tags[GROUP1_MODELS[0]] = "AL"
+    _champions_tagged(reg, tags)
+    assert reg.trained_basins() == frozenset({"AL"})
+
+
+def test_trained_basins_follow_the_champion_not_the_latest_version(tmp_path):
+    reg = ModelRegistry(tmp_path)
+    _champions_tagged(reg, {name: "AL,EP" for name in GROUP1_MODELS})
+    # A newer, Atlantic-only candidate that hasn't been promoted changes nothing.
+    reg.register(GROUP1_MODELS[0], run_id="run-new", input_flavor=Flavor.GDAS_FINETUNE,
+                 metrics=METRICS, tags={"trained_basins": "AL"})
+    assert reg.trained_basins() == frozenset({"AL", "EP"})
