@@ -1,0 +1,122 @@
+name: Build training image
+
+# Builds the Cloud Run training image on Cloud Build when its inputs change
+# on main, then points the anemoi-train-schedule job at it, so the next
+# training execution runs what is on main.
+#
+# The build is docker/cloud-run-training/cloudbuild.yaml, unchanged: the same
+# config a manual `gcloud builds submit` runs (build-info, build, smoke test,
+# push). It runs on Cloud Build, not on this runner: the CUDA torch image is
+# too large for a hosted runner's disk.
+#
+# Auth is Workload Identity Federation, no stored key. GCP trusts only this
+# repository's main branch (the provider's attribute condition), as the
+# anemoi-ci-build service account. One-time setup:
+# docker/cloud-run-training/README.md, "Build on every push to main".
+#
+# Repository variables (Settings > Secrets and variables > Actions >
+# Variables), not secrets -- neither value grants anything on its own:
+#   GCP_WIF_PROVIDER      projects/<number>/locations/global/workloadIdentityPools/github/providers/anemoi-repo
+#   GCP_CI_SERVICE_ACCOUNT  anemoi-ci-build@anemoi-training.iam.gserviceaccount.com
+#
+# Updating the job doesn't touch an execution already running: it keeps the
+# image it started with.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # What the training image is built from (.gcloudignore's allowlist).
+      - src/**
+      - configs/**
+      - pyproject.toml
+      - uv.lock
+      - docker/multistage.Dockerfile
+      - docker/multistage.Dockerfile.dockerignore
+      - docker/cloud-run-training/**
+      - .gcloudignore
+      - .github/scripts/write-build-info.sh
+      - .github/scripts/smoke-test-image.sh
+      - .github/workflows/build-training-image.yml
+  workflow_dispatch:
+    inputs:
+      update_job:
+        description: Point anemoi-train-schedule at the new image
+        type: boolean
+        default: true
+
+# One build at a time, in push order: a newer push waits rather than racing
+# the older one to update the job. GitHub keeps only the newest waiting run.
+concurrency:
+  group: build-training-image
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # Workload Identity Federation
+
+env:
+  PROJECT_ID: anemoi-training
+  REGION: us-central1
+  IMAGE: us-central1-docker.pkg.dev/anemoi-training/anemoi/anemoi-train
+  JOB: anemoi-train-schedule
+
+jobs:
+  build:
+    name: Cloud Build -> ${{ github.sha }}
+    runs-on: ubuntu-latest
+    # cloudbuild.yaml's own timeout is 3600s; this leaves room for queueing.
+    timeout-minutes: 75
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Submit the build
+        id: submit
+        run: |
+          tag="${GITHUB_SHA::12}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          # --async: the builds log to Cloud Build's GCS bucket, which gcloud
+          # can only stream with project-wide Viewer. Wait on the status
+          # instead, and print the log from Cloud Logging if it fails.
+          id=$(gcloud builds submit --project "$PROJECT_ID" --async \
+            --config docker/cloud-run-training/cloudbuild.yaml \
+            --substitutions "_IMAGE=$IMAGE,_TAG=$tag" \
+            --format 'value(id)' .)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "Cloud Build $id: https://console.cloud.google.com/cloud-build/builds/$id?project=$PROJECT_ID" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Wait for the build
+        env:
+          BUILD_ID: ${{ steps.submit.outputs.id }}
+        run: |
+          while :; do
+            status=$(gcloud builds describe "$BUILD_ID" --project "$PROJECT_ID" --format 'value(status)')
+            case "$status" in
+              QUEUED|PENDING|WORKING) sleep 30 ;;
+              SUCCESS) echo "Built $IMAGE:${{ steps.submit.outputs.tag }}"; exit 0 ;;
+              *)
+                echo "::error::Cloud Build $BUILD_ID ended $status"
+                gcloud logging read --project "$PROJECT_ID" --order asc --limit 400 \
+                  --format 'value(textPayload)' \
+                  "resource.type=\"build\" AND resource.labels.build_id=\"$BUILD_ID\"" | tail -n 120
+                exit 1 ;;
+            esac
+          done
+
+      - name: Point the job at the new image
+        if: github.event_name == 'push' || inputs.update_job
+        run: |
+          gcloud run jobs update "$JOB" --project "$PROJECT_ID" --region "$REGION" \
+            --image "$IMAGE:${{ steps.submit.outputs.tag }}"
+          echo "$JOB now runs \`$IMAGE:${{ steps.submit.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"

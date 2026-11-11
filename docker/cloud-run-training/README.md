@@ -67,6 +67,59 @@ gcloud builds submit \
   .
 ```
 
+## Build on every push to main
+
+`.github/workflows/build-training-image.yml` runs the build above on Cloud Build whenever the image's inputs change on `main`, then points `anemoi-train-schedule` at the new tag. It can also be run by hand from the Actions tab. It signs in with Workload Identity Federation: GCP trusts only this repository's `main` branch, as the `anemoi-ci-build` service account, and no key is stored anywhere.
+
+One-time setup, run by a project owner:
+
+```bash
+PROJECT_ID=anemoi-training
+PROJECT_NUMBER=$(gcloud projects describe ${PROJECT_ID} --format 'value(projectNumber)')
+CI_SA=anemoi-ci-build@${PROJECT_ID}.iam.gserviceaccount.com
+# Cloud Build runs the build, and the job runs, as this account.
+RUNTIME_SA=${PROJECT_NUMBER}-compute@developer.gserviceaccount.com
+
+gcloud services enable iamcredentials.googleapis.com sts.googleapis.com --project ${PROJECT_ID}
+
+# Trust GitHub's OIDC tokens from this repository's main branch only.
+gcloud iam workload-identity-pools create github \
+  --project ${PROJECT_ID} --location global --display-name "GitHub Actions"
+gcloud iam workload-identity-pools providers create-oidc anemoi-repo \
+  --project ${PROJECT_ID} --location global --workload-identity-pool github \
+  --display-name "jasonkolodziej/anemoi main" \
+  --issuer-uri https://token.actions.githubusercontent.com \
+  --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref" \
+  --attribute-condition "assertion.repository == 'jasonkolodziej/anemoi' && assertion.ref == 'refs/heads/main'"
+
+# The identity CI acts as, and who may act as it.
+gcloud iam service-accounts create anemoi-ci-build --project ${PROJECT_ID} \
+  --display-name "GitHub CI: build the training image, update its job"
+gcloud iam service-accounts add-iam-policy-binding ${CI_SA} --project ${PROJECT_ID} \
+  --role roles/iam.workloadIdentityUser \
+  --member "principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github/attribute.repository/jasonkolodziej/anemoi"
+
+# What it may do: submit and read builds, upload their source, read their
+# logs when one fails, run them (and the job) as the runtime account, and
+# update this one job.
+for role in roles/cloudbuild.builds.editor roles/serviceusage.serviceUsageConsumer roles/logging.viewer; do
+  gcloud projects add-iam-policy-binding ${PROJECT_ID} --member serviceAccount:${CI_SA} --role ${role} --condition None
+done
+gcloud storage buckets add-iam-policy-binding gs://${PROJECT_ID}_cloudbuild \
+  --member serviceAccount:${CI_SA} --role roles/storage.admin
+gcloud iam service-accounts add-iam-policy-binding ${RUNTIME_SA} --project ${PROJECT_ID} \
+  --member serviceAccount:${CI_SA} --role roles/iam.serviceAccountUser
+gcloud run jobs add-iam-policy-binding anemoi-train-schedule --project ${PROJECT_ID} --region us-central1 \
+  --member serviceAccount:${CI_SA} --role roles/run.developer
+
+# Tell the workflow where to authenticate (repository variables, not secrets).
+gh variable set GCP_WIF_PROVIDER \
+  --body "projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github/providers/anemoi-repo"
+gh variable set GCP_CI_SERVICE_ACCOUNT --body "${CI_SA}"
+```
+
+The build logs to Cloud Build's GCS bucket, which `gcloud` can only stream with project-wide Viewer. So the workflow submits with `--async`, waits on the build's status, and prints the log from Cloud Logging if the build fails.
+
 ## Build and push image to GHCR
 
 Cloud Run can pull GHCR images directly only if the package is **public**. GitHub creates packages as private by default, and a private one needs an [Artifact Registry remote repository](https://cloud.google.com/artifact-registry/docs/repositories/remote-repo) holding GitHub credentials. The Artifact Registry build above avoids both.
