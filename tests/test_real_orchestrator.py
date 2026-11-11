@@ -166,39 +166,26 @@ def test_registers_the_result_with_the_real_promotion_decision(runner):
 
 
 def test_a_versions_basins_come_from_its_own_scores(runner, monkeypatch):
-    """The runner adds what persistence scores on the archive's validation
-    storms, and registers which basins the version had samples from and
-    which it beat persistence in (docs/multi_basin.md)."""
-    from datetime import UTC, datetime, timedelta
-
-    from anemoi.data.besttrack import Fix, Track, TrackQuality
-
-    def track(storm_id: str, season: int, accel: float) -> Track:
-        start, lat, fixes = datetime(season, 8, 1, tzinfo=UTC), 10.0, []
-        for i in range(30):
-            lat += 0.5 + accel * i
-            fixes.append(Fix(
-                storm_id=storm_id, valid_time=start + timedelta(hours=6 * i), lat=lat, lon=-50.0,
-                max_wind_kt=50.0, min_pressure_mb=990.0, quality=TrackQuality.FINAL,
-            ))
-        return Track(storm_id=storm_id, fixes=tuple(fixes))
-
-    # 2023 is the newest season, so 2022 is validated on (#216). Persistence
-    # is exact for the steady Atlantic storm and well out for the others.
-    runner.tracks = [
-        track("AL012021", 2021, 0.0), track("AL012022", 2022, 0.02),
-        track("EP012022", 2022, 0.02), track("CP012022", 2022, 0.0), track("AL012023", 2023, 0.0),
-    ]
+    """The runner registers which basins the version had training samples
+    from and which it beat persistence in, and blanks the basin input
+    columns it never trained on -- on the artifacts the joint latents are
+    built from, and in the tag serving builds from (docs/multi_basin.md)."""
     values = {
         **FAKE_METRICS_VALUES,
-        "AL/track_error_48h_nm": 40.0, "AL/train_samples": 50.0, "AL/val_samples": 9.0,
-        "EP/track_error_48h_nm": 400.0, "EP/train_samples": 20.0, "EP/val_samples": 9.0,
+        "AL/track_error_48h_nm": 40.0, "AL/persistence_track_error_48h_nm": 90.0,
+        "AL/train_samples": 50.0, "AL/val_samples": 9.0,
+        "EP/track_error_48h_nm": 400.0, "EP/persistence_track_error_48h_nm": 120.0,
+        "EP/train_samples": 20.0, "EP/val_samples": 9.0,
         # Storms in the archive, but no cached field to train on.
-        "CP/track_error_48h_nm": 30.0, "CP/val_samples": 2.0,
+        "CP/track_error_48h_nm": 30.0, "CP/persistence_track_error_48h_nm": 90.0,
+        "CP/val_samples": 2.0,
     }
 
+    from anemoi.training.real_run import RunArtifacts
+
     def fake_lstm(*args, **kwargs):
-        run, _metrics, artifacts = _fake_curriculum_run("lstm")
+        run, _metrics, _artifacts = _fake_curriculum_run("lstm")
+        artifacts = RunArtifacts(model="trained-lstm", basins=("AL", "EP", "CP"))
         return run, MetricSet(split="val", flavor=Flavor.GDAS_FINETUNE, values=values), artifacts
 
     monkeypatch.setattr("anemoi.training.real_run.run_lstm_curriculum", fake_lstm)
@@ -209,10 +196,11 @@ def test_a_versions_basins_come_from_its_own_scores(runner, monkeypatch):
     assert outcome.ok
 
     version = runner.registry.latest("lstm")
-    assert version.metrics["AL/persistence_track_error_48h_nm"] > 40.0
-    assert version.metrics["EP/persistence_track_error_48h_nm"] < 400.0
     assert version.tags["trained_basins"] == "AL,EP"
     assert version.tags["verified_basins"] == "AL"
+    # CP's column was never trained: blank on the artifacts and in the tag.
+    assert runner.trained_artifacts["lstm"].basins == ("AL", "EP", "")
+    assert version.tags["basin_inputs"] == "AL,EP,"
     assert runner.promotions["lstm"].promote_to_staging
     assert runner.registry.verified_basins() == frozenset({"AL"})
 

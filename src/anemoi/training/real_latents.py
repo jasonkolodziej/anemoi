@@ -98,6 +98,9 @@ class JointLatentSamples:
     #: Each row's storm, for scoring each basin on its own
     #: (`real_run.validation_metrics`). Empty: overall scores only.
     storm_ids: tuple[str, ...] = ()
+    #: `real_run.StageWindow.persistence` for each row, ``(N, n_leads, 3)``
+    #: displacements: what each basin's fusion/diffusion score is held to.
+    persistence: np.ndarray | None = None
 
     def __len__(self) -> int:
         return len(self.z)
@@ -194,6 +197,7 @@ def _extract_for_tracks(
     base_lon_rows: list[float] = []
     context_rows: list[np.ndarray] = []
     storm_ids: list[str] = []
+    persistence_rows: list[np.ndarray] = []
 
     topo = None
     shape: tuple[int, int] | None = None
@@ -241,13 +245,14 @@ def _extract_for_tracks(
         trf_x_rows.append(trf_stack)
         gnn_x_rows.append(node_features)
         env_rows.append(env)
-        cand_track_rows.append(track_input(sw.window, sw.storm_id, pinn_a.basins))
+        cand_track_rows.append(track_input(sw.window, sw.storm_id, pinn_a.candidate_basins))
         y_rows.append(sw.y)
         mask_rows.append(sw.mask)
         base_lat_rows.append(sw.current.lat)
         base_lon_rows.append(sw.current.lon)
         context_rows.append(_context_features(sw))
         storm_ids.append(sw.storm_id)
+        persistence_rows.append(sw.persistence)
 
     latent_dims = (
         lstm_a.model.norm.normalized_shape[0],
@@ -342,6 +347,7 @@ def _extract_for_tracks(
         z=z, y=y, mask=mask, base_lat=base_lat, base_lon=base_lon,
         predictions=predictions, true_absolute=true_abs, context=context,
         latent_dims=latent_dims, storm_ids=tuple(storm_ids),
+        persistence=np.stack(persistence_rows),
     )
 
 

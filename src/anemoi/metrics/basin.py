@@ -13,7 +13,8 @@ also records, for each basin it has storms from:
   model has not seen that basin whatever the storm archive holds;
 * ``{basin}/persistence_track_error_{lead}h_nm`` (and intensity) -- what
   holding the storm's last motion and wind scores on the same storms
-  (`training.basin_gates.persistence_baseline`).
+  (`training.real_run.StageWindow.persistence`), on exactly the windows
+  the model was scored on.
 
 A basin is **verified** for a model when it beats persistence there on the
 primary metric (`verified_basins`). The keys use ``/`` so MLflow groups a
@@ -134,10 +135,16 @@ def verified_basins(values: Mapping[str, float], metric: str) -> tuple[str, ...]
     """The basins where the model beats persistence on ``metric``, sorted.
 
     Both numbers must have been recorded and be finite: a basin with no
-    validation storms, or no baseline, has shown nothing.
+    validation storms, or no baseline, has shown nothing. And when the run
+    recorded training counts, it must have trained there: validating well
+    on a few storms of a basin it never trained on is not covering it.
+    The registry tags and promotion both read this, so they can't disagree.
     """
+    trained = trained_basins(values)
     out = []
     for basin in scored_basins(values):
+        if trained is not None and basin not in trained:
+            continue
         model = basin_value(values, basin, metric)
         baseline = basin_value(values, basin, PERSISTENCE_PREFIX + metric)
         if model is None or baseline is None:

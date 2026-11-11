@@ -91,11 +91,14 @@ gridded caches grow with the storm count. The streaming dataloader
 - **Per-basin metrics on every version** (`metrics/basin.py`). Each basin's
   own track and intensity error at each lead (`EP/track_error_48h_nm`), its
   training and validation sample counts (`EP/train_samples`), and what
-  persistence scores on the same storms (`EP/persistence_track_error_48h_nm`),
-  next to the overall metrics.
-- **Verified.** A model is verified in a basin when it beats persistence --
-  holding the storm's last motion and wind -- there on the promotion metric
-  (`training/basin_gates.py`). Registered as the `verified_basins` tag. The
+  persistence scores (`EP/persistence_track_error_48h_nm`) on exactly the
+  windows and leads the model was scored on -- a gridded model skips windows
+  with no cached field, and persistence skips the same ones
+  (`real_run.StageWindow.persistence`).
+- **Verified.** A model is verified in a basin when it trained there and
+  beats persistence -- holding the storm's last motion and wind -- there on
+  the promotion metric (`metrics.basin.verified_basins`; the tags and the
+  promotion rules both read it). Registered as the `verified_basins` tag. The
   console badge and the `basin_untrained` flag read it: a basin is in
   distribution once every Group 1 champion is verified in it
   (`ModelRegistry.verified_basins`).

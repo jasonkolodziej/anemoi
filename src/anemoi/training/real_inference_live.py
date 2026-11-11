@@ -225,6 +225,7 @@ def build_live_transformer_x(
 def build_live_pinn_x(
     track: Track, current: Fix, candidate_model, cache_dir: Path | str,
     *, fields_fetcher: FieldsFetcher | None = None, basins: Sequence[str] = (),
+    candidate_basins: Sequence[str] = (),
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """PINN's real input: the environment-feature vector plus its
     candidate-generator LSTM's own forecast, converted to absolute (lat,
@@ -264,7 +265,9 @@ def build_live_pinn_x(
     if window is None:
         return None
 
-    x_track = track_input(window, track.storm_id, basins)
+    # The candidate's own columns: it trains on the track archive, not the
+    # field cache, so they can differ from the corrector's.
+    x_track = track_input(window, track.storm_id, candidate_basins)
     with torch.no_grad():
         xt = torch.as_tensor(x_track[None], dtype=torch.float32)
         pred_disp = candidate_model(xt).cpu().numpy()[0]

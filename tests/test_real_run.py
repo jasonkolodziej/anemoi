@@ -424,6 +424,9 @@ def test_a_run_on_two_basins_scores_each_on_its_own(streaming):
     # The overall error is the two basins' pooled, so it lies between them.
     lo, hi = sorted((values["AL/track_error_48h_nm"], values["EP/track_error_48h_nm"]))
     assert lo <= values["track_error_48h_nm"] <= hi
+    # Persistence, scored on the same validation windows, beside the model.
+    for basin in ("AL", "EP"):
+        assert math.isfinite(values[f"{basin}/persistence_track_error_48h_nm"])
 
 
 def test_run_lstm_curriculum_streaming_completes_both_stages():

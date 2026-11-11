@@ -44,7 +44,7 @@ from ..data.splits import (
 )
 from ..data.storm_relative import STORM_RELATIVE_COLUMNS, displacement_nm, storm_relative_sequence
 from ..geo import offset_positions
-from ..metrics.basin import absolute_pairs, per_basin_scores, sample_counts
+from ..metrics.basin import PERSISTENCE_PREFIX, absolute_pairs, per_basin_scores, sample_counts
 from ..metrics.track import VerificationPair, to_metric_dict, verify
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
@@ -160,6 +160,7 @@ def validation_metrics(
     *,
     val_storm_ids: Sequence[str] = (),
     train_storm_ids: Sequence[str] = (),
+    persistence_abs: np.ndarray | None = None,
     stage_name: str | None = None,
     lead_hours: tuple[int, ...] = DEFAULT_LEADS,
 ) -> MetricSet:
@@ -169,8 +170,12 @@ def validation_metrics(
     basin on its own (`metrics.basin`, docs/multi_basin.md).
 
     ``pred_abs``/``obs_abs`` are ``(n, n_leads, 3)`` absolute (lat, lon,
-    wind_kt); ``mask`` is ``(n, n_leads)``. Raises when no (sample, lead)
-    is verifiable.
+    wind_kt); ``mask`` is ``(n, n_leads)``. ``persistence_abs``, the same
+    shape, is persistence's forecast for the same samples
+    (`StageWindow.persistence`): scored per basin beside the model, on
+    exactly the cases the model was scored on, it is what a basin has to
+    beat to count as verified (`metrics.basin.verified_basins`). Raises
+    when no (sample, lead) is verifiable.
     """
     pairs = absolute_pairs(pred_abs, obs_abs, mask, lead_hours)
     if not pairs:
@@ -180,6 +185,11 @@ def validation_metrics(
     if len(val_storm_ids):
         values.update(per_basin_scores(pred_abs, obs_abs, mask, val_storm_ids, lead_hours))
         values.update(sample_counts(val_storm_ids, "val"))
+        if persistence_abs is not None:
+            values.update(per_basin_scores(
+                persistence_abs, obs_abs, mask, val_storm_ids, lead_hours,
+                prefix=PERSISTENCE_PREFIX,
+            ))
     if len(train_storm_ids):
         values.update(sample_counts(train_storm_ids, "train"))
     return MetricSet(split="val", flavor=flavor, values=values)
@@ -195,10 +205,11 @@ def displacement_validation_metrics(
     *,
     val_storm_ids: Sequence[str] = (),
     train_storm_ids: Sequence[str] = (),
+    persistence: np.ndarray | None = None,
 ) -> MetricSet:
     """`validation_metrics` for a model whose output is displacements:
-    ``pred`` and ``obs`` are ``(n, n_leads, 3)`` (dx_east_nm, dy_north_nm,
-    wind_kt) from each sample's base fix."""
+    ``pred``, ``obs`` and ``persistence`` are ``(n, n_leads, 3)``
+    (dx_east_nm, dy_north_nm, wind_kt) from each sample's base fix."""
     base_lat = np.asarray(base_lat, dtype=float)[:, None]
     base_lon = np.asarray(base_lon, dtype=float)[:, None]
     return validation_metrics(
@@ -206,7 +217,12 @@ def displacement_validation_metrics(
         displacements_to_absolute(pred, base_lat, base_lon),
         displacements_to_absolute(obs, base_lat, base_lon),
         mask,
-        val_storm_ids=val_storm_ids, train_storm_ids=train_storm_ids, stage_name=stage.name,
+        val_storm_ids=val_storm_ids, train_storm_ids=train_storm_ids,
+        persistence_abs=(
+            None if persistence is None
+            else displacements_to_absolute(persistence, base_lat, base_lon)
+        ),
+        stage_name=stage.name,
     )
 
 
@@ -230,6 +246,8 @@ class StageSamples:
     base_lat: np.ndarray
     base_lon: np.ndarray
     storm_ids: tuple[str, ...] = ()
+    #: `StageWindow.persistence` for each sample, ``(N, n_leads, 3)``.
+    persistence: np.ndarray | None = None
 
     def __len__(self) -> int:
         return len(self.x)
@@ -278,8 +296,13 @@ class RunArtifacts:
     #: The basins this model's basin input columns stand for, in order
     #: (`basin_input`) -- what its inputs must be built with, in training
     #: and when serving. Empty for a model with no basin input: every
-    #: version from before it existed.
+    #: version from before it existed. A blank entry is a column for a
+    #: basin it had no training samples from (`basin_gates
+    #: .resolve_basin_inputs`): no storm switches it on.
     basins: tuple[str, ...] = ()
+    #: PINN only: the same for its candidate-generator LSTM, which trains
+    #: on the track archive rather than the field cache.
+    candidate_basins: tuple[str, ...] = ()
     #: PINN only: the candidate-generator LSTM's own `build_lstm(...)` kwargs.
     candidate_arch_params: dict = field(default_factory=dict)
     #: PINN only: where the candidate LSTM's checkpoint was uploaded (#78).
@@ -308,6 +331,26 @@ class StageWindow:
     current: object
     y: np.ndarray
     mask: np.ndarray
+
+    @property
+    def persistence(self) -> np.ndarray:
+        """Persistence's forecast for this window, in ``y``'s form:
+        ``(n_leads, 3)`` (dx_east_nm, dy_north_nm, wind_kt) from
+        ``current``. Holds the last 6-hour motion and the current wind --
+        from the same working fixes the model reads, so the two are
+        scored on exactly the same inputs and cases (docs/multi_basin.md)."""
+        dx, dy = displacement_nm(self.window[-2], self.window[-1])
+        steps = np.array(LEAD_STEPS, dtype=float)
+        return np.stack(
+            [dx * steps, dy * steps, np.full(len(steps), self.current.max_wind_kt)], axis=1,
+        )
+
+
+def persistence_of(windows: Sequence[StageWindow]) -> np.ndarray:
+    """``(n, n_leads, 3)``: `StageWindow.persistence` for each window."""
+    if not windows:
+        return np.empty((0, len(LEAD_STEPS), 3))
+    return np.stack([sw.persistence for sw in windows])
 
 
 def iter_stage_windows(
@@ -377,6 +420,7 @@ def window_validation_metrics(
         np.stack([sw.mask for sw in val_windows]),
         val_storm_ids=[sw.storm_id for sw in val_windows],
         train_storm_ids=[sw.storm_id for sw in train_windows],
+        persistence=persistence_of(val_windows),
     )
 
 
@@ -401,6 +445,7 @@ def build_stage_samples(
     base_lat_rows: list[float] = []
     base_lon_rows: list[float] = []
     storm_ids: list[str] = []
+    persistence_rows: list[np.ndarray] = []
 
     for sw in iter_stage_windows(tracks, rng, n_augment, noise):
         x_rows.append(track_input(sw.window, sw.storm_id, basins))
@@ -409,6 +454,7 @@ def build_stage_samples(
         base_lat_rows.append(sw.current.lat)
         base_lon_rows.append(sw.current.lon)
         storm_ids.append(sw.storm_id)
+        persistence_rows.append(sw.persistence)
 
     if not x_rows:
         return StageSamples(
@@ -425,6 +471,7 @@ def build_stage_samples(
         base_lat=np.array(base_lat_rows),
         base_lon=np.array(base_lon_rows),
         storm_ids=tuple(storm_ids),
+        persistence=np.stack(persistence_rows),
     )
 
 
@@ -544,6 +591,7 @@ def train_lstm_stage(
         stage, val_samples.base_lat, val_samples.base_lon, pred_val, val_samples.y,
         val_samples.mask,
         val_storm_ids=val_samples.storm_ids, train_storm_ids=train_samples.storm_ids,
+        persistence=val_samples.persistence,
     )
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 

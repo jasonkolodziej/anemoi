@@ -224,6 +224,10 @@ def train_diffusion_stage(
         displacements_to_absolute(val_samples.y, base_lat, base_lon),
         val_samples.mask,
         val_storm_ids=val_samples.storm_ids, train_storm_ids=train_samples.storm_ids,
+        persistence_abs=(
+            None if val_samples.persistence is None
+            else displacements_to_absolute(val_samples.persistence, base_lat, base_lon)
+        ),
     )
     arch_params = {
         "latent_dim": train_samples.z.shape[-1], "hidden_dim": hidden_dim, "n_layers": n_layers,

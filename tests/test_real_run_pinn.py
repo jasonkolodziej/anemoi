@@ -452,6 +452,10 @@ def test_run_pinn_curriculum_completes_both_stages(tmp_path):
         "lead_hours": list(DEFAULT_LEADS),
     }
     assert artifacts.env_mean.shape == (len(FEATURE_NAMES) + n_basins,)
+    # Its candidate trained on Atlantic tracks only here: only that column is live.
+    assert artifacts.candidate_basins == tuple(
+        b if b == "AL" else "" for b in TRAINING_BASINS
+    )
 
 
 @pytest.mark.torch

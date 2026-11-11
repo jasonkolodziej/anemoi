@@ -172,6 +172,7 @@ class GnnStageSamples:
     base_lon: np.ndarray
     topology: MeshTopology | None
     storm_ids: tuple[str, ...] = ()
+    persistence: np.ndarray | None = None  # `real_run.StageWindow.persistence`
 
     def __len__(self) -> int:
         return len(self.x)
@@ -198,6 +199,7 @@ def build_gnn_samples(
     base_lat_rows: list[float] = []
     base_lon_rows: list[float] = []
     storm_ids: list[str] = []
+    persistence_rows: list[np.ndarray] = []
     topo: MeshTopology | None = None
     shape: tuple[int, int] | None = None
 
@@ -229,6 +231,7 @@ def build_gnn_samples(
         base_lat_rows.append(sw.current.lat)
         base_lon_rows.append(sw.current.lon)
         storm_ids.append(sw.storm_id)
+        persistence_rows.append(sw.persistence)
 
     n_leads = len(LEAD_STEPS)
     if not x_rows:
@@ -248,6 +251,7 @@ def build_gnn_samples(
         base_lon=np.array(base_lon_rows),
         topology=topo,
         storm_ids=tuple(storm_ids),
+        persistence=np.stack(persistence_rows),
     )
 
 
@@ -375,6 +379,7 @@ def train_gnn_stage(
         stage, val_samples.base_lat, val_samples.base_lon, pred_val, val_samples.y,
         val_samples.mask,
         val_storm_ids=val_samples.storm_ids, train_storm_ids=train_samples.storm_ids,
+        persistence=val_samples.persistence,
     )
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 

@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+import numpy as np
+
 from ..data.sources import Flavor
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
@@ -30,7 +32,7 @@ from .curriculum import Curriculum, CurriculumRun, StageResult, stage_b
 from .device import get_device
 from .promotion import MetricSet
 from .real_latents import JointLatentBundle, JointLatentSamples
-from .real_run import validation_metrics
+from .real_run import displacements_to_absolute, validation_metrics
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +109,14 @@ def train_fusion_stage(
     val_metrics = validation_metrics(
         Flavor.GDAS_FINETUNE, out_v_np, val_samples.true_absolute, val_samples.mask,
         val_storm_ids=val_samples.storm_ids, train_storm_ids=train_samples.storm_ids,
+        persistence_abs=(
+            None if val_samples.persistence is None
+            else displacements_to_absolute(
+                val_samples.persistence,
+                np.asarray(val_samples.base_lat)[:, None],
+                np.asarray(val_samples.base_lon)[:, None],
+            )
+        ),
     )
     return model, train_loss, val_loss, val_metrics
 

@@ -301,7 +301,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     )
     from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ModelRegistry, Stage
-    from .training.basin_gates import basin_tags, with_basin_baseline
+    from .training.basin_gates import basin_tags, resolve_basin_inputs
     from .training.promotion import MetricSet, evaluate_promotion
 
     tracks = _training_tracks(args.hurdat2)
@@ -364,8 +364,9 @@ def cmd_train(args: argparse.Namespace) -> int:
         print(f"no real training runner yet for {args.model!r} -- see cmd_train's docstring")
         return 1
 
-    # What each basin has to beat to count as verified (docs/multi_basin.md).
-    val_metrics = with_basin_baseline(val_metrics, tracks)
+    # Blank the basin input columns it had no training samples from, so the
+    # `basin_inputs` tag serving builds from says so (docs/multi_basin.md).
+    artifacts = resolve_basin_inputs(artifacts, val_metrics)
 
     print(f"curriculum complete: {[r.stage_name for r in run.results]}")
     for r in run.results:

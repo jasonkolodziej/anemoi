@@ -45,6 +45,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ..data.basins import basins_of
 from ..data.besttrack import Track, WorkingTrackNoise
 from ..data.features import FEATURE_NAMES, compute_environment_features
 from ..data.gridded_cache import FetchTask, cache_path, load_cached_fields
@@ -53,6 +54,7 @@ from ..data.splits import Split, assign_splits, filter_tracks
 from ..data.storm_relative import STORM_RELATIVE_COLUMNS
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
+from .basin_gates import served_columns
 from .basin_input import DEFAULT_BASIN_INPUTS, with_basin_vector
 from .capacity_ablation import SEQUENCE_LENGTH
 from .curriculum import Curriculum, CurriculumRun, StageResult, StageSpec
@@ -63,6 +65,7 @@ from .real_run import (
     boundaries_for_tracks,
     displacements_to_absolute,
     iter_stage_windows,
+    persistence_of,
     track_input,
     validation_metrics,
 )
@@ -96,6 +99,7 @@ class PinnStageSamples:
     base_lat: np.ndarray
     base_lon: np.ndarray
     storm_ids: tuple[str, ...] = ()
+    persistence: np.ndarray | None = None  # `real_run.StageWindow.persistence`
 
     def __len__(self) -> int:
         return len(self.x_track)
@@ -124,6 +128,7 @@ def build_pinn_samples(
     base_lat_rows: list[float] = []
     base_lon_rows: list[float] = []
     storm_ids: list[str] = []
+    persistence_rows: list[np.ndarray] = []
 
     for sw in iter_stage_windows(tracks, rng, n_augment, noise):
         task = FetchTask(
@@ -146,6 +151,7 @@ def build_pinn_samples(
         base_lat_rows.append(sw.current.lat)
         base_lon_rows.append(sw.current.lon)
         storm_ids.append(sw.storm_id)
+        persistence_rows.append(sw.persistence)
 
     n_leads = len(DEFAULT_LEADS)
     if not x_track_rows:
@@ -165,6 +171,7 @@ def build_pinn_samples(
         base_lat=np.array(base_lat_rows),
         base_lon=np.array(base_lon_rows),
         storm_ids=tuple(storm_ids),
+        persistence=np.stack(persistence_rows),
     )
 
 
@@ -570,6 +577,10 @@ def train_pinn_stage_streaming(
         stage.flavor, pred_val, true_val, np.stack([sw.mask for sw in val_windows]),
         val_storm_ids=[sw.storm_id for sw in val_windows],
         train_storm_ids=[sw.storm_id for sw in train_windows],
+        persistence_abs=_disp_to_abs_batch(
+            persistence_of(val_windows),
+            np.array([[sw.current.lat, sw.current.lon] for sw in val_windows]),
+        ),
         stage_name=stage.name,
     )
     return model, train_loss, val_loss, val_metrics, (env_mean, env_std)
@@ -663,6 +674,9 @@ def train_pinn_stage(
     val_metrics = validation_metrics(
         stage.flavor, pred_val, true_val, val_samples.mask,
         val_storm_ids=val_samples.storm_ids, train_storm_ids=train_samples.storm_ids,
+        persistence_abs=displacements_to_absolute(
+            val_samples.persistence, val_samples.base_lat[:, None], val_samples.base_lon[:, None],
+        ),
         stage_name=stage.name,
     )
     return model, train_loss, val_loss, val_metrics, (env_mean, env_std)
@@ -797,5 +811,8 @@ def run_pinn_curriculum(
         model=model, candidate_model=candidate_model, env_mean=env_mean, env_std=env_std,
         arch_params=arch_params, candidate_arch_params=candidate_arch_params,
         candidate_checkpoint_uri=candidate_checkpoint_uri, basins=basins,
+        # The candidate trains on every Stage B training track, cached or
+        # not: its columns are live for the basins those came from.
+        candidate_basins=served_columns(basins, basins_of(train_tracks)),
     )
     return run, val_metrics, artifacts

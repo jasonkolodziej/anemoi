@@ -114,7 +114,7 @@ def _build_joint_latent(
     diffusion's own recorded `latent_signature` still matches what's
     actually being served -- see `build_real_ensemble_fn`'s own
     docstring for the real gap this closes."""
-    from ..tracking.experiment_tracking import basin_inputs
+    from ..tracking.experiment_tracking import CANDIDATE_BASIN_INPUTS_TAG, basin_inputs
     from ..tracking.registry import Stage
     from .real_inference import (
         InferenceLoadError,
@@ -144,6 +144,7 @@ def _build_joint_latent(
                 return None
             raw = build_live_pinn_x(
                 track, current, candidate_model, cache_dir, basins=basin_inputs(version.tags),
+                candidate_basins=basin_inputs(version.tags, CANDIDATE_BASIN_INPUTS_TAG),
             )
         else:
             raw = _build_live_x(

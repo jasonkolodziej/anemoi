@@ -161,11 +161,13 @@ if not 0.0 <= NEW_BASIN_TOLERANCE < 1.0:
 
 def reference_value(values: dict[str, float], metric: str, basin: str) -> float | None:
     """``metric`` on ``basin``'s storms alone when the run scored basins
-    separately, else its overall value -- which, for a run from before it
-    did, *is* the reference basin: every one of those trained and
-    validated on the Atlantic alone."""
-    on_basin = basin_value(values, basin, metric)
-    return on_basin if on_basin is not None else values.get(metric)
+    separately -- ``None`` if it has none there, never another basin's
+    number -- else its overall value, which, for a run from before basins
+    were scored separately, *is* the reference basin: every one of those
+    trained and validated on the Atlantic alone."""
+    if scored_basins(values):
+        return basin_value(values, basin, metric)
+    return values.get(metric)
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,43 +247,52 @@ def evaluate_promotion(
         incumbent_val_metrics.get(primary_metric)
         cand = reference_value(val_metrics.values, primary_metric, reference_basin)
         inc = reference_value(incumbent_val_metrics.values, primary_metric, reference_basin)
-        assert cand is not None and inc is not None
-        by_basin = bool(scored_basins(val_metrics.values))
-        where = f"{primary_metric} ({reference_basin})" if by_basin else primary_metric
-
-        allowed = 0.0
-        dropped: list[str] = []
-        if by_basin:
-            cand_verified = set(verified_basins(val_metrics.values, primary_metric))
-            # An incumbent from before basins were scored separately was
-            # served as in distribution for the reference basin alone.
-            inc_verified = (
-                set(verified_basins(incumbent_val_metrics.values, primary_metric))
-                if scored_basins(incumbent_val_metrics.values)
-                else {reference_basin}
+        if cand is None or inc is None:
+            # Scored by basin, but no reference-basin storms to compare on:
+            # nothing to promote on, never another basin's number.
+            beats_incumbent = False
+            missing = "candidate" if cand is None else "incumbent"
+            reasons.append(
+                f"{primary_metric} ({reference_basin}): the {missing} has no "
+                f"{reference_basin} validation storms to compare on [FAIL]"
             )
-            dropped = sorted(inc_verified - cand_verified)
-            added = sorted(cand_verified - inc_verified)
-            if dropped:
-                reasons.append(
-                    f"no longer better than persistence in {dropped}, "
-                    "where the incumbent is [FAIL]"
-                )
-            elif added:
-                allowed = new_basin_tolerance
-                reasons.append(
-                    f"newly verified in {added}: may be up to {allowed:.0%} worse on "
-                    f"{reference_basin}"
-                )
-
-        beats_incumbent = not dropped and (
-            cand <= inc * (1.0 + allowed) if allowed else cand < inc
-        )
-        if allowed and inc <= cand <= inc * (1.0 + allowed):
-            verdict = "within the allowance"
         else:
-            verdict = "better" if cand < inc else "not better"
-        reasons.append(f"{where}: candidate {cand:.2f} vs incumbent {inc:.2f} [{verdict}]")
+            by_basin = bool(scored_basins(val_metrics.values))
+            where = f"{primary_metric} ({reference_basin})" if by_basin else primary_metric
+
+            allowed = 0.0
+            dropped: list[str] = []
+            if by_basin:
+                cand_verified = set(verified_basins(val_metrics.values, primary_metric))
+                # An incumbent from before basins were scored separately was
+                # served as in distribution for the reference basin alone.
+                inc_verified = (
+                    set(verified_basins(incumbent_val_metrics.values, primary_metric))
+                    if scored_basins(incumbent_val_metrics.values)
+                    else {reference_basin}
+                )
+                dropped = sorted(inc_verified - cand_verified)
+                added = sorted(cand_verified - inc_verified)
+                if dropped:
+                    reasons.append(
+                        f"no longer better than persistence in {dropped}, "
+                        "where the incumbent is [FAIL]"
+                    )
+                elif added:
+                    allowed = new_basin_tolerance
+                    reasons.append(
+                        f"newly verified in {added}: may be up to {allowed:.0%} worse on "
+                        f"{reference_basin}"
+                    )
+
+            beats_incumbent = not dropped and (
+                cand <= inc * (1.0 + allowed) if allowed else cand < inc
+            )
+            if allowed and inc <= cand <= inc * (1.0 + allowed):
+                verdict = "within the allowance"
+            else:
+                verdict = "better" if cand < inc else "not better"
+            reasons.append(f"{where}: candidate {cand:.2f} vs incumbent {inc:.2f} [{verdict}]")
 
     threshold_results = []
     for th in thresholds:

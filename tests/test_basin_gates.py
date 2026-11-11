@@ -29,12 +29,7 @@ from anemoi.metrics.basin import (
 )
 from anemoi.models.base import DEFAULT_LEADS
 from anemoi.tracking.registry import GROUP1_MODELS, ModelRegistry, Stage
-from anemoi.training.basin_gates import (
-    basin_tags,
-    persistence_baseline,
-    validation_tracks,
-    with_basin_baseline,
-)
+from anemoi.training.basin_gates import basin_tags, resolve_basin_inputs, served_columns
 from anemoi.training.curriculum import Curriculum, CurriculumRun, StageResult
 from anemoi.training.promotion import MetricSet, evaluate_promotion
 from anemoi.training.real_run import validation_metrics
@@ -161,50 +156,38 @@ def test_trained_basins_are_the_ones_with_training_samples():
     assert trained_basins({"track_error_48h_nm": 40.0}) is None  # a run from before the counts
 
 
-# ---- the persistence baseline ---------------------------------------------------
+# ---- the persistence baseline, on the model's own windows --------------------------
 
 
-def test_persistence_is_exact_for_a_storm_that_keeps_its_motion():
-    baseline = persistence_baseline([northward_track("AL012022", 2022)])
-    for lead in DEFAULT_LEADS:
-        assert baseline[f"AL/persistence_track_error_{lead}h_nm"] == pytest.approx(0.0, abs=1e-6)
-        # 2 kt a fix: holding the wind is 2 kt out for every 6 h of lead.
-        assert baseline[f"AL/persistence_intensity_error_{lead}h_kt"] == pytest.approx(lead / 3.0)
+def test_persistence_holds_the_last_motion_and_the_current_wind():
+    from anemoi.data.besttrack import WorkingTrackNoise
+    from anemoi.training.real_run import LEAD_STEPS, iter_stage_windows
+
+    exact = WorkingTrackNoise(0.0, 0.0, 0.0, quantise=False)
+    track = northward_track("AL012022", 2022)
+    sw = next(iter_stage_windows([track], np.random.default_rng(0), noise=exact))
+    # Exact for a storm that keeps its motion: forecast and target agree
+    # wherever the target exists.
+    p = sw.persistence
+    assert p.shape == (len(LEAD_STEPS), 3)
+    np.testing.assert_allclose(p[sw.mask, :2], sw.y[sw.mask, :2], atol=1e-6)
+    assert (p[:, 2] == sw.current.max_wind_kt).all()
 
 
-def test_persistence_misses_a_storm_that_speeds_up_and_is_scored_per_basin():
-    baseline = persistence_baseline([
-        northward_track("AL012022", 2022),
-        northward_track("EP012022", 2022, accel=0.02),
-    ])
-    assert baseline["AL/persistence_track_error_48h_nm"] == pytest.approx(0.0, abs=1e-6)
-    assert baseline["EP/persistence_track_error_48h_nm"] > 20.0
-    assert (
-        baseline["EP/persistence_track_error_120h_nm"]
-        > baseline["EP/persistence_track_error_48h_nm"]
-    )
-
-
-def test_a_storm_too_short_for_a_window_has_no_baseline():
-    assert persistence_baseline([northward_track("AL012022", 2022, n=5)]) == {}
-
-
-def test_the_baseline_is_scored_on_the_validation_storms_of_the_archive():
-    tracks = [
-        northward_track("AL012021", 2021), northward_track("AL012022", 2022),
-        northward_track("EP012022", 2022, accel=0.02), northward_track("AL012023", 2023),
-    ]
-    # 2023 is the newest season: 2022 is Stage B's validation season (#216).
-    assert [t.storm_id for t in validation_tracks(tracks)] == ["AL012022", "EP012022"]
-
-    scored = metric_set(**{PRIMARY: 50.0, "AL/track_error_48h_nm": 40.0, "AL/val_samples": 9.0})
-    with_baseline = with_basin_baseline(scored, tracks)
-    assert with_baseline.values["AL/persistence_track_error_48h_nm"] == pytest.approx(0.0, abs=1e-6)
-    # Only for basins the run scored: it had no Eastern Pacific samples.
-    assert not any(key.startswith("EP/") for key in with_baseline.values)
-    # A run that scored no basin separately is left alone.
-    plain = metric_set(**{PRIMARY: 50.0})
-    assert with_basin_baseline(plain, tracks) is plain
+def test_persistence_is_scored_on_exactly_the_samples_the_model_was():
+    """A gridded runner skips windows with no cached field; scoring the
+    baseline over every window instead could make a basin look easy to
+    beat. So it is scored on the same samples, with the same mask."""
+    pred, obs, mask, storm_ids = _forecasts()
+    values = validation_metrics(
+        Flavor.GDAS_FINETUNE, pred, obs, mask, val_storm_ids=storm_ids,
+        persistence_abs=obs.copy(),  # a perfect baseline on these samples
+    ).values
+    assert values["AL/persistence_track_error_12h_nm"] == 0.0
+    assert values["EP/persistence_track_error_12h_nm"] == 0.0
+    # Same leads as the model: nothing scored where the model wasn't.
+    assert not any("persistence" in k and "24h" in k for k in values)
+    assert verified_basins(values, "track_error_12h_nm") == ()
 
 
 # ---- verified basins, and the tags ---------------------------------------------
@@ -225,7 +208,7 @@ def test_the_tags_say_what_was_trained_on_and_what_is_verified():
     assert basin_tags(metrics) == {"trained_basins": "AL,EP", "verified_basins": "AL"}
 
 
-def test_a_basin_validated_but_never_trained_on_is_neither():
+def test_a_basin_validated_but_never_trained_on_is_not_verified():
     """Storms in the archive, fields never cached: validation happened to
     find a few, training none. It didn't train there, so it isn't verified
     there, however the few scored."""
@@ -234,6 +217,22 @@ def test_a_basin_validated_but_never_trained_on_is_neither():
     del values["EP/train_samples"]
     tags = basin_tags(metric_set(**values))
     assert tags == {"trained_basins": "AL", "verified_basins": "AL"}
+    # The predicate promotion reads agrees with the tag.
+    assert verified_basins(values, PRIMARY) == ("AL",)
+
+
+def test_validating_well_in_an_untrained_basin_earns_no_allowance():
+    """Promotion reads the same predicate as the tags: a basin the
+    candidate never trained on can't buy it a worse Atlantic score."""
+    incumbent = metric_set(**{PRIMARY: 50.0})
+    candidate = by_basin(48.0, AL=(52.0, 140.0), EP=(45.0, 120.0))
+    values = dict(candidate.values)
+    del values["EP/train_samples"]
+    decision = evaluate_promotion(
+        "lstm", complete_run(), metric_set(**values), incumbent_val_metrics=incumbent,
+    )
+    assert not decision.promote_to_staging
+    assert not any("newly verified" in r for r in decision.reasons)
 
 
 def test_a_run_from_before_the_counts_sets_no_basin_tags():
@@ -393,6 +392,27 @@ def test_the_thresholds_are_read_on_the_reference_basin():
     assert any(r.startswith("track_error_48h_nm=80.000 <= 70.000 [FAIL]") for r in decision.reasons)
 
 
+def test_a_reference_metric_missing_is_missing_not_another_basins_number():
+    """No Atlantic storm long enough for 120 h, but Pacific ones: the
+    Atlantic 120 h threshold is missing, not read off the Pacific."""
+    values = dict(by_basin(60.0, AL=(50.0, 140.0), EP=(40.0, 120.0)).values)
+    values["track_error_120h_nm"] = 100.0  # overall: the Pacific's alone
+    values["EP/track_error_120h_nm"] = 100.0
+    decision = evaluate_promotion("lstm", complete_run(), metric_set(**values))
+    assert "track_error_120h_nm: missing [FAIL]" in decision.reasons
+    assert not decision.promote_to_production
+
+
+def test_a_candidate_with_no_reference_basin_storms_is_not_compared_on_others():
+    incumbent = metric_set(**{PRIMARY: 50.0})
+    candidate = by_basin(30.0, EP=(30.0, 120.0))
+    decision = evaluate_promotion(
+        "lstm", complete_run(), candidate, incumbent_val_metrics=incumbent,
+    )
+    assert not decision.promote_to_staging
+    assert any("has no AL validation storms" in r for r in decision.reasons)
+
+
 def test_a_candidate_that_scored_no_basin_is_judged_as_before():
     incumbent = metric_set(**{PRIMARY: 50.0})
     decision = evaluate_promotion(
@@ -406,20 +426,34 @@ def test_a_candidate_that_scored_no_basin_is_judged_as_before():
 # ---- the basin as a model input --------------------------------------------------
 
 
-def test_basin_inputs_from_tags_blank_a_column_never_trained_on():
-    """A column for a basin the version had no samples from stays off when
-    serving: its weights were never trained."""
-    from anemoi.tracking.experiment_tracking import basin_input_tags, basin_inputs
+def test_columns_never_trained_on_are_blanked_once_for_latents_and_serving():
+    """Resolved on the artifacts before anything reads them -- the joint
+    latents fusion/diffusion train on and the tag serving builds from --
+    so the two can't disagree (docs/multi_basin.md)."""
+    from types import SimpleNamespace
 
+    from anemoi.data.basins import TRAINING_BASINS
+    from anemoi.tracking.experiment_tracking import basin_input_tags, basin_inputs
+    from anemoi.training.real_run import RunArtifacts
+
+    assert served_columns(("AL", "EP", "CP"), ("AL", "EP")) == ("AL", "EP", "")
+    artifacts = RunArtifacts(model=None, basins=("AL", "EP", "CP"))
+    trained_on_al = metric_set(**{PRIMARY: 50.0, "AL/train_samples": 9.0, "AL/val_samples": 3.0})
+    resolved = resolve_basin_inputs(artifacts, trained_on_al)
+    assert resolved.basins == ("AL", "", "")
+    assert resolve_basin_inputs(artifacts, metric_set(**{PRIMARY: 50.0})) is artifacts
+    # Tagged with their order and count, blanks included, and read back as is.
+    tags = basin_input_tags(resolved)
+    assert tags == {"basin_inputs": "AL,,"}
+    assert basin_inputs(tags) == ("AL", "", "")
     assert basin_inputs({}) == ()  # a version from before the basin input
-    assert basin_inputs({"basin_inputs": "AL,EP,CP"}) == ("AL", "EP", "CP")
-    assert basin_inputs(
-        {"basin_inputs": "AL,EP,CP", "trained_basins": "AL,EP"}
-    ) == ("AL", "EP", "")
-    assert basin_input_tags(type("A", (), {"basins": ("AL", "EP")})()) == {
-        "basin_inputs": "AL,EP",
-    }
-    assert basin_input_tags(type("A", (), {"basins": ()})()) == {}
+    # One configured basin, never trained on: still one column.
+    assert basin_inputs(basin_input_tags(SimpleNamespace(basins=("",)))) == ("",)
+    # PINN's candidate keeps its own columns.
+    pinn = SimpleNamespace(basins=("AL", "", ""), candidate_basins=("AL", "EP", "CP"))
+    pinn_tags = basin_input_tags(pinn)
+    assert basin_inputs(pinn_tags, "candidate_basin_inputs") == ("AL", "EP", "CP")
+    assert len(TRAINING_BASINS) == 3
 
 
 def test_the_basin_input_builders_add_one_column_or_channel_per_basin():

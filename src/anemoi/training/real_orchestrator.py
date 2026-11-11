@@ -48,7 +48,7 @@ from ..tracking.registry import (
     latent_signature,
 )
 from ..tracking.tags import Trigger
-from .basin_gates import basin_tags, with_basin_baseline
+from .basin_gates import basin_tags, resolve_basin_inputs
 from .curriculum import CurriculumRun
 from .orchestrator import OrchestrationError, RunOutcome, Task
 from .promotion import MetricSet, PromotionDecision, evaluate_promotion
@@ -300,10 +300,14 @@ class RealOrchestratorRunner:
         except Exception as exc:  # noqa: BLE001 - one model's failure must not crash the schedule
             return RunOutcome(task=task.name, ok=False, detail=f"{type(exc).__name__}: {exc}")
 
-        # What each basin has to beat to count as verified, on the same
-        # validation storms (docs/multi_basin.md): recorded with the
-        # metrics, and read by the promotion decision and the tags below.
-        val_metrics = with_basin_baseline(val_metrics, self.tracks)
+        if task.name in self.trained_artifacts:
+            # Blank the basin input columns it had no training samples from,
+            # before anything reads them: the joint latents fusion/diffusion
+            # train on, and the `basin_inputs` tag serving builds from
+            # (docs/multi_basin.md).
+            self.trained_artifacts[task.name] = resolve_basin_inputs(
+                self.trained_artifacts[task.name], val_metrics,
+            )
         self.curriculum_runs[task.name] = run
         self.val_metrics[task.name] = val_metrics
 

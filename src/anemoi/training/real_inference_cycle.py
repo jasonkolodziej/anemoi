@@ -115,7 +115,7 @@ def _run_pinn(
     any of the same real reasons the other models' path can: no
     registered version, no real live feature, no checkpoint to load.
     """
-    from ..tracking.experiment_tracking import basin_inputs
+    from ..tracking.experiment_tracking import CANDIDATE_BASIN_INPUTS_TAG, basin_inputs
     from ..tracking.registry import Stage
     from .real_inference import (
         InferenceLoadError,
@@ -137,6 +137,7 @@ def _run_pinn(
     raw = build_live_pinn_x(
         track, current, candidate_model, cache_dir, fields_fetcher=fields_fetcher,
         basins=basin_inputs(version.tags),
+        candidate_basins=basin_inputs(version.tags, CANDIDATE_BASIN_INPUTS_TAG),
     )
     if raw is None:
         return None
