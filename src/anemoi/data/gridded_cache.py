@@ -24,6 +24,7 @@ fail a fetch run, and either pass can be re-run alone.
 
 from __future__ import annotations
 
+import io
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -91,10 +92,22 @@ def cache_path(cache_dir: Path | str, task: FetchTask) -> Path:
 
 
 def save_cached_fields(path: Path, fields: GriddedFields, task: FetchTask) -> None:
+    """Write one sample's ``.npz``, start to end in a single write.
+
+    ``np.savez_compressed`` straight to a file seeks back to fill in each zip
+    entry's header. On a GCS FUSE mount (Cloud Run's ``/cache``) that breaks
+    gcsfuse's streaming upload: it logs a ``BufferedWriteHandler
+    .OutOfOrderError`` per file and falls back to staging the whole file
+    locally first. The file comes out intact either way, but building the
+    archive in memory (a sample is tens of KB) and writing it once lets the
+    upload stream, on any filesystem.
+    """
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     arrays = {name: getattr(fields, name) for name in _ARRAY_FIELDS}
+    buffer = io.BytesIO()
     np.savez_compressed(
-        path,
+        buffer,
         storm_id=task.storm_id,
         valid_time=task.valid_time.isoformat(),
         lat=task.lat,
@@ -104,6 +117,7 @@ def save_cached_fields(path: Path, fields: GriddedFields, task: FetchTask) -> No
         source=fields.source,
         **arrays,
     )
+    path.write_bytes(buffer.getbuffer())
 
 
 def load_cached_fields(path: Path | str) -> GriddedFields:
