@@ -83,6 +83,31 @@ def test_real_state_lists_the_real_hurdat2_storm(client):
     assert storms[0]["peak_wind_kt"] == 65.0
 
 
+def test_the_archive_storms_listed_are_the_newest_across_basins(tmp_path):
+    """The archive can hold several basins one after the other
+    (`data.hurdat2_source`): "the most recent storms" is by when each
+    ended, not by which basin's file came last (docs/multi_basin.md)."""
+    from anemoi.api.real_state import RealState
+
+    def storm(storm_id: str, day: int) -> str:
+        return (
+            f"{storm_id},     X,     2,\n"
+            f"202609{day:02d}, 0000,  , TS, 20.0N,  60.0W,  40, 1005, {RADII},\n"
+            f"202609{day:02d}, 0600,  , TS, 20.5N,  61.0W,  45, 1002, {RADII},\n"
+        )
+
+    path = tmp_path / "combined.txt"
+    path.write_text(
+        storm("AL012026", 1) + storm("AL022026", 20)       # the Atlantic file...
+        + storm("EP012026", 5) + storm("EP022026", 10)     # ...then the Northeast Pacific's
+    )
+    state = RealState(
+        hurdat2_path=path, registry_root=tmp_path / "registry", cache_dir=tmp_path / "c",
+        n_recent=2,
+    )
+    assert list(state.storms) == ["EP022026", "AL022026"]
+
+
 def test_real_state_monitoring_and_retraining_routes_do_not_500(client):
     """A real, previously-undiscovered bug: RealState had no
     drift_report/skew_report/pending_retrain_jobs at all, despite its own

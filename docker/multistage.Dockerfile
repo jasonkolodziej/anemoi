@@ -65,10 +65,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Baked in at build time under the filename docker/cloud-run-training's
 # entrypoint.sh expects (HURDAT2_PATH default).
-# The newest Atlantic HURDAT2 NHC has published, with a manifest
-# (hurdat2-atl.json: file, sha256, last season) beside it -- not a pinned
-# 2023 file every training run re-read (#216). Training jobs refresh it again
-# at start (entrypoint.sh).
+# The newest HURDAT2 NHC has published for every configured basin
+# (configs/curriculum.yaml data.basins: the Atlantic archive, and the
+# Northeast Pacific one for EP/CP), in one file, with a manifest
+# (hurdat2-atl.json: files, sha256, last season, basins) beside it -- not a
+# pinned 2023 file every training run re-read (#216). The path keeps its
+# name; entrypoint.sh and deployed jobs point at it. Training jobs refresh
+# it again at start (entrypoint.sh).
 RUN mkdir -p /app/data && ANEMOI_CONFIG_DIR=/app/configs /app/.venv/bin/anemoi hurdat2-fetch --out /app/data/hurdat2-atl.txt
 
 # ---------------------------------------------------------------------------

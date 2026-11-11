@@ -39,6 +39,7 @@ CONFIGS = ROOT / "configs"
 CONSUMERS = (
     "anemoi.time_utils",
     "anemoi.data.availability",
+    "anemoi.data.basins",
     "anemoi.data.besttrack",
     "anemoi.data.gdas_cache",
     "anemoi.inference.scheduler",
