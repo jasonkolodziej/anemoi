@@ -221,7 +221,11 @@ class RealState:
                 "or pass hurdat2_path explicitly"
             )
         tracks = parse_hurdat2_file(hurdat2_path)
-        recent = sorted(tracks, key=lambda t: t.season)[-n_recent:]
+        # By when each storm ended, not by its place in the file: the
+        # archive can hold several basins one after the other
+        # (`data.hurdat2_source`), and the last rows of the file are then
+        # one basin's storms, not the newest.
+        recent = sorted(tracks, key=lambda t: (t.season, t.fixes[-1].valid_time))[-n_recent:]
         #: Stored cycle labels by storm (#175), listed from durable storage
         #: once per process (`_ensure_cycle_index`); None until that works.
         self._cycle_index: dict[str, set[str]] | None = None
@@ -658,7 +662,7 @@ class RealState:
         if fix_source == "persisted":
             extra_flags.append("vitals_source:persisted")
         basin = storm_basin(storm_id)
-        trained_basin = basin in self.registry.trained_basins()
+        trained_basin = basin in self.registry.verified_basins()
         if not trained_basin:
             extra_flags.append(f"basin_untrained:{basin}")
 

@@ -38,6 +38,7 @@ a PyG dependency.
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,9 +50,9 @@ from ..data.features import sanitize_field_pixels
 from ..data.gridded_cache import FetchTask, cache_path, load_cached_fields
 from ..data.sources import Flavor
 from ..data.splits import Split, assign_splits, filter_tracks
-from ..metrics.track import ForecastPoint, VerificationPair, to_metric_dict, verify
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
+from .basin_input import DEFAULT_BASIN_INPUTS, with_basin_columns
 from .curriculum import Curriculum, CurriculumRun, StageResult, StageSpec
 from .device import get_device
 from .promotion import MetricSet
@@ -59,9 +60,10 @@ from .real_run import (
     LEAD_STEPS,
     RunArtifacts,
     boundaries_for_tracks,
-    displacement_to_latlon,
+    displacement_validation_metrics,
     freeze_encoder,
     iter_stage_windows,
+    window_validation_metrics,
 )
 
 GNN_FIELD_NAMES: tuple[str, ...] = (
@@ -151,14 +153,26 @@ def _node_features(fields, topo: MeshTopology) -> np.ndarray | None:
     return out
 
 
+def gnn_input(
+    fields, topo: MeshTopology, storm_id: str, basins: Sequence[str] = (),
+) -> np.ndarray | None:
+    """The GNN's node features for one window's fields: `_node_features`,
+    plus the storm's basin on every node for a model trained with
+    ``basins`` (`basin_input`). ``None`` when the fields can't be used."""
+    nodes = _node_features(fields, topo)
+    return None if nodes is None else with_basin_columns(nodes, storm_id, basins)
+
+
 @dataclass(frozen=True, slots=True)
 class GnnStageSamples:
-    x: np.ndarray  # (N, n_nodes, NODE_FEATURES)
+    x: np.ndarray  # (N, n_nodes, NODE_FEATURES + len(basins))
     y: np.ndarray
     mask: np.ndarray
     base_lat: np.ndarray
     base_lon: np.ndarray
     topology: MeshTopology | None
+    storm_ids: tuple[str, ...] = ()
+    persistence: np.ndarray | None = None  # `real_run.StageWindow.persistence`
 
     def __len__(self) -> int:
         return len(self.x)
@@ -171,6 +185,7 @@ def build_gnn_samples(
     n_augment: int = 1,
     noise: WorkingTrackNoise | None = None,
     stride: int = GNN_STRIDE,
+    basins: Sequence[str] = (),
 ) -> GnnStageSamples:
     """Same windows/targets as `real_run.build_stage_samples`; ``x`` is a
     lattice-graph node-feature block built from the real cached
@@ -183,6 +198,8 @@ def build_gnn_samples(
     mask_rows: list[np.ndarray] = []
     base_lat_rows: list[float] = []
     base_lon_rows: list[float] = []
+    storm_ids: list[str] = []
+    persistence_rows: list[np.ndarray] = []
     topo: MeshTopology | None = None
     shape: tuple[int, int] | None = None
 
@@ -205,7 +222,7 @@ def build_gnn_samples(
                 "-- cache was built with inconsistent box_deg"
             )
 
-        node_features = _node_features(fields, topo)
+        node_features = gnn_input(fields, topo, sw.storm_id, basins)
         if node_features is None:
             continue
         x_rows.append(node_features)
@@ -213,11 +230,13 @@ def build_gnn_samples(
         mask_rows.append(sw.mask)
         base_lat_rows.append(sw.current.lat)
         base_lon_rows.append(sw.current.lon)
+        storm_ids.append(sw.storm_id)
+        persistence_rows.append(sw.persistence)
 
     n_leads = len(LEAD_STEPS)
     if not x_rows:
         return GnnStageSamples(
-            x=np.empty((0, 0, NODE_FEATURES)),
+            x=np.empty((0, 0, NODE_FEATURES + len(basins))),
             y=np.empty((0, n_leads, 3)),
             mask=np.empty((0, n_leads), dtype=bool),
             base_lat=np.empty((0,)),
@@ -231,6 +250,8 @@ def build_gnn_samples(
         base_lat=np.array(base_lat_rows),
         base_lon=np.array(base_lon_rows),
         topology=topo,
+        storm_ids=tuple(storm_ids),
+        persistence=np.stack(persistence_rows),
     )
 
 
@@ -284,6 +305,7 @@ def train_gnn_stage(
     *,
     n_augment: int = 3,
     device=None,
+    basins: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """GNN analog of `real_run.train_lstm_stage` -- see that function for
     the loss/verification design this mirrors, including the extra
@@ -296,8 +318,10 @@ def train_gnn_stage(
     torch = require_torch()
     device = device or get_device()
 
-    train_samples = build_gnn_samples(train_tracks, cache_dir, rng, n_augment=n_augment)
-    val_samples = build_gnn_samples(val_tracks, cache_dir, rng, n_augment=1)
+    train_samples = build_gnn_samples(
+        train_tracks, cache_dir, rng, n_augment=n_augment, basins=basins,
+    )
+    val_samples = build_gnn_samples(val_tracks, cache_dir, rng, n_augment=1, basins=basins)
     if len(train_samples) == 0 or len(val_samples) == 0:
         raise ValueError(
             f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
@@ -351,31 +375,12 @@ def train_gnn_stage(
         val_loss = float(masked_mse(pred_val_z, yv, mv).item())
         pred_val = pred_val_z.cpu().numpy() * y_std + y_mean
 
-    pairs: list[VerificationPair] = []
-    for si in range(len(val_samples)):
-        base_lat, base_lon = val_samples.base_lat[si], val_samples.base_lon[si]
-        for li, lead_hours in enumerate(DEFAULT_LEADS):
-            if not val_samples.mask[si, li]:
-                continue
-            pred_dx, pred_dy, pred_wind = pred_val[si, li]
-            pred_lat, pred_lon = displacement_to_latlon(base_lat, base_lon, pred_dx, pred_dy)
-            obs_dx, obs_dy, obs_wind = val_samples.y[si, li]
-            obs_lat, obs_lon = displacement_to_latlon(base_lat, base_lon, obs_dx, obs_dy)
-            pairs.append(
-                VerificationPair(
-                    forecast=ForecastPoint(
-                        lead_hours=lead_hours, lat=pred_lat, lon=pred_lon,
-                        max_wind_kt=float(pred_wind),
-                    ),
-                    obs_lat=obs_lat,
-                    obs_lon=obs_lon,
-                    obs_wind_kt=float(obs_wind),
-                )
-            )
-
-    if not pairs:
-        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
-    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
+    val_metrics = displacement_validation_metrics(
+        stage, val_samples.base_lat, val_samples.base_lon, pred_val, val_samples.y,
+        val_samples.mask,
+        val_storm_ids=val_samples.storm_ids, train_storm_ids=train_samples.storm_ids,
+        persistence=val_samples.persistence,
+    )
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 
@@ -392,6 +397,7 @@ def train_gnn_stage_streaming(
     num_workers: int = 0,
     stride: int = GNN_STRIDE,
     device=None,
+    basins: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_gnn_stage`'s streaming analog (`docs/streaming_dataloader.md`) --
     same return contract, real per-batch training via a `torch.utils.data
@@ -457,7 +463,7 @@ def train_gnn_stage_streaming(
                 f"ragged cached field shape for {sw.storm_id}: {fields.shape} != "
                 f"{mesh_state['shape']} -- cache was built with inconsistent box_deg"
             )
-        return _node_features(fields, mesh_state["topo"])
+        return gnn_input(fields, mesh_state["topo"], sw.storm_id, basins)
 
     n_leads = len(LEAD_STEPS)
     raw_train_ds = WindowDataset(train_windows, build_x)
@@ -548,31 +554,7 @@ def train_gnn_stage_streaming(
         val_loss = val_diff2 / max(val_mask, 1.0)
         pred_val = np.concatenate(pred_val_rows, axis=0) * y_std + y_mean
 
-    pairs: list[VerificationPair] = []
-    for si, sw in enumerate(val_windows):
-        base_lat, base_lon = sw.current.lat, sw.current.lon
-        for li, lead_hours in enumerate(DEFAULT_LEADS):
-            if not sw.mask[li]:
-                continue
-            pred_dx, pred_dy, pred_wind = pred_val[si, li]
-            pred_lat, pred_lon = displacement_to_latlon(base_lat, base_lon, pred_dx, pred_dy)
-            obs_dx, obs_dy, obs_wind = sw.y[li]
-            obs_lat, obs_lon = displacement_to_latlon(base_lat, base_lon, obs_dx, obs_dy)
-            pairs.append(
-                VerificationPair(
-                    forecast=ForecastPoint(
-                        lead_hours=lead_hours, lat=pred_lat, lon=pred_lon,
-                        max_wind_kt=float(pred_wind),
-                    ),
-                    obs_lat=obs_lat,
-                    obs_lon=obs_lon,
-                    obs_wind_kt=float(obs_wind),
-                )
-            )
-
-    if not pairs:
-        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
-    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
+    val_metrics = window_validation_metrics(stage, val_windows, pred_val, train_windows)
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 
@@ -589,6 +571,7 @@ def run_gnn_curriculum(
     streaming: bool = False,
     batch_size: int = 32,
     num_workers: int = 0,
+    basins: Sequence[str] | None = None,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the GNN baseline
     against real cached GriddedFields, treated as a lattice mesh (see
@@ -607,6 +590,9 @@ def run_gnn_curriculum(
     from ..models.gnn import build_gnn
 
     require_torch()
+    # See `real_run.run_lstm_curriculum` for ``basins``.
+    basins = DEFAULT_BASIN_INPUTS if basins is None else tuple(basins)
+    node_features = NODE_FEATURES + len(basins)
     rng = np.random.default_rng(seed)
     curriculum = Curriculum.standard("gnn", **(curriculum_kwargs or {}))
     run = CurriculumRun(curriculum=curriculum)
@@ -622,7 +608,7 @@ def run_gnn_curriculum(
 
         if model is None:
             model, _spec = build_gnn(
-                node_features=NODE_FEATURES, edge_features=EDGE_FEATURES,
+                node_features=node_features, edge_features=EDGE_FEATURES,
                 hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
             )
 
@@ -630,7 +616,7 @@ def run_gnn_curriculum(
         stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
         model, train_loss, val_loss, val_metrics, stats = stage_fn(
             model, stage, train_tracks, val_tracks, cache_dir, rng,
-            n_augment=n_augment, **stage_kwargs,
+            n_augment=n_augment, basins=basins, **stage_kwargs,
         )
 
         torch = require_torch()
@@ -655,11 +641,11 @@ def run_gnn_curriculum(
     assert val_metrics is not None
     x_mean, x_std, y_mean, y_std = stats
     arch_params = {
-        "node_features": NODE_FEATURES, "edge_features": EDGE_FEATURES,
+        "node_features": node_features, "edge_features": EDGE_FEATURES,
         "hidden_dim": hidden_dim, "lead_hours": list(DEFAULT_LEADS),
     }
     artifacts = RunArtifacts(
         model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
-        arch_params=arch_params,
+        arch_params=arch_params, basins=basins,
     )
     return run, val_metrics, artifacts

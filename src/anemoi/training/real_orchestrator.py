@@ -32,6 +32,7 @@ from ..data.splits import latest_final_season
 from ..tracking.checkpoint_store import CheckpointStore
 from ..tracking.experiment_tracking import (
     arch_params_tag,
+    basin_input_tags,
     build_run_tags,
     candidate_tags,
     gridded_input_tags,
@@ -47,6 +48,7 @@ from ..tracking.registry import (
     latent_signature,
 )
 from ..tracking.tags import Trigger
+from .basin_gates import basin_tags, resolve_basin_inputs
 from .curriculum import CurriculumRun
 from .orchestrator import OrchestrationError, RunOutcome, Task
 from .promotion import MetricSet, PromotionDecision, evaluate_promotion
@@ -298,6 +300,14 @@ class RealOrchestratorRunner:
         except Exception as exc:  # noqa: BLE001 - one model's failure must not crash the schedule
             return RunOutcome(task=task.name, ok=False, detail=f"{type(exc).__name__}: {exc}")
 
+        if task.name in self.trained_artifacts:
+            # Blank the basin input columns it had no training samples from,
+            # before anything reads them: the joint latents fusion/diffusion
+            # train on, and the `basin_inputs` tag serving builds from
+            # (docs/multi_basin.md).
+            self.trained_artifacts[task.name] = resolve_basin_inputs(
+                self.trained_artifacts[task.name], val_metrics,
+            )
         self.curriculum_runs[task.name] = run
         self.val_metrics[task.name] = val_metrics
 
@@ -347,9 +357,14 @@ class RealOrchestratorRunner:
         if arch_params is not None:
             tag_dict["arch_params"] = arch_params
         tag_dict.update(candidate_tags(artifacts))
+        tag_dict.update(basin_input_tags(artifacts))
         tag_dict.update(standardization_tags(artifacts))
         tag_dict.update(gridded_input_tags(self.gdas_cache_dir))
         tag_dict.update(training_data_tags(self.hurdat2_path, self.tracks))
+        # After training_data_tags: the basins this version really had
+        # samples from, and the ones it is verified in, replace the list
+        # of basins in the storm archive.
+        tag_dict.update(basin_tags(val_metrics))
         version = self.registry.register(
             task.name,
             run_id=f"orchestrator-{datetime.now(UTC):%Y%m%dT%H%M%S}",

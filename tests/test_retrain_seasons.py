@@ -17,9 +17,12 @@ from pathlib import Path
 import pytest
 
 from anemoi.data.besttrack import Fix, Track, TrackQuality
+from anemoi.data.hurdat2 import parse_hurdat2
 from anemoi.data.hurdat2_source import (
     INDEX_URL,
+    NORTHEAST_PACIFIC,
     PINNED_NAME,
+    archives_for,
     describe,
     fetch_latest_hurdat2,
     latest_name,
@@ -49,9 +52,11 @@ def test_fetch_writes_the_file_and_a_manifest(tmp_path):
         INDEX_URL: LISTING.encode(),
         INDEX_URL + "hurdat2-1851-2024-052025.txt": b"AL012024, X, 1,\n",
     }
-    manifest = fetch_latest_hurdat2(tmp_path / "h.txt", fetch=files.__getitem__)
+    manifest = fetch_latest_hurdat2(tmp_path / "h.txt", basins=("AL",), fetch=files.__getitem__)
     assert (tmp_path / "h.txt").read_bytes() == b"AL012024, X, 1,\n"
     assert manifest["last_season"] == 2024 and manifest["fallback"] is False
+    assert manifest["basins"] == ["AL"]
+    assert manifest["url"] == INDEX_URL + "hurdat2-1851-2024-052025.txt"
     assert json.loads((tmp_path / "h.json").read_text())["file"] == "hurdat2-1851-2024-052025.txt"
     tags = describe(tmp_path / "h.txt")
     assert tags["hurdat2_file"] == "hurdat2-1851-2024-052025.txt"
@@ -64,7 +69,7 @@ def test_an_unreadable_listing_falls_back_to_the_pinned_file_and_says_so(tmp_pat
             raise OSError("403")
         return b"pinned"
 
-    manifest = fetch_latest_hurdat2(tmp_path / "h.txt", fetch=fetch)
+    manifest = fetch_latest_hurdat2(tmp_path / "h.txt", basins=("AL",), fetch=fetch)
     assert manifest["file"] == PINNED_NAME
     assert manifest["fallback"] is True and "403" in manifest["fallback_reason"]
 
@@ -75,6 +80,107 @@ def test_no_file_at_all_raises(tmp_path):
 
     with pytest.raises(OSError):
         fetch_latest_hurdat2(tmp_path / "h.txt", fetch=fetch)
+
+
+# ---- more than the Atlantic (docs/multi_basin.md) -------------------------------
+
+_AL = (
+    b"AL012024,            ALBERTO,      1,\n"
+    b"20240619, 1800,  , TS, 22.2N,  95.2W,  35, 1001,\n"
+)
+#: No final newline, as a served file can be: the next header must still
+#: start its own line.
+_NEPAC = (
+    b"EP012024,             ALETTA,      1,\n"
+    b"20240704, 1200,  , TS, 17.6N, 106.3W,  35, 1005,\n"
+    b"CP012024,               HONE,      1,\n"
+    b"20240822, 1800,  , TS, 15.9N, 146.0W,  35, 1005,"
+)
+
+
+def test_the_newest_northeast_pacific_release_is_picked():
+    listing = LISTING + '<a href="hurdat2-nepac-1949-2023-042624.txt">x</a>'
+    assert latest_name(listing, NORTHEAST_PACIFIC) == "hurdat2-nepac-1949-2024-031725.txt"
+    # Each archive's picker sees only its own files.
+    assert latest_name(LISTING) == "hurdat2-1851-2024-052025.txt"
+
+
+def test_which_archives_hold_which_basins():
+    assert [a.key for a in archives_for(("AL",))] == ["atl"]
+    assert [a.key for a in archives_for(("CP",))] == ["nepac"]
+    assert [a.key for a in archives_for(("EP", "AL", "CP"))] == ["atl", "nepac"]
+    with pytest.raises(ValueError, match="WP"):
+        archives_for(("AL", "WP"))  # JTWC's, not NHC's
+
+
+def test_fetching_several_basins_writes_one_file_the_parser_reads(tmp_path):
+    files = {
+        INDEX_URL: LISTING.encode(),
+        INDEX_URL + "hurdat2-1851-2024-052025.txt": _AL,
+        INDEX_URL + "hurdat2-nepac-1949-2024-031725.txt": _NEPAC,
+    }
+    manifest = fetch_latest_hurdat2(
+        tmp_path / "h.txt", basins=("AL", "EP", "CP"), fetch=files.__getitem__,
+    )
+    tracks = parse_hurdat2((tmp_path / "h.txt").read_text())
+    assert [t.storm_id for t in tracks] == ["AL012024", "EP012024", "CP012024"]
+    assert manifest["basins"] == ["AL", "EP", "CP"]
+    assert manifest["file"] == "hurdat2-1851-2024-052025.txt+hurdat2-nepac-1949-2024-031725.txt"
+    assert manifest["last_season"] == 2024 and manifest["fallback"] is False
+    assert [s["file"] for s in manifest["sources"]] == manifest["file"].split("+")
+    assert all(len(s["sha256"]) == 64 for s in manifest["sources"])
+    # What training records on a registered version.
+    tags = describe(tmp_path / "h.txt")
+    assert tags["hurdat2_file"] == manifest["file"]
+    assert tags["hurdat2_sha256"] == manifest["sha256"]
+
+
+def test_the_default_is_the_configured_basins(tmp_path):
+    from anemoi.data.basins import TRAINING_BASINS
+
+    files = {
+        INDEX_URL: LISTING.encode(),
+        INDEX_URL + "hurdat2-1851-2024-052025.txt": _AL,
+        INDEX_URL + "hurdat2-nepac-1949-2024-031725.txt": _NEPAC,
+    }
+    manifest = fetch_latest_hurdat2(tmp_path / "h.txt", fetch=files.__getitem__)
+    assert set(TRAINING_BASINS) <= set(manifest["basins"])
+
+
+def test_an_archive_that_cannot_be_downloaded_leaves_the_file_as_it_was(tmp_path):
+    """All or nothing: a file holding fewer basins than asked for would be
+    trained on as if it were complete."""
+    dest = tmp_path / "h.txt"
+    dest.write_bytes(b"what the image shipped")
+    files = {INDEX_URL: LISTING.encode(), INDEX_URL + "hurdat2-1851-2024-052025.txt": _AL}
+    with pytest.raises(KeyError):
+        fetch_latest_hurdat2(dest, basins=("AL", "EP"), fetch=files.__getitem__)
+    assert dest.read_bytes() == b"what the image shipped"
+
+
+def test_a_listing_without_one_archive_falls_back_for_that_archive_only(tmp_path):
+    listing = '<a href="hurdat2-1851-2024-052025.txt">x</a>'  # no NE Pacific file
+    files = {
+        INDEX_URL: listing.encode(),
+        INDEX_URL + "hurdat2-1851-2024-052025.txt": _AL,
+        INDEX_URL + NORTHEAST_PACIFIC.pinned_name: _NEPAC,
+    }
+    manifest = fetch_latest_hurdat2(
+        tmp_path / "h.txt", basins=("AL", "EP"), fetch=files.__getitem__,
+    )
+    atl, nepac = manifest["sources"]
+    assert atl["fallback"] is False
+    assert nepac["fallback"] is True and nepac["file"] == NORTHEAST_PACIFIC.pinned_name
+    assert manifest["fallback"] is True and "nepac" in manifest["fallback_reason"]
+
+
+def test_training_reads_only_the_configured_basins():
+    from anemoi.data.basins import basins_of, select_basins
+
+    tracks = parse_hurdat2((_AL + _NEPAC).decode())
+    assert basins_of(tracks) == ("AL", "CP", "EP")
+    assert [t.storm_id for t in select_basins(tracks, ("AL", "EP"))] == ["AL012024", "EP012024"]
+    assert select_basins(tracks, ("WP",)) == []
 
 
 # ---- splits -----------------------------------------------------------------

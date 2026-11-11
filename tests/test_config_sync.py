@@ -39,6 +39,7 @@ CONFIGS = ROOT / "configs"
 CONSUMERS = (
     "anemoi.time_utils",
     "anemoi.data.availability",
+    "anemoi.data.basins",
     "anemoi.data.besttrack",
     "anemoi.data.gdas_cache",
     "anemoi.inference.scheduler",
@@ -198,6 +199,12 @@ _REFUSALS = [
     ("label source leaking into inputs", "curriculum.yaml",
      r"^  input_sources: \[gdas_gfs, besttrack_working, goes, sst_ohc\]$",
      "  input_sources: [gdas_gfs, besttrack_final]", "labels-only"),
+    ("a basin that isn't one", "curriculum.yaml", r"^  basins: \[AL, EP, CP\]$",
+     "  basins: [AL, XX]", "data.basins must be a non-empty list of distinct ATCF basins"),
+    ("no basin to train on", "curriculum.yaml", r"^  basins: \[AL, EP, CP\]$",
+     "  basins: []", "data.basins must be a non-empty list"),
+    ("an allowance that isn't a fraction", "monitoring.yaml", r"^  new_basin_tolerance: 0.05$",
+     "  new_basin_tolerance: 5", "promotion.new_basin_tolerance must be a fraction"),
 ]
 
 

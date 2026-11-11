@@ -142,18 +142,63 @@ HURDAT2_LAST_SEASON_TAG = "hurdat2_last_season"
 PINNED_HURDAT2_LAST_SEASON = 2023
 
 #: Registry tag: the ATCF basins a version had training samples from,
-#: sorted and comma-separated ("AL", "AL,CP,EP"). What `ModelRegistry
-#: .trained_basins` reads to say which storms a forecast is in distribution
-#: for, instead of a hard-coded list (docs/multi_basin.md). It must come
-#: from the examples training consumed -- not the archive it was given,
-#: which also holds the held-out seasons and storms a model may skip -- so
-#: it is set by the training runners that count them (phase 1), never by
+#: sorted and comma-separated ("AL", "AL,CP,EP"), read by `ModelRegistry
+#: .trained_basins` (docs/multi_basin.md). It must come from the examples
+#: training consumed -- not the archive it was given, which also holds the
+#: held-out seasons and storms a model may skip -- so it is set from the
+#: runners' per-basin sample counts (`training.basin_gates.basin_tags`; a
+#: gridded model has none where no field was cached), never by
 #: `training_data_tags`.
 TRAINED_BASINS_TAG = "trained_basins"
-#: What a version without `TRAINED_BASINS_TAG` trained on: every one so far
-#: was trained on NHC's Atlantic HURDAT2 file alone, the only one
-#: `data.hurdat2_source` fetches.
+#: What a version without `TRAINED_BASINS_TAG` trained on: every one before
+#: it was trained on NHC's Atlantic HURDAT2 file alone, the only one
+#: `data.hurdat2_source` fetched then.
 LEGACY_TRAINED_BASINS = frozenset({"AL"})
+
+#: Registry tag: of the basins a version trained on, the ones where it beat
+#: persistence on validation (`training.basin_gates`), sorted and
+#: comma-separated; empty when it beat it nowhere. What `ModelRegistry
+#: .verified_basins` reads to say which storms a forecast is in
+#: distribution for. Absent on versions before it: `LEGACY_TRAINED_BASINS`,
+#: which is what they were served as.
+VERIFIED_BASINS_TAG = "verified_basins"
+
+
+#: Registry tag: a version's basin input columns, in order, comma-separated
+#: (`training.basin_input`), as resolved by `training.basin_gates
+#: .resolve_basin_inputs` -- a column for a basin it had no training
+#: samples from is blank ("AL,EP," is three columns, the last never on).
+#: What the serving side builds its inputs with, exactly as the joint
+#: latents were built. Absent on versions before the basin input: no
+#: such columns.
+BASIN_INPUTS_TAG = "basin_inputs"
+#: The same for PINN's candidate-generator LSTM, which trains on the track
+#: archive rather than the field cache, so its columns can differ.
+CANDIDATE_BASIN_INPUTS_TAG = "candidate_basin_inputs"
+
+
+def basin_input_tags(artifacts: object) -> dict[str, str]:
+    """``artifacts``' basin input columns (`real_run.RunArtifacts.basins`,
+    and ``candidate_basins`` for PINN) as registry tags. Set only for a
+    model that has columns -- so a version without the tag is
+    unambiguously one with none; one with columns, all blank, still gets
+    it ("," is two)."""
+    tags: dict[str, str] = {}
+    for tag, field_name in (
+        (BASIN_INPUTS_TAG, "basins"), (CANDIDATE_BASIN_INPUTS_TAG, "candidate_basins"),
+    ):
+        columns = tuple(getattr(artifacts, field_name, ()) or ())
+        if columns:
+            tags[tag] = ",".join(columns)
+    return tags
+
+
+def basin_inputs(tags: dict[str, str], tag: str = BASIN_INPUTS_TAG) -> tuple[str, ...]:
+    """A registered version's basin input columns, from its tags, for
+    building the inputs it is served with. ``()`` for a version without
+    them."""
+    raw = tags.get(tag)
+    return () if raw is None else tuple(raw.split(","))
 
 
 def training_data_tags(hurdat2_path: object, tracks: list) -> dict[str, str]:

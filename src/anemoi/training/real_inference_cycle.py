@@ -16,7 +16,7 @@ has a fixed ``n_models=5`` and cannot run at all with fewer.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -54,8 +54,11 @@ class InferenceCycleError(RuntimeError):
 
 def _build_live_x(
     name: str, track: Track, current: Fix, cache_dir: Path | str,
-    *, fields_fetcher: FieldsFetcher | None = None,
+    *, fields_fetcher: FieldsFetcher | None = None, basins: Sequence[str] = (),
 ):
+    """``name``'s live input. ``basins`` is what the version being served
+    was trained with (`tracking.experiment_tracking.basin_inputs`): its
+    input has to be built the same way."""
     from .real_inference_live import (
         build_live_cnn_x,
         build_live_gnn_x,
@@ -64,13 +67,14 @@ def _build_live_x(
     )
 
     if name == "lstm":
-        return build_live_lstm_x(track, current)
+        return build_live_lstm_x(track, current, basins=basins)
+    gridded = {"fields_fetcher": fields_fetcher, "basins": basins}
     if name == "cnn":
-        return build_live_cnn_x(track, current, cache_dir, fields_fetcher=fields_fetcher)
+        return build_live_cnn_x(track, current, cache_dir, **gridded)
     if name == "transformer":
-        return build_live_transformer_x(track, current, cache_dir, fields_fetcher=fields_fetcher)
+        return build_live_transformer_x(track, current, cache_dir, **gridded)
     if name == "gnn":
-        return build_live_gnn_x(track, current, cache_dir, fields_fetcher=fields_fetcher)
+        return build_live_gnn_x(track, current, cache_dir, **gridded)
     raise InferenceCycleError(f"no real live feature builder for {name!r}")
 
 
@@ -111,6 +115,7 @@ def _run_pinn(
     any of the same real reasons the other models' path can: no
     registered version, no real live feature, no checkpoint to load.
     """
+    from ..tracking.experiment_tracking import CANDIDATE_BASIN_INPUTS_TAG, basin_inputs
     from ..tracking.registry import Stage
     from .real_inference import (
         InferenceLoadError,
@@ -131,6 +136,8 @@ def _run_pinn(
 
     raw = build_live_pinn_x(
         track, current, candidate_model, cache_dir, fields_fetcher=fields_fetcher,
+        basins=basin_inputs(version.tags),
+        candidate_basins=basin_inputs(version.tags, CANDIDATE_BASIN_INPUTS_TAG),
     )
     if raw is None:
         return None
@@ -333,6 +340,7 @@ def build_real_deterministic_fn(
     def deterministic_fn(plan: CyclePlan, current: Fix):
         from ..inference.cycle import DeterministicForecast, fusion_weights
         from ..models.base import DEFAULT_LEADS
+        from ..tracking.experiment_tracking import basin_inputs
         from ..tracking.registry import Stage
         from .real_inference import (
             InferenceLoadError,
@@ -400,6 +408,7 @@ def build_real_deterministic_fn(
                 else:
                     raw = _build_live_x(
                         name, track, current, cache_dir, fields_fetcher=shared_fetcher,
+                        basins=basin_inputs(version.tags),
                     )
                     if raw is None:
                         if _gdas_likely_unpublished(current.valid_time):

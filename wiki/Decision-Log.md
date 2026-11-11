@@ -761,6 +761,20 @@ The API job in `deploy.yml` runs it, since the cycle's product maths is what the
 
 **Enforced by** `tests/test_registry.py` (no champion, a champion without the tag, champions tagged, one Atlantic-only champion keeping a basin out, an unpromoted candidate changing nothing), `tests/test_retrain_seasons.py` (the tag on a run), `tests/test_api_real_state.py` (an Eastern Pacific storm flagged until every champion is tagged with it).
 
+### 57. One model, three basins: the Eastern and Central Pacific (phase 1 of docs/multi_basin.md) — *data, training, design*
+
+**Decided:** one model per architecture for every basin, not one per basin; the Atlantic is the basin that can block a promotion.
+
+- **Data.** `curriculum.yaml` `data.basins: [AL, EP, CP]`. `anemoi hurdat2-fetch` writes the Atlantic and Northeast Pacific HURDAT2 to one file, all or nothing, each source in the manifest. Every training and cache command reads the configured basins from it. The API lists the newest archive storms by end time, not file order.
+- **Basin input.** All five Group 1 models take a one-hot of the storm's basin: columns on track sequences and graph nodes, constant channels on field stacks, entries on PINN's environment vector (`training.basin_input`). Each version records its columns (`basin_inputs`); serving builds inputs from the tag, blanking a column for a basin the version never had samples from. A version without the tag gets none, as it was trained.
+- **Per-basin scores.** Every validation run records each basin's errors and sample counts (`metrics.basin`); twelve hand-written metric blocks now share `real_run.validation_metrics`. Each run also scores persistence on exactly the windows and leads the model was scored on (`StageWindow.persistence`). `trained_basins` becomes the basins a run had training samples from -- a gridded model with no cached fields for a basin didn't train there -- and `verified_basins` the ones it trained in *and* beat persistence in. Basin input columns a model never trained on are blanked once, on the artifacts, before the joint latents or the `basin_inputs` tag read them (`basin_gates.resolve_basin_inputs`); PINN's candidate keeps its own (`candidate_basin_inputs`). With no reference-basin score, promotion refuses rather than read another basin's.
+- **Serving.** A basin is in distribution once every Group 1 champion is verified in it (`ModelRegistry.verified_basins`); before the tag, the Atlantic.
+- **Promotion.** Compared on the Atlantic alone, thresholds read there; must stay verified wherever the incumbent is; up to `new_basin_tolerance` (5%) worse on the Atlantic when newly verified elsewhere.
+
+**Not changed:** the cone radii are still NHC's Atlantic values for every basin.
+
+**Enforced by** `tests/test_basin_gates.py`, `tests/test_retrain_seasons.py` (the multi-archive fetch), `tests/test_real_run.py` and `tests/test_real_run_cnn.py` (real two-basin training runs), `tests/test_real_orchestrator.py`, `tests/test_api_real_state.py`, `tests/test_config_sync.py` (bad basin and tolerance values refused).
+
 ---
 
 ## Implementation → rebrand

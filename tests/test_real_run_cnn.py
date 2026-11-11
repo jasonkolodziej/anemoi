@@ -327,6 +327,49 @@ def test_run_cnn_curriculum_completes_both_stages(tmp_path):
 
 
 @pytest.mark.torch
+@pytest.mark.parametrize("streaming", [False, True])
+def test_a_basin_with_no_cached_fields_was_not_trained_on(tmp_path, streaming):
+    """The storm archive holds Eastern Pacific storms, but only the
+    Atlantic's fields were ever fetched: a gridded model skips what isn't
+    cached, so its scores and sample counts are the Atlantic's alone
+    (docs/multi_basin.md)."""
+    from anemoi.metrics.basin import scored_basins, trained_basins
+    from anemoi.tracking.checkpoint_store import CheckpointStore, S3Config
+    from anemoi.training.real_run_cnn import run_cnn_curriculum
+
+    era5_dir = tmp_path / "era5_cache"
+    gdas_dir = tmp_path / "gdas_cache"
+    atlantic = [
+        make_track("AL011985", season=1985, n=26, seed=0),
+        make_track("AL012021", season=2021, n=26, seed=1),
+        make_track("AL012022", season=2022, n=26, seed=7),
+        make_track("AL012023", season=2023, n=26, seed=3),
+    ]
+    pacific = [
+        make_track("EP011985", season=1985, n=26, seed=10),
+        make_track("EP012021", season=2021, n=26, seed=11),
+        make_track("EP012022", season=2022, n=26, seed=12),
+    ]
+    for t in atlantic:
+        cache_all_fixes(era5_dir, t, Flavor.ERA5_PRETRAIN)
+        cache_all_fixes(gdas_dir, t, Flavor.GDAS_FINETUNE)
+
+    config = S3Config(
+        endpoint_url="https://example.r2.cloudflarestorage.com",
+        bucket="anemoi-test", access_key_id="key", secret_access_key="secret",
+    )
+    store = CheckpointStore(config, client=_FakeS3Client())
+    kwargs = {"streaming": True, "batch_size": 8} if streaming else {}
+    _run, val_metrics, _artifacts = run_cnn_curriculum(
+        atlantic + pacific, store, era5_dir, gdas_dir, seed=42, n_augment=1, latent_dim=16,
+        **kwargs,
+    )
+    assert scored_basins(val_metrics.values) == ("AL",)
+    assert trained_basins(val_metrics.values) == ("AL",)
+    assert val_metrics.values["AL/track_error_48h_nm"] == val_metrics.values["track_error_48h_nm"]
+
+
+@pytest.mark.torch
 def test_run_cnn_curriculum_streaming_completes_both_stages(tmp_path):
     from anemoi.tracking.checkpoint_store import CheckpointStore, S3Config
     from anemoi.training.real_run_cnn import run_cnn_curriculum

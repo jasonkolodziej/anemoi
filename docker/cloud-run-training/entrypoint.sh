@@ -22,8 +22,10 @@ TRIGGER="${TRIGGER:-manual_sweep}"
 
 mkdir -p "${ERA5_CACHE_DIR}" "${GDAS_CACHE_DIR}" "${REGISTRY_ROOT}"
 
-# The newest HURDAT2 NHC has published, so a season released since the image
-# was built is trained on (#216). On failure the baked-in copy stays.
+# The newest HURDAT2 NHC has published for every configured basin
+# (configs/curriculum.yaml data.basins), so a season released since the image
+# was built is trained on (#216). All or nothing: on failure the baked-in
+# copy stays.
 if [ "${HURDAT2_REFRESH:-1}" = "1" ]; then
   anemoi hurdat2-fetch --out "${HURDAT2_PATH}" || echo "hurdat2-fetch failed; keeping the image's HURDAT2" >&2
 fi

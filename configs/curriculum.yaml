@@ -9,6 +9,14 @@
 # The hard rule: the final stage is always the operational flavor. A run that
 # stops after Stage A cannot be registered or promoted.
 
+data:
+  # The basins training reads, as ATCF codes (docs/multi_basin.md). One model
+  # per architecture is trained on all of them; each is scored and gated on
+  # its own (monitoring.yaml promotion). `anemoi hurdat2-fetch` downloads the
+  # NHC archive for each: AL from the Atlantic HURDAT2, EP and CP from the
+  # Northeast Pacific one. WP, IO and SH need JTWC's tracks, not yet read.
+  basins: [AL, EP, CP]
+
 stage_a:
   name: A  # fixed: recorded in run tags
   flavor: era5_pretrain  # fixed: the stage defines it

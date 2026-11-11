@@ -27,6 +27,26 @@ def _parse_day(value: str) -> datetime:
     return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=UTC)
 
 
+def _training_tracks(hurdat2_path: str | Path) -> list:
+    """The storms training and its gridded caches read from a HURDAT2 file:
+    those from the configured basins (``curriculum.yaml`` ``data.basins``,
+    `data.basins.select_basins`). A file can hold more -- NHC's Northeast
+    Pacific archive carries Eastern and Central Pacific storms together."""
+    from .data.basins import TRAINING_BASINS, basins_of, select_basins
+    from .data.hurdat2 import parse_hurdat2_file
+
+    tracks = parse_hurdat2_file(hurdat2_path)
+    selected = select_basins(tracks)
+    absent = [b for b in TRAINING_BASINS if b not in basins_of(selected)]
+    if absent:
+        print(
+            f"warning: {hurdat2_path} has no storms from {absent} "
+            f"(curriculum.yaml data.basins: {list(TRAINING_BASINS)}); "
+            "`anemoi hurdat2-fetch` writes a file with every configured basin"
+        )
+    return selected
+
+
 def cmd_schedule(args: argparse.Namespace) -> int:
     oracle = LatencyOracle(use_max_latency=args.worst_case)
     plans = plan_day(_parse_day(args.date), oracle)
@@ -136,10 +156,9 @@ def _cmd_gridded_cache(
     docstring); ERA5 keeps the default.
     """
     from .data.gridded_cache import build_fetch_tasks
-    from .data.hurdat2 import parse_hurdat2_file
     from .data.splits import Split, assign_splits, filter_tracks
 
-    tracks = parse_hurdat2_file(args.hurdat2)
+    tracks = _training_tracks(args.hurdat2)
     if callable(boundaries):
         boundaries = boundaries(tracks)
     assignment = assign_splits(tracks, boundaries=boundaries)
@@ -267,12 +286,12 @@ def cmd_train(args: argparse.Namespace) -> int:
     training.streaming.make_dataloader's docstring for why it defaults to
     0 and forces "fork" when set.
     """
-    from .data.hurdat2 import parse_hurdat2_file
     from .data.sources import Flavor
     from .data.splits import latest_final_season
     from .tracking.checkpoint_store import CheckpointStore, S3Config
     from .tracking.experiment_tracking import (
         arch_params_tag,
+        basin_input_tags,
         build_run_tags,
         candidate_tags,
         gridded_input_tags,
@@ -282,9 +301,10 @@ def cmd_train(args: argparse.Namespace) -> int:
     )
     from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ModelRegistry, Stage
+    from .training.basin_gates import basin_tags, resolve_basin_inputs
     from .training.promotion import MetricSet, evaluate_promotion
 
-    tracks = parse_hurdat2_file(args.hurdat2)
+    tracks = _training_tracks(args.hurdat2)
     store = CheckpointStore(S3Config.from_env())
 
     streaming_kwargs: dict = {"streaming": args.streaming, "num_workers": args.num_workers}
@@ -344,6 +364,10 @@ def cmd_train(args: argparse.Namespace) -> int:
         print(f"no real training runner yet for {args.model!r} -- see cmd_train's docstring")
         return 1
 
+    # Blank the basin input columns it had no training samples from, so the
+    # `basin_inputs` tag serving builds from says so (docs/multi_basin.md).
+    artifacts = resolve_basin_inputs(artifacts, val_metrics)
+
     print(f"curriculum complete: {[r.stage_name for r in run.results]}")
     for r in run.results:
         print(
@@ -376,9 +400,11 @@ def cmd_train(args: argparse.Namespace) -> int:
     if arch_params is not None:
         tag_dict["arch_params"] = arch_params
     tag_dict.update(candidate_tags(artifacts))
+    tag_dict.update(basin_input_tags(artifacts))
     tag_dict.update(standardization_tags(artifacts))
     tag_dict.update(gridded_input_tags(args.gdas_cache_dir))
     tag_dict.update(training_data_tags(args.hurdat2, tracks))
+    tag_dict.update(basin_tags(val_metrics))
     version = registry.register(
         args.model,
         run_id=f"cli-{datetime.now(UTC):%Y%m%dT%H%M%S}",
@@ -435,14 +461,13 @@ def cmd_train_schedule(args: argparse.Namespace) -> int:
     growing gridded cache. --num-workers (--streaming only) is the same
     real DataLoader worker-process option as `anemoi train`'s.
     """
-    from .data.hurdat2 import parse_hurdat2_file
     from .tracking.checkpoint_store import CheckpointStore, S3Config
     from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ModelRegistry
     from .training.orchestrator import Mode, build_derived_schedule, build_schedule, run_schedule
     from .training.real_orchestrator import RealOrchestratorRunner
 
-    tracks = parse_hurdat2_file(args.hurdat2)
+    tracks = _training_tracks(args.hurdat2)
     store = CheckpointStore(S3Config.from_env())
     registry = ModelRegistry(
         args.registry_root, mlflow_client=mlflow_client_from_env(), checkpoint_store=store,
@@ -538,7 +563,6 @@ def cmd_retrain_check(args: argparse.Namespace) -> int:
     import urllib.error
     import urllib.request
 
-    from .data.hurdat2 import parse_hurdat2_file
     from .tracking.checkpoint_store import CheckpointStore, S3Config
     from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ALL_MODELS, GROUP1_MODELS, ModelRegistry
@@ -589,7 +613,7 @@ def cmd_retrain_check(args: argparse.Namespace) -> int:
             "re-fine-tune is not yet defined; not dispatched. See the Roadmap."
         )
 
-    tracks = parse_hurdat2_file(args.hurdat2)
+    tracks = _training_tracks(args.hurdat2)
     new_synoptic_times = count_untrained_fixes(tracks, registry)
 
     jobs = evaluate_all(
@@ -904,22 +928,28 @@ def cmd_drift_reference_fit(args: argparse.Namespace) -> int:
 
 
 def cmd_hurdat2_fetch(args: argparse.Namespace) -> int:
-    """Download the newest Atlantic HURDAT2 NHC has published (#216) to
-    ``--out``, with its manifest beside it. Run at image build and at the
-    start of every training job."""
+    """Download the newest HURDAT2 NHC has published (#216) to ``--out``,
+    with its manifest beside it: every archive that holds a configured
+    basin (``curriculum.yaml`` ``data.basins``, or ``--basins``), in one
+    file. Run at image build and at the start of every training job."""
     import json
 
+    from .data.basins import TRAINING_BASINS
     from .data.hurdat2_source import fetch_latest_hurdat2
 
+    basins = tuple(args.basins) if args.basins else TRAINING_BASINS
     try:
-        manifest = fetch_latest_hurdat2(args.out)
+        manifest = fetch_latest_hurdat2(args.out, basins=basins)
     except Exception as exc:  # noqa: BLE001 - one clear line, not a traceback
-        print(f"hurdat2-fetch: could not download any HURDAT2 file: {type(exc).__name__}: {exc}")
+        print(
+            f"hurdat2-fetch: could not download HURDAT2 for {list(basins)}: "
+            f"{type(exc).__name__}: {exc}"
+        )
         return 1
     print(json.dumps(manifest, indent=2))
     if manifest.get("fallback"):
         reason = manifest["fallback_reason"]
-        print(f"hurdat2-fetch: WARNING fell back to the pinned file ({reason})")
+        print(f"hurdat2-fetch: WARNING fell back to a pinned file ({reason})")
     return 0
 
 
@@ -1043,7 +1073,6 @@ def cmd_spread_backtest(args: argparse.Namespace) -> int:
     champions -- and the resulting call on `extra_conditioning_dim`. See
     `training.spread_backtest`'s module docstring for exactly what's
     measured and why it's the val split rather than test."""
-    from .data.hurdat2 import parse_hurdat2_file
     from .tracking.checkpoint_store import CheckpointStore, S3Config
     from .tracking.registry import ModelRegistry
     from .training.spread_backtest import SpreadBacktestError, format_report, run_spread_backtest
@@ -1052,7 +1081,7 @@ def cmd_spread_backtest(args: argparse.Namespace) -> int:
     registry = ModelRegistry(args.registry_root, checkpoint_store=store)
     try:
         report = run_spread_backtest(
-            parse_hurdat2_file(args.hurdat2), registry, store, args.gdas_cache_dir,
+            _training_tracks(args.hurdat2), registry, store, args.gdas_cache_dir,
             n_members=args.members, seed=args.seed, diffusion_version=args.diffusion_version,
         )
     except SpreadBacktestError as exc:
@@ -1072,7 +1101,6 @@ def cmd_consistency_distill(args: argparse.Namespace) -> int:
     tradeoff against the teacher's own full-budget ancestral sample. See
     `training.consistency_distillation`'s module docstring for what's
     measured and the decision rule it applies."""
-    from .data.hurdat2 import parse_hurdat2_file
     from .tracking.checkpoint_store import CheckpointStore, S3Config
     from .tracking.registry import GROUP1_MODELS, ModelRegistry, RegistryError, latent_signature
     from .training.consistency_distillation import (
@@ -1119,7 +1147,7 @@ def cmd_consistency_distill(args: argparse.Namespace) -> int:
         return 1
 
     artifacts = {m: load_run_artifacts(m, v, store) for m, v in champions.items()}
-    tracks = parse_hurdat2_file(args.hurdat2)
+    tracks = _training_tracks(args.hurdat2)
     bundle = extract_joint_latents(tracks, artifacts, args.gdas_cache_dir, seed=args.seed)
     if len(bundle.train) == 0 or len(bundle.val) == 0:
         print("consistency-distill: no cached gridded fields for train/val windows")
@@ -1277,10 +1305,14 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_consistency_distill)
 
     p = sub.add_parser(
-        "hurdat2-fetch", help="download the newest Atlantic HURDAT2 NHC has published (#216)",
+        "hurdat2-fetch", help="download the newest HURDAT2 NHC has published (#216)",
     )
     p.add_argument(
         "--out", required=True, help="where to write it (a .json manifest goes beside it)",
+    )
+    p.add_argument(
+        "--basins", nargs="+", metavar="BASIN",
+        help="ATCF basins to fetch, e.g. AL EP CP (default: curriculum.yaml data.basins)",
     )
     p.set_defaults(func=cmd_hurdat2_fetch)
 

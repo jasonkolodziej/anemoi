@@ -20,6 +20,7 @@ from datetime import UTC, date, datetime
 
 from .. import config
 from ..data.sources import Flavor
+from ..metrics.basin import basin_value, scored_basins, verified_basins
 from .curriculum import CurriculumRun, assert_deployable
 
 
@@ -144,6 +145,29 @@ config.fixed(
 )
 PRIMARY_METRIC: str = config.get("monitoring", "promotion.primary_metric", str)
 REQUIRE_MANUAL_GATE: bool = config.get("monitoring", "promotion.require_manual_gate", bool)
+#: The basin a candidate is compared with the incumbent on, and the
+#: thresholds are read on (docs/multi_basin.md): one model serves every
+#: basin, and an error over a different mix of basins isn't comparable.
+REFERENCE_BASIN: str = config.get("monitoring", "promotion.reference_basin", str)
+#: How much worse on the reference basin a candidate may be when it is
+#: verified in a basin the incumbent isn't, as a fraction.
+NEW_BASIN_TOLERANCE: float = config.get("monitoring", "promotion.new_basin_tolerance", float)
+if not 0.0 <= NEW_BASIN_TOLERANCE < 1.0:
+    raise config.ConfigError(
+        "monitoring.yaml: promotion.new_basin_tolerance must be a fraction in [0, 1), "
+        f"got {NEW_BASIN_TOLERANCE}"
+    )
+
+
+def reference_value(values: dict[str, float], metric: str, basin: str) -> float | None:
+    """``metric`` on ``basin``'s storms alone when the run scored basins
+    separately -- ``None`` if it has none there, never another basin's
+    number -- else its overall value, which, for a run from before basins
+    were scored separately, *is* the reference basin: every one of those
+    trained and validated on the Atlantic alone."""
+    if scored_basins(values):
+        return basin_value(values, basin, metric)
+    return values.get(metric)
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +191,8 @@ def evaluate_promotion(
     thresholds: tuple[Threshold, ...] = DEFAULT_THRESHOLDS,
     primary_metric: str = PRIMARY_METRIC,
     require_manual_gate: bool = REQUIRE_MANUAL_GATE,
+    reference_basin: str = REFERENCE_BASIN,
+    new_basin_tolerance: float = NEW_BASIN_TOLERANCE,
 ) -> PromotionDecision:
     """Decide staging and production promotion for a candidate.
 
@@ -176,6 +202,18 @@ def evaluate_promotion(
     production and this preserves it: an automated pipeline that can put a model
     in front of an emergency manager without anyone looking at it is a hazard,
     not a feature.
+
+    One model serves every basin (docs/multi_basin.md), so for a candidate
+    that scored basins separately (`metrics.basin`):
+
+    * the comparison with the incumbent, and the thresholds, are read on
+      ``reference_basin``'s storms alone (`reference_value`);
+    * it must stay verified -- better than persistence -- in every basin
+      the incumbent is verified in. One that isn't would quietly take a
+      basin out of distribution;
+    * if it is verified in a basin the incumbent isn't, it may be up to
+      ``new_basin_tolerance`` worse on the reference basin rather than
+      having to beat the incumbent outright.
     """
     reasons: list[str] = []
 
@@ -204,17 +242,61 @@ def evaluate_promotion(
         beats_incumbent = True
         reasons.append("no incumbent; candidate is the first registered version")
     else:
-        cand = val_metrics.get(primary_metric)
-        inc = incumbent_val_metrics.get(primary_metric)
-        beats_incumbent = cand < inc
-        reasons.append(
-            f"{primary_metric}: candidate {cand:.2f} vs incumbent {inc:.2f} "
-            f"[{'better' if beats_incumbent else 'not better'}]"
-        )
+        # `.get` first: a metric that was never computed is an error, as before.
+        val_metrics.get(primary_metric)
+        incumbent_val_metrics.get(primary_metric)
+        cand = reference_value(val_metrics.values, primary_metric, reference_basin)
+        inc = reference_value(incumbent_val_metrics.values, primary_metric, reference_basin)
+        if cand is None or inc is None:
+            # Scored by basin, but no reference-basin storms to compare on:
+            # nothing to promote on, never another basin's number.
+            beats_incumbent = False
+            missing = "candidate" if cand is None else "incumbent"
+            reasons.append(
+                f"{primary_metric} ({reference_basin}): the {missing} has no "
+                f"{reference_basin} validation storms to compare on [FAIL]"
+            )
+        else:
+            by_basin = bool(scored_basins(val_metrics.values))
+            where = f"{primary_metric} ({reference_basin})" if by_basin else primary_metric
+
+            allowed = 0.0
+            dropped: list[str] = []
+            if by_basin:
+                cand_verified = set(verified_basins(val_metrics.values, primary_metric))
+                # An incumbent from before basins were scored separately was
+                # served as in distribution for the reference basin alone.
+                inc_verified = (
+                    set(verified_basins(incumbent_val_metrics.values, primary_metric))
+                    if scored_basins(incumbent_val_metrics.values)
+                    else {reference_basin}
+                )
+                dropped = sorted(inc_verified - cand_verified)
+                added = sorted(cand_verified - inc_verified)
+                if dropped:
+                    reasons.append(
+                        f"no longer better than persistence in {dropped}, "
+                        "where the incumbent is [FAIL]"
+                    )
+                elif added:
+                    allowed = new_basin_tolerance
+                    reasons.append(
+                        f"newly verified in {added}: may be up to {allowed:.0%} worse on "
+                        f"{reference_basin}"
+                    )
+
+            beats_incumbent = not dropped and (
+                cand <= inc * (1.0 + allowed) if allowed else cand < inc
+            )
+            if allowed and inc <= cand <= inc * (1.0 + allowed):
+                verdict = "within the allowance"
+            else:
+                verdict = "better" if cand < inc else "not better"
+            reasons.append(f"{where}: candidate {cand:.2f} vs incumbent {inc:.2f} [{verdict}]")
 
     threshold_results = []
     for th in thresholds:
-        value = val_metrics.values.get(th.metric)
+        value = reference_value(val_metrics.values, th.metric, reference_basin)
         if value is None:
             reasons.append(f"{th.metric}: missing [FAIL]")
             threshold_results.append(False)

@@ -238,9 +238,10 @@ class StormSummary(BaseModel):
     #: Two-letter ATCF basin code, e.g. "AL"/"EP" -- a direct slice of
     #: storm_id (see `data.atcf.storm_basin`), not a new data source.
     basin: str
-    #: False for any basin the served models didn't all train on
-    #: (`ModelRegistry.trained_basins`) -- real storm data, but out of
-    #: distribution for at least one model the forecast may combine.
+    #: False for any basin the served models haven't all trained on and
+    #: beaten persistence in (`ModelRegistry.verified_basins`) -- real storm
+    #: data, but out of distribution for at least one model the forecast
+    #: may combine.
     trained_basin: bool
 
 

@@ -23,14 +23,16 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+import numpy as np
+
 from ..data.sources import Flavor
-from ..metrics.track import ForecastPoint, VerificationPair, to_metric_dict, verify
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
 from .curriculum import Curriculum, CurriculumRun, StageResult, stage_b
 from .device import get_device
 from .promotion import MetricSet
 from .real_latents import JointLatentBundle, JointLatentSamples
+from .real_run import displacements_to_absolute, validation_metrics
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,27 +106,17 @@ def train_fusion_stage(
         val_loss = float(masked_mse(out_v, true_v, mask_v).item())
         out_v_np = out_v.cpu().numpy()
 
-    pairs: list[VerificationPair] = []
-    for si in range(len(val_samples)):
-        for li, lead_hours in enumerate(DEFAULT_LEADS):
-            if not val_samples.mask[si, li]:
-                continue
-            plat, plon, pwind = out_v_np[si, li]
-            tlat, tlon, twind = val_samples.true_absolute[si, li]
-            pairs.append(
-                VerificationPair(
-                    forecast=ForecastPoint(
-                        lead_hours=lead_hours, lat=float(plat), lon=float(plon),
-                        max_wind_kt=float(pwind),
-                    ),
-                    obs_lat=float(tlat), obs_lon=float(tlon), obs_wind_kt=float(twind),
-                )
+    val_metrics = validation_metrics(
+        Flavor.GDAS_FINETUNE, out_v_np, val_samples.true_absolute, val_samples.mask,
+        val_storm_ids=val_samples.storm_ids, train_storm_ids=train_samples.storm_ids,
+        persistence_abs=(
+            None if val_samples.persistence is None
+            else displacements_to_absolute(
+                val_samples.persistence,
+                np.asarray(val_samples.base_lat)[:, None],
+                np.asarray(val_samples.base_lon)[:, None],
             )
-
-    if not pairs:
-        raise ValueError("no verifiable (lead, sample) pairs in val")
-    val_metrics = MetricSet(
-        split="val", flavor=Flavor.GDAS_FINETUNE, values=to_metric_dict(verify(pairs)),
+        ),
     )
     return model, train_loss, val_loss, val_metrics
 

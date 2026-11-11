@@ -23,6 +23,7 @@ archive doesn't overlap `DEFAULT_BOUNDARIES`' train window at all).
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,9 +44,11 @@ from ..data.splits import (
 )
 from ..data.storm_relative import STORM_RELATIVE_COLUMNS, displacement_nm, storm_relative_sequence
 from ..geo import offset_positions
-from ..metrics.track import ForecastPoint, VerificationPair, to_metric_dict, verify
+from ..metrics.basin import PERSISTENCE_PREFIX, absolute_pairs, per_basin_scores, sample_counts
+from ..metrics.track import VerificationPair, to_metric_dict, verify
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
+from .basin_input import DEFAULT_BASIN_INPUTS, with_basin_columns
 from .capacity_ablation import SEQUENCE_LENGTH
 from .curriculum import Curriculum, CurriculumRun, StageResult, StageSpec
 from .device import get_device
@@ -146,22 +149,81 @@ def verification_pairs(
     base_lon = np.asarray(base_lon, dtype=float)[:, None]
     pred_abs = displacements_to_absolute(pred, base_lat, base_lon)
     obs_abs = displacements_to_absolute(obs, base_lat, base_lon)
-    pairs: list[VerificationPair] = []
-    for si, li in zip(*np.nonzero(np.asarray(mask, dtype=bool)), strict=True):
-        plat, plon, pwind = pred_abs[si, li]
-        olat, olon, owind = obs_abs[si, li]
-        pairs.append(
-            VerificationPair(
-                forecast=ForecastPoint(
-                    lead_hours=lead_hours[li], lat=float(plat), lon=float(plon),
-                    max_wind_kt=float(pwind),
-                ),
-                obs_lat=float(olat),
-                obs_lon=float(olon),
-                obs_wind_kt=float(owind),
-            )
-        )
-    return pairs
+    return absolute_pairs(pred_abs, obs_abs, mask, lead_hours)
+
+
+def validation_metrics(
+    flavor: Flavor,
+    pred_abs: np.ndarray,
+    obs_abs: np.ndarray,
+    mask: np.ndarray,
+    *,
+    val_storm_ids: Sequence[str] = (),
+    train_storm_ids: Sequence[str] = (),
+    persistence_abs: np.ndarray | None = None,
+    stage_name: str | None = None,
+    lead_hours: tuple[int, ...] = DEFAULT_LEADS,
+) -> MetricSet:
+    """A stage's validation `MetricSet`, the one every real runner builds:
+    the overall per-lead errors (`metrics.track`), and -- given each
+    sample's storm id -- the same errors and the sample counts for each
+    basin on its own (`metrics.basin`, docs/multi_basin.md).
+
+    ``pred_abs``/``obs_abs`` are ``(n, n_leads, 3)`` absolute (lat, lon,
+    wind_kt); ``mask`` is ``(n, n_leads)``. ``persistence_abs``, the same
+    shape, is persistence's forecast for the same samples
+    (`StageWindow.persistence`): scored per basin beside the model, on
+    exactly the cases the model was scored on, it is what a basin has to
+    beat to count as verified (`metrics.basin.verified_basins`). Raises
+    when no (sample, lead) is verifiable.
+    """
+    pairs = absolute_pairs(pred_abs, obs_abs, mask, lead_hours)
+    if not pairs:
+        where = f"stage {stage_name}: " if stage_name else ""
+        raise ValueError(f"{where}no verifiable (lead, sample) pairs in val")
+    values = to_metric_dict(verify(pairs))
+    if len(val_storm_ids):
+        values.update(per_basin_scores(pred_abs, obs_abs, mask, val_storm_ids, lead_hours))
+        values.update(sample_counts(val_storm_ids, "val"))
+        if persistence_abs is not None:
+            values.update(per_basin_scores(
+                persistence_abs, obs_abs, mask, val_storm_ids, lead_hours,
+                prefix=PERSISTENCE_PREFIX,
+            ))
+    if len(train_storm_ids):
+        values.update(sample_counts(train_storm_ids, "train"))
+    return MetricSet(split="val", flavor=flavor, values=values)
+
+
+def displacement_validation_metrics(
+    stage: StageSpec,
+    base_lat: np.ndarray,
+    base_lon: np.ndarray,
+    pred: np.ndarray,
+    obs: np.ndarray,
+    mask: np.ndarray,
+    *,
+    val_storm_ids: Sequence[str] = (),
+    train_storm_ids: Sequence[str] = (),
+    persistence: np.ndarray | None = None,
+) -> MetricSet:
+    """`validation_metrics` for a model whose output is displacements:
+    ``pred``, ``obs`` and ``persistence`` are ``(n, n_leads, 3)``
+    (dx_east_nm, dy_north_nm, wind_kt) from each sample's base fix."""
+    base_lat = np.asarray(base_lat, dtype=float)[:, None]
+    base_lon = np.asarray(base_lon, dtype=float)[:, None]
+    return validation_metrics(
+        stage.flavor,
+        displacements_to_absolute(pred, base_lat, base_lon),
+        displacements_to_absolute(obs, base_lat, base_lon),
+        mask,
+        val_storm_ids=val_storm_ids, train_storm_ids=train_storm_ids,
+        persistence_abs=(
+            None if persistence is None
+            else displacements_to_absolute(persistence, base_lat, base_lon)
+        ),
+        stage_name=stage.name,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,7 +236,8 @@ class StageSamples:
     leads are zero-filled and masked out rather than synthesised or dropped
     whole-sample. ``base_lat``/``base_lon`` are the window's current fix,
     needed to turn a predicted or true displacement back into an absolute
-    position for verification.
+    position for verification. ``storm_ids`` names each sample's storm, for
+    scoring each basin on its own (`validation_metrics`).
     """
 
     x: np.ndarray
@@ -182,6 +245,9 @@ class StageSamples:
     mask: np.ndarray
     base_lat: np.ndarray
     base_lon: np.ndarray
+    storm_ids: tuple[str, ...] = ()
+    #: `StageWindow.persistence` for each sample, ``(N, n_leads, 3)``.
+    persistence: np.ndarray | None = None
 
     def __len__(self) -> int:
         return len(self.x)
@@ -227,6 +293,16 @@ class RunArtifacts:
     #: record of what shape a given checkpoint's weights actually are.
     #: Empty (not None) when a caller has no real inference use for it yet.
     arch_params: dict = field(default_factory=dict)
+    #: The basins this model's basin input columns stand for, in order
+    #: (`basin_input`) -- what its inputs must be built with, in training
+    #: and when serving. Empty for a model with no basin input: every
+    #: version from before it existed. A blank entry is a column for a
+    #: basin it had no training samples from (`basin_gates
+    #: .resolve_basin_inputs`): no storm switches it on.
+    basins: tuple[str, ...] = ()
+    #: PINN only: the same for its candidate-generator LSTM, which trains
+    #: on the track archive rather than the field cache.
+    candidate_basins: tuple[str, ...] = ()
     #: PINN only: the candidate-generator LSTM's own `build_lstm(...)` kwargs.
     candidate_arch_params: dict = field(default_factory=dict)
     #: PINN only: where the candidate LSTM's checkpoint was uploaded (#78).
@@ -255,6 +331,26 @@ class StageWindow:
     current: object
     y: np.ndarray
     mask: np.ndarray
+
+    @property
+    def persistence(self) -> np.ndarray:
+        """Persistence's forecast for this window, in ``y``'s form:
+        ``(n_leads, 3)`` (dx_east_nm, dy_north_nm, wind_kt) from
+        ``current``. Holds the last 6-hour motion and the current wind --
+        from the same working fixes the model reads, so the two are
+        scored on exactly the same inputs and cases (docs/multi_basin.md)."""
+        dx, dy = displacement_nm(self.window[-2], self.window[-1])
+        steps = np.array(LEAD_STEPS, dtype=float)
+        return np.stack(
+            [dx * steps, dy * steps, np.full(len(steps), self.current.max_wind_kt)], axis=1,
+        )
+
+
+def persistence_of(windows: Sequence[StageWindow]) -> np.ndarray:
+    """``(n, n_leads, 3)``: `StageWindow.persistence` for each window."""
+    if not windows:
+        return np.empty((0, len(LEAD_STEPS), 3))
+    return np.stack([sw.persistence for sw in windows])
 
 
 def iter_stage_windows(
@@ -297,17 +393,50 @@ def iter_stage_windows(
                 )
 
 
+def track_input(window: Sequence, storm_id: str, basins: Sequence[str] = ()) -> np.ndarray:
+    """The track-sequence input the LSTM (and PINN's candidate generator)
+    reads for one window: its storm-relative sequence, plus the storm's
+    basin on every step for a model trained with ``basins``
+    (`basin_input`). ``(SEQUENCE_LENGTH, len(STORM_RELATIVE_COLUMNS) +
+    len(basins))``."""
+    return with_basin_columns(storm_relative_sequence(tuple(window)), storm_id, basins)
+
+
+def window_validation_metrics(
+    stage: StageSpec,
+    val_windows: Sequence[StageWindow],
+    pred: np.ndarray,
+    train_windows: Sequence[StageWindow] = (),
+) -> MetricSet:
+    """`displacement_validation_metrics` for the streaming runners, which
+    hold their samples as windows: ``pred`` is the model's ``(n, n_leads,
+    3)`` displacement forecast for ``val_windows``, in order."""
+    return displacement_validation_metrics(
+        stage,
+        np.array([sw.current.lat for sw in val_windows]),
+        np.array([sw.current.lon for sw in val_windows]),
+        pred,
+        np.stack([sw.y for sw in val_windows]),
+        np.stack([sw.mask for sw in val_windows]),
+        val_storm_ids=[sw.storm_id for sw in val_windows],
+        train_storm_ids=[sw.storm_id for sw in train_windows],
+        persistence=persistence_of(val_windows),
+    )
+
+
 def build_stage_samples(
     tracks: list[Track],
     rng: np.random.Generator,
     n_augment: int = 1,
     noise: WorkingTrackNoise | None = None,
+    basins: Sequence[str] = (),
 ) -> StageSamples:
     """Generalises `capacity_ablation.build_samples` from one fixed 6h-ahead
     proxy step to real multi-lead targets (`DEFAULT_LEADS`, 12-120h) -- what
     `training.promotion.evaluate_promotion`'s thresholds actually need
     (track_error_48h_nm and friends). Input is always working-quality,
     labels always final-quality (Stage B's policy, `besttrack` module).
+    ``basins`` adds the storm's basin to every step (`track_input`).
     """
     n_leads = len(LEAD_STEPS)
     x_rows: list[np.ndarray] = []
@@ -315,17 +444,21 @@ def build_stage_samples(
     mask_rows: list[np.ndarray] = []
     base_lat_rows: list[float] = []
     base_lon_rows: list[float] = []
+    storm_ids: list[str] = []
+    persistence_rows: list[np.ndarray] = []
 
     for sw in iter_stage_windows(tracks, rng, n_augment, noise):
-        x_rows.append(storm_relative_sequence(sw.window))
+        x_rows.append(track_input(sw.window, sw.storm_id, basins))
         y_rows.append(sw.y)
         mask_rows.append(sw.mask)
         base_lat_rows.append(sw.current.lat)
         base_lon_rows.append(sw.current.lon)
+        storm_ids.append(sw.storm_id)
+        persistence_rows.append(sw.persistence)
 
     if not x_rows:
         return StageSamples(
-            x=np.empty((0, SEQUENCE_LENGTH, len(STORM_RELATIVE_COLUMNS))),
+            x=np.empty((0, SEQUENCE_LENGTH, len(STORM_RELATIVE_COLUMNS) + len(basins))),
             y=np.empty((0, n_leads, 3)),
             mask=np.empty((0, n_leads), dtype=bool),
             base_lat=np.empty((0,)),
@@ -337,6 +470,8 @@ def build_stage_samples(
         mask=np.stack(mask_rows),
         base_lat=np.array(base_lat_rows),
         base_lon=np.array(base_lon_rows),
+        storm_ids=tuple(storm_ids),
+        persistence=np.stack(persistence_rows),
     )
 
 
@@ -387,9 +522,11 @@ def train_lstm_stage(
     *,
     n_augment: int = 3,
     device=None,
+    basins: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """Train ``model`` (fresh, or Stage A's trained weights for Stage B)
-    through one curriculum stage against real tracks.
+    through one curriculum stage against real tracks. ``basins`` must be
+    what ``model`` was built for (`track_input`).
 
     Full-batch, matching `capacity_ablation.train_cell`'s proven pattern --
     same training shape, generalised to masked multi-lead targets and
@@ -407,8 +544,8 @@ def train_lstm_stage(
     torch = require_torch()
     device = device or get_device()
 
-    train_samples = build_stage_samples(train_tracks, rng, n_augment=n_augment)
-    val_samples = build_stage_samples(val_tracks, rng, n_augment=1)
+    train_samples = build_stage_samples(train_tracks, rng, n_augment=n_augment, basins=basins)
+    val_samples = build_stage_samples(val_tracks, rng, n_augment=1, basins=basins)
     if len(train_samples) == 0 or len(val_samples) == 0:
         raise ValueError(f"stage {stage.name}: no usable samples built from the given tracks")
 
@@ -450,13 +587,12 @@ def train_lstm_stage(
         val_loss = float(masked_mse(pred_val_z, yv, mv).item())
         pred_val = pred_val_z.cpu().numpy() * y_std + y_mean
 
-    pairs = verification_pairs(
-        val_samples.base_lat, val_samples.base_lon, pred_val, val_samples.y, val_samples.mask,
+    val_metrics = displacement_validation_metrics(
+        stage, val_samples.base_lat, val_samples.base_lon, pred_val, val_samples.y,
+        val_samples.mask,
+        val_storm_ids=val_samples.storm_ids, train_storm_ids=train_samples.storm_ids,
+        persistence=val_samples.persistence,
     )
-
-    if not pairs:
-        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
-    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 
@@ -471,6 +607,7 @@ def train_lstm_stage_streaming(
     batch_size: int = 64,
     num_workers: int = 0,
     device=None,
+    basins: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_lstm_stage`'s streaming analog (`docs/streaming_dataloader.md`) --
     same return contract, same masked multi-lead loss and verification
@@ -499,7 +636,7 @@ def train_lstm_stage_streaming(
         raise ValueError(f"stage {stage.name}: no usable samples built from the given tracks")
 
     def build_x(sw):
-        return storm_relative_sequence(sw.window)
+        return track_input(sw.window, sw.storm_id, basins)
 
     n_leads = len(LEAD_STEPS)
     raw_train_ds = WindowDataset(train_windows, build_x)
@@ -570,17 +707,7 @@ def train_lstm_stage_streaming(
         val_loss = val_diff2 / max(val_mask, 1.0)
         pred_val = np.concatenate(pred_val_rows, axis=0) * y_std + y_mean
 
-    pairs = verification_pairs(
-        np.array([sw.current.lat for sw in val_windows]),
-        np.array([sw.current.lon for sw in val_windows]),
-        pred_val,
-        np.stack([sw.y for sw in val_windows]),
-        np.stack([sw.mask for sw in val_windows]),
-    )
-
-    if not pairs:
-        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
-    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
+    val_metrics = window_validation_metrics(stage, val_windows, pred_val, train_windows)
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 
@@ -595,6 +722,7 @@ def run_lstm_curriculum(
     streaming: bool = False,
     batch_size: int = 64,
     num_workers: int = 0,
+    basins: Sequence[str] | None = None,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the LSTM baseline
     against real HURDAT2 tracks, uploading each stage's checkpoint to
@@ -623,10 +751,17 @@ def run_lstm_curriculum(
     overlap batch loading with GPU compute instead of blocking the
     training step on it. See that function's docstring for why it forces
     ``fork`` explicitly and defaults to 0.
+
+    ``basins`` are the basins the model's basin input columns stand for
+    (`basin_input`): by default the ones training reads. It is returned on
+    the artifacts, and must be what the model's inputs are built with from
+    then on.
     """
     from ..models.lstm import build_lstm
 
     require_torch()
+    basins = DEFAULT_BASIN_INPUTS if basins is None else tuple(basins)
+    input_dim = len(STORM_RELATIVE_COLUMNS) + len(basins)
     rng = np.random.default_rng(seed)
     curriculum = Curriculum.standard("lstm", **(curriculum_kwargs or {}))
     run = CurriculumRun(curriculum=curriculum)
@@ -641,14 +776,14 @@ def run_lstm_curriculum(
 
         if model is None:
             model, _spec = build_lstm(
-                input_dim=len(STORM_RELATIVE_COLUMNS), hidden_dim=hidden_dim,
-                lead_hours=DEFAULT_LEADS,
+                input_dim=input_dim, hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
             )
 
         stage_fn = train_lstm_stage_streaming if streaming else train_lstm_stage
         stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
         model, train_loss, val_loss, val_metrics, stats = stage_fn(
-            model, stage, train_tracks, val_tracks, rng, n_augment=n_augment, **stage_kwargs,
+            model, stage, train_tracks, val_tracks, rng, n_augment=n_augment, basins=basins,
+            **stage_kwargs,
         )
 
         torch = require_torch()
@@ -673,11 +808,10 @@ def run_lstm_curriculum(
     assert val_metrics is not None  # curriculum always has >=1 stage
     x_mean, x_std, y_mean, y_std = stats
     arch_params = {
-        "input_dim": len(STORM_RELATIVE_COLUMNS), "hidden_dim": hidden_dim,
-        "lead_hours": list(DEFAULT_LEADS),
+        "input_dim": input_dim, "hidden_dim": hidden_dim, "lead_hours": list(DEFAULT_LEADS),
     }
     artifacts = RunArtifacts(
         model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
-        arch_params=arch_params,
+        arch_params=arch_params, basins=basins,
     )
     return run, val_metrics, artifacts

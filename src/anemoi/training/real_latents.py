@@ -45,7 +45,7 @@ from ..data.besttrack import Track
 from ..data.gridded_cache import FetchTask, cache_path, load_cached_fields
 from ..data.sources import Flavor
 from ..data.splits import Split, assign_splits, filter_tracks
-from ..data.storm_relative import displacement_nm, storm_relative_sequence
+from ..data.storm_relative import displacement_nm
 from ..models.base import DEFAULT_LEADS, require_torch
 from .device import get_device
 from .real_run import (
@@ -53,6 +53,7 @@ from .real_run import (
     boundaries_for_tracks,
     displacements_to_absolute,
     iter_stage_windows,
+    track_input,
 )
 
 #: Order every per-window latent/prediction is concatenated/stacked in.
@@ -94,6 +95,12 @@ class JointLatentSamples:
     true_absolute: np.ndarray  # (N, n_leads, 3) -- absolute (lat, lon, wind)
     context: np.ndarray  # (N, len(CONTEXT_FEATURE_NAMES))
     latent_dims: tuple[int, ...]
+    #: Each row's storm, for scoring each basin on its own
+    #: (`real_run.validation_metrics`). Empty: overall scores only.
+    storm_ids: tuple[str, ...] = ()
+    #: `real_run.StageWindow.persistence` for each row, ``(N, n_leads, 3)``
+    #: displacements: what each basin's fusion/diffusion score is held to.
+    persistence: np.ndarray | None = None
 
     def __len__(self) -> int:
         return len(self.z)
@@ -163,12 +170,10 @@ def _extract_for_tracks(
     n_augment: int,
     device=None,
 ) -> JointLatentSamples:
-    from ..data.features import compute_environment_features
-    from .real_run_cnn import _sanitized_channel_stack as _cnn_channel_stack
-    from .real_run_gnn import _node_features, batch_graph, build_mesh_topology
-    from .real_run_pinn import PinnStageSamples, _candidate_and_true_absolute
-    from .real_run_transformer import GRID_SIZE
-    from .real_run_transformer import _sanitized_channel_stack as _trf_channel_stack
+    from .real_run_cnn import cnn_input
+    from .real_run_gnn import batch_graph, build_mesh_topology, gnn_input
+    from .real_run_pinn import PinnStageSamples, _candidate_and_true_absolute, pinn_environment
+    from .real_run_transformer import GRID_SIZE, transformer_input
 
     torch = require_torch()
     device = device or get_device()
@@ -191,6 +196,8 @@ def _extract_for_tracks(
     base_lat_rows: list[float] = []
     base_lon_rows: list[float] = []
     context_rows: list[np.ndarray] = []
+    storm_ids: list[str] = []
+    persistence_rows: list[np.ndarray] = []
 
     topo = None
     shape: tuple[int, int] | None = None
@@ -220,27 +227,32 @@ def _extract_for_tracks(
         # `real_run_gnn`'s own build paths use (see `data.features
         # .sanitize_field_pixels`'s docstring), reusing their exact helpers
         # here rather than a third copy of the same NaN-handling logic.
-        cnn_stack = _cnn_channel_stack(fields)
-        trf_stack = _trf_channel_stack(fields)
-        node_features = _node_features(fields, topo)
+        # Each model's input is built with the basins *it* was trained
+        # with (`basin_input`): none, for a version from before the basin
+        # input existed.
+        cnn_stack = cnn_input(fields, sw.storm_id, cnn_a.basins)
+        trf_stack = transformer_input(fields, sw.storm_id, transformer_a.basins)
+        node_features = gnn_input(fields, topo, sw.storm_id, gnn_a.basins)
         if cnn_stack is None or trf_stack is None or node_features is None:
             continue
         try:
-            env = compute_environment_features(fields).values
+            env = pinn_environment(fields, sw.storm_id, pinn_a.basins)
         except ValueError:
             continue  # non-finite env feature (storm entirely over land) -- skip, don't crash
 
-        lstm_x_rows.append(storm_relative_sequence(sw.window))
+        lstm_x_rows.append(track_input(sw.window, sw.storm_id, lstm_a.basins))
         cnn_x_rows.append(cnn_stack)
-        trf_x_rows.append(trf_stack[:, :gh, :gw])
+        trf_x_rows.append(trf_stack)
         gnn_x_rows.append(node_features)
         env_rows.append(env)
-        cand_track_rows.append(storm_relative_sequence(sw.window))
+        cand_track_rows.append(track_input(sw.window, sw.storm_id, pinn_a.candidate_basins))
         y_rows.append(sw.y)
         mask_rows.append(sw.mask)
         base_lat_rows.append(sw.current.lat)
         base_lon_rows.append(sw.current.lon)
         context_rows.append(_context_features(sw))
+        storm_ids.append(sw.storm_id)
+        persistence_rows.append(sw.persistence)
 
     latent_dims = (
         lstm_a.model.norm.normalized_shape[0],
@@ -334,7 +346,8 @@ def _extract_for_tracks(
     return JointLatentSamples(
         z=z, y=y, mask=mask, base_lat=base_lat, base_lon=base_lon,
         predictions=predictions, true_absolute=true_abs, context=context,
-        latent_dims=latent_dims,
+        latent_dims=latent_dims, storm_ids=tuple(storm_ids),
+        persistence=np.stack(persistence_rows),
     )
 
 

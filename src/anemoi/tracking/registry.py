@@ -306,9 +306,10 @@ class ModelRegistry:
         return self.in_stage(name, Stage.PRODUCTION)
 
     def trained_basins(self) -> frozenset[str]:
-        """The basins every Group 1 champion trained on: the storms a
-        forecast is in distribution for. A cycle can combine any of them,
-        so a basin counts only when all of them saw it.
+        """The basins every Group 1 champion trained on. A cycle can
+        combine any of them, so a basin counts only when all of them saw it.
+        Having trained on a basin isn't having shown skill there: what is
+        served as in distribution is `verified_basins`.
 
         Read from each champion's `TRAINED_BASINS_TAG`; a version registered
         before that tag counts as Atlantic-only (`LEGACY_TRAINED_BASINS`).
@@ -324,6 +325,32 @@ class ModelRegistry:
             raw = champion.tags.get(TRAINED_BASINS_TAG, "")
             seen = frozenset(b for b in raw.split(",") if b) or LEGACY_TRAINED_BASINS
             basins = seen if basins is None else basins & seen
+        return LEGACY_TRAINED_BASINS if basins is None else basins
+
+    def verified_basins(self) -> frozenset[str]:
+        """The basins a forecast is in distribution for: those every
+        Group 1 champion trained on *and* beat persistence in on validation
+        (`training.basin_gates`). A cycle can combine any of the five, so
+        one champion that hasn't shown skill in a basin keeps it out.
+
+        Read from each champion's `VERIFIED_BASINS_TAG`. A version
+        registered before that tag counts as verified in the Atlantic alone
+        (`LEGACY_TRAINED_BASINS`), which is how it was served; so does a
+        registry with no champion at all.
+        """
+        from .experiment_tracking import LEGACY_TRAINED_BASINS, VERIFIED_BASINS_TAG
+
+        basins: frozenset[str] | None = None
+        for name in GROUP1_MODELS:
+            champion = self.champion(name)
+            if champion is None:
+                continue
+            raw = champion.tags.get(VERIFIED_BASINS_TAG)
+            verified = (
+                LEGACY_TRAINED_BASINS if raw is None
+                else frozenset(b for b in raw.split(",") if b)
+            )
+            basins = verified if basins is None else basins & verified
         return LEGACY_TRAINED_BASINS if basins is None else basins
 
     def champion(self, name: str) -> ModelVersion | None:

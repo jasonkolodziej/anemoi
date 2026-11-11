@@ -249,13 +249,57 @@ def test_run_lstm_curriculum_completes_both_stages_and_uploads_checkpoints():
     # #78: real inference needs these exact kwargs to reconstruct the
     # trained model before load_state_dict, since only the state_dict
     # itself gets checkpointed.
+    from anemoi.data.basins import TRAINING_BASINS
     from anemoi.data.storm_relative import STORM_RELATIVE_COLUMNS
     from anemoi.models.base import DEFAULT_LEADS
 
+    # The track sequence, plus a column per basin training reads
+    # (docs/multi_basin.md); the artifacts say which, so inputs can be built
+    # the same way when serving.
+    assert artifacts.basins == TRAINING_BASINS
     assert artifacts.arch_params == {
-        "input_dim": len(STORM_RELATIVE_COLUMNS), "hidden_dim": 8,
+        "input_dim": len(STORM_RELATIVE_COLUMNS) + len(TRAINING_BASINS), "hidden_dim": 8,
         "lead_hours": list(DEFAULT_LEADS),
     }
+    assert artifacts.x_mean.shape == (len(STORM_RELATIVE_COLUMNS) + len(TRAINING_BASINS),)
+
+
+@pytest.mark.torch
+def test_run_lstm_curriculum_without_a_basin_input_is_the_model_it_always_was():
+    """`basins=()`: the input every version before the basin input was
+    trained on, still buildable and trainable."""
+    from anemoi.data.storm_relative import STORM_RELATIVE_COLUMNS
+    from anemoi.training.real_run import run_lstm_curriculum
+
+    tracks = [
+        make_track("AL011985", season=1985, n=26, seed=0),
+        make_track("AL012021", season=2021, n=26, seed=1),
+        make_track("AL012022", season=2022, n=26, seed=7),
+        make_track("AL012023", season=2023, n=26, seed=3),
+    ]
+    _run, _metrics, artifacts = run_lstm_curriculum(
+        tracks, _fake_checkpoint_store(), seed=42, n_augment=1, hidden_dim=8, basins=(),
+    )
+    assert artifacts.basins == ()
+    assert artifacts.arch_params["input_dim"] == len(STORM_RELATIVE_COLUMNS)
+    assert artifacts.x_mean.shape == (len(STORM_RELATIVE_COLUMNS),)
+
+
+def test_track_input_appends_the_storms_basin_to_every_step():
+    from anemoi.data.storm_relative import storm_relative_sequence
+    from anemoi.training.capacity_ablation import SEQUENCE_LENGTH
+    from anemoi.training.real_run import track_input
+
+    window = make_track("EP011985", season=1985, n=SEQUENCE_LENGTH + 1).fixes
+    plain = storm_relative_sequence(window)
+    np.testing.assert_array_equal(track_input(window, "EP011985"), plain)  # no basin input
+    x = track_input(window, "EP011985", ("AL", "EP", "CP"))
+    assert x.shape == (SEQUENCE_LENGTH, plain.shape[1] + 3)
+    np.testing.assert_array_equal(x[:, : plain.shape[1]], plain)
+    np.testing.assert_array_equal(x[:, plain.shape[1] :], np.tile([0.0, 1.0, 0.0], (SEQUENCE_LENGTH, 1)))
+    # A basin the model has no column for: all zeros, not an error.
+    unknown = track_input(window, "WP011985", ("AL", "EP", "CP"))
+    assert not unknown[:, plain.shape[1] :].any()
 
 
 # --- streaming (docs/streaming_dataloader.md) -------------------------------
@@ -346,6 +390,45 @@ def test_train_lstm_stage_streaming_batch_size_does_not_change_final_metrics_muc
 
 
 @pytest.mark.torch
+@pytest.mark.torch
+@pytest.mark.parametrize("streaming", [False, True])
+def test_a_run_on_two_basins_scores_each_on_its_own(streaming):
+    """One model trained on both (docs/multi_basin.md): its validation
+    metrics carry each basin's own errors and sample counts beside the
+    overall ones, on either training path."""
+    tracks = [
+        make_track("AL011985", season=1985, n=26, seed=0),
+        make_track("EP011985", season=1985, n=26, seed=10),
+        make_track("AL012021", season=2021, n=26, seed=1),
+        make_track("EP012021", season=2021, n=26, seed=11),
+        make_track("AL012022", season=2022, n=26, seed=7),   # Stage B validation
+        make_track("AL022022", season=2022, n=26, seed=8),
+        make_track("EP012022", season=2022, n=26, seed=12),
+        make_track("AL012023", season=2023, n=26, seed=3),   # the test season
+    ]
+
+    from anemoi.training.real_run import run_lstm_curriculum
+
+    kwargs = {"streaming": True, "batch_size": 8} if streaming else {}
+    _run, val_metrics, _artifacts = run_lstm_curriculum(
+        tracks, _fake_checkpoint_store(), seed=42, n_augment=1, hidden_dim=8, **kwargs,
+    )
+    values = val_metrics.values
+    for lead in (12, 48, 120):
+        assert math.isfinite(values[f"AL/track_error_{lead}h_nm"])
+        assert math.isfinite(values[f"EP/intensity_error_{lead}h_kt"])
+    # Two Atlantic validation storms to the Eastern Pacific's one; one
+    # training storm each (Stage B trains on 2021).
+    assert values["AL/val_samples"] == 2 * values["EP/val_samples"] > 0
+    assert values["AL/train_samples"] == values["EP/train_samples"] > 0
+    # The overall error is the two basins' pooled, so it lies between them.
+    lo, hi = sorted((values["AL/track_error_48h_nm"], values["EP/track_error_48h_nm"]))
+    assert lo <= values["track_error_48h_nm"] <= hi
+    # Persistence, scored on the same validation windows, beside the model.
+    for basin in ("AL", "EP"):
+        assert math.isfinite(values[f"{basin}/persistence_track_error_48h_nm"])
+
+
 def test_run_lstm_curriculum_streaming_completes_both_stages():
     tracks = [
         make_track("AL011985", season=1985, n=26, seed=0),

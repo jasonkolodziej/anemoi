@@ -165,6 +165,46 @@ def test_registers_the_result_with_the_real_promotion_decision(runner):
     assert runner.registry.latest("lstm").stage is Stage.STAGING
 
 
+def test_a_versions_basins_come_from_its_own_scores(runner, monkeypatch):
+    """The runner registers which basins the version had training samples
+    from and which it beat persistence in, and blanks the basin input
+    columns it never trained on -- on the artifacts the joint latents are
+    built from, and in the tag serving builds from (docs/multi_basin.md)."""
+    values = {
+        **FAKE_METRICS_VALUES,
+        "AL/track_error_48h_nm": 40.0, "AL/persistence_track_error_48h_nm": 90.0,
+        "AL/train_samples": 50.0, "AL/val_samples": 9.0,
+        "EP/track_error_48h_nm": 400.0, "EP/persistence_track_error_48h_nm": 120.0,
+        "EP/train_samples": 20.0, "EP/val_samples": 9.0,
+        # Storms in the archive, but no cached field to train on.
+        "CP/track_error_48h_nm": 30.0, "CP/persistence_track_error_48h_nm": 90.0,
+        "CP/val_samples": 2.0,
+    }
+
+    from anemoi.training.real_run import RunArtifacts
+
+    def fake_lstm(*args, **kwargs):
+        run, _metrics, _artifacts = _fake_curriculum_run("lstm")
+        artifacts = RunArtifacts(model="trained-lstm", basins=("AL", "EP", "CP"))
+        return run, MetricSet(split="val", flavor=Flavor.GDAS_FINETUNE, values=values), artifacts
+
+    monkeypatch.setattr("anemoi.training.real_run.run_lstm_curriculum", fake_lstm)
+    outcome = runner(Task(
+        name="lstm", kind="train", depends_on=(), execution_mode=ExecutionMode.SEQUENTIAL,
+        gpu_memory_gb=8, hours_low=1.0, hours_high=2.0,
+    ))
+    assert outcome.ok
+
+    version = runner.registry.latest("lstm")
+    assert version.tags["trained_basins"] == "AL,EP"
+    assert version.tags["verified_basins"] == "AL"
+    # CP's column was never trained: blank on the artifacts and in the tag.
+    assert runner.trained_artifacts["lstm"].basins == ("AL", "EP", "")
+    assert version.tags["basin_inputs"] == "AL,EP,"
+    assert runner.promotions["lstm"].promote_to_staging
+    assert runner.registry.verified_basins() == frozenset({"AL"})
+
+
 def test_a_non_promotable_candidate_is_not_transitioned(runner, monkeypatch):
     """A worse-than-incumbent second run must stay Stage.NONE -- the
     registry's own `transition` must only ever be called when the real

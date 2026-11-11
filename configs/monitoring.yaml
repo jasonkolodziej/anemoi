@@ -41,6 +41,18 @@ promotion:
   flavor: gdas_finetune  # fixed: operational flavor only
   primary_metric: track_error_48h_nm
   require_manual_gate: true
+  # One model serves every basin (docs/multi_basin.md), and a number over a
+  # different mix of basins isn't comparable with the last one. So a
+  # candidate is compared with the incumbent on this basin's storms alone,
+  # and the thresholds below (NHC's Atlantic figures) are read there too.
+  reference_basin: AL
+  # A candidate must beat the incumbent there outright -- unless it is
+  # verified in a basin the incumbent isn't (it beats persistence there,
+  # training/basin_gates.py). Then it may be up to this fraction worse on the
+  # reference basin: the price allowed for covering a new basin. A starting
+  # value, not a measured one: re-derive it from the spread of
+  # track_error_48h_nm across repeat runs of one model on the same data.
+  new_basin_tolerance: 0.05
   # track_error_48h_nm re-baselined against NHC's GPRA performance-measures
   # table (45.4 nm 2024, 53.4 nm 2025, 51.0 nm 2026 target); the rest are not
   # yet re-derived -- see training/promotion.py:TRACK_THRESHOLDS.

@@ -24,6 +24,7 @@ however much is cached at the moment it's invoked.
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,9 +36,9 @@ from ..data.features import sanitize_field_pixels
 from ..data.gridded_cache import FetchTask, cache_path, load_cached_fields
 from ..data.sources import Flavor
 from ..data.splits import Split, assign_splits, filter_tracks
-from ..metrics.track import ForecastPoint, VerificationPair, to_metric_dict, verify
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
+from .basin_input import DEFAULT_BASIN_INPUTS, with_basin_channels
 from .curriculum import Curriculum, CurriculumRun, StageResult, StageSpec
 from .device import get_device
 from .promotion import MetricSet
@@ -45,9 +46,10 @@ from .real_run import (
     LEAD_STEPS,
     RunArtifacts,
     boundaries_for_tracks,
-    displacement_to_latlon,
+    displacement_validation_metrics,
     freeze_encoder,
     iter_stage_windows,
+    window_validation_metrics,
 )
 
 #: Order the 10 cached GriddedFields arrays are stacked as CNN channels.
@@ -74,13 +76,23 @@ def _sanitized_channel_stack(fields) -> np.ndarray | None:
     return np.stack(channels)
 
 
+def cnn_input(fields, storm_id: str, basins: Sequence[str] = ()) -> np.ndarray | None:
+    """The CNN's input for one window's fields: `_sanitized_channel_stack`,
+    plus a constant channel per basin for a model trained with ``basins``
+    (`basin_input`). ``None`` when the fields can't be used, as there."""
+    stack = _sanitized_channel_stack(fields)
+    return None if stack is None else with_basin_channels(stack, storm_id, basins)
+
+
 @dataclass(frozen=True, slots=True)
 class CnnStageSamples:
-    x: np.ndarray  # (N, len(CNN_FIELD_NAMES), H, W)
+    x: np.ndarray  # (N, len(CNN_FIELD_NAMES) + len(basins), H, W)
     y: np.ndarray
     mask: np.ndarray
     base_lat: np.ndarray
     base_lon: np.ndarray
+    storm_ids: tuple[str, ...] = ()
+    persistence: np.ndarray | None = None  # `real_run.StageWindow.persistence`
 
     def __len__(self) -> int:
         return len(self.x)
@@ -92,6 +104,7 @@ def build_cnn_samples(
     rng: np.random.Generator,
     n_augment: int = 1,
     noise: WorkingTrackNoise | None = None,
+    basins: Sequence[str] = (),
 ) -> CnnStageSamples:
     """Same windows/targets as `real_run.build_stage_samples`, but ``x`` is
     the real cached `GriddedFields` channel stack for the window's current
@@ -105,6 +118,8 @@ def build_cnn_samples(
     mask_rows: list[np.ndarray] = []
     base_lat_rows: list[float] = []
     base_lon_rows: list[float] = []
+    storm_ids: list[str] = []
+    persistence_rows: list[np.ndarray] = []
     shape: tuple[int, int] | None = None
 
     for sw in iter_stage_windows(tracks, rng, n_augment, noise):
@@ -116,7 +131,7 @@ def build_cnn_samples(
         if not path.exists():
             continue
         fields = load_cached_fields(path)
-        stack = _sanitized_channel_stack(fields)
+        stack = cnn_input(fields, sw.storm_id, basins)
         if stack is None:
             continue
         if shape is None:
@@ -132,11 +147,13 @@ def build_cnn_samples(
         mask_rows.append(sw.mask)
         base_lat_rows.append(sw.current.lat)
         base_lon_rows.append(sw.current.lon)
+        storm_ids.append(sw.storm_id)
+        persistence_rows.append(sw.persistence)
 
     n_leads = len(LEAD_STEPS)
     if not x_rows:
         return CnnStageSamples(
-            x=np.empty((0, len(CNN_FIELD_NAMES), 0, 0)),
+            x=np.empty((0, len(CNN_FIELD_NAMES) + len(basins), 0, 0)),
             y=np.empty((0, n_leads, 3)),
             mask=np.empty((0, n_leads), dtype=bool),
             base_lat=np.empty((0,)),
@@ -148,6 +165,8 @@ def build_cnn_samples(
         mask=np.stack(mask_rows),
         base_lat=np.array(base_lat_rows),
         base_lon=np.array(base_lon_rows),
+        storm_ids=tuple(storm_ids),
+        persistence=np.stack(persistence_rows),
     )
 
 
@@ -183,6 +202,7 @@ def train_cnn_stage(
     *,
     n_augment: int = 3,
     device=None,
+    basins: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """CNN analog of `real_run.train_lstm_stage` -- same masked multi-lead
     training/verification shape, ``x`` built from cached real GriddedFields
@@ -196,8 +216,10 @@ def train_cnn_stage(
     torch = require_torch()
     device = device or get_device()
 
-    train_samples = build_cnn_samples(train_tracks, cache_dir, rng, n_augment=n_augment)
-    val_samples = build_cnn_samples(val_tracks, cache_dir, rng, n_augment=1)
+    train_samples = build_cnn_samples(
+        train_tracks, cache_dir, rng, n_augment=n_augment, basins=basins,
+    )
+    val_samples = build_cnn_samples(val_tracks, cache_dir, rng, n_augment=1, basins=basins)
     if len(train_samples) == 0 or len(val_samples) == 0:
         raise ValueError(
             f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
@@ -242,31 +264,12 @@ def train_cnn_stage(
         val_loss = float(masked_mse(pred_val_z, yv, mv).item())
         pred_val = pred_val_z.cpu().numpy() * y_std + y_mean
 
-    pairs: list[VerificationPair] = []
-    for si in range(len(val_samples)):
-        base_lat, base_lon = val_samples.base_lat[si], val_samples.base_lon[si]
-        for li, lead_hours in enumerate(DEFAULT_LEADS):
-            if not val_samples.mask[si, li]:
-                continue
-            pred_dx, pred_dy, pred_wind = pred_val[si, li]
-            pred_lat, pred_lon = displacement_to_latlon(base_lat, base_lon, pred_dx, pred_dy)
-            obs_dx, obs_dy, obs_wind = val_samples.y[si, li]
-            obs_lat, obs_lon = displacement_to_latlon(base_lat, base_lon, obs_dx, obs_dy)
-            pairs.append(
-                VerificationPair(
-                    forecast=ForecastPoint(
-                        lead_hours=lead_hours, lat=pred_lat, lon=pred_lon,
-                        max_wind_kt=float(pred_wind),
-                    ),
-                    obs_lat=obs_lat,
-                    obs_lon=obs_lon,
-                    obs_wind_kt=float(obs_wind),
-                )
-            )
-
-    if not pairs:
-        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
-    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
+    val_metrics = displacement_validation_metrics(
+        stage, val_samples.base_lat, val_samples.base_lon, pred_val, val_samples.y,
+        val_samples.mask,
+        val_storm_ids=val_samples.storm_ids, train_storm_ids=train_samples.storm_ids,
+        persistence=val_samples.persistence,
+    )
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 
@@ -282,6 +285,7 @@ def train_cnn_stage_streaming(
     batch_size: int = 32,
     num_workers: int = 0,
     device=None,
+    basins: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_cnn_stage`'s streaming analog (`docs/streaming_dataloader.md`) --
     same return contract, real per-batch training via a `torch.utils.data
@@ -326,7 +330,7 @@ def train_cnn_stage_streaming(
             storm_id=sw.storm_id, valid_time=sw.current.valid_time,
             lat=sw.current.lat, lon=sw.current.lon,
         )))
-        return _sanitized_channel_stack(fields)
+        return cnn_input(fields, sw.storm_id, basins)
 
     n_leads = len(LEAD_STEPS)
     raw_train_ds = WindowDataset(train_windows, build_x)
@@ -404,31 +408,7 @@ def train_cnn_stage_streaming(
         val_loss = val_diff2 / max(val_mask, 1.0)
         pred_val = np.concatenate(pred_val_rows, axis=0) * y_std + y_mean
 
-    pairs: list[VerificationPair] = []
-    for si, sw in enumerate(val_windows):
-        base_lat, base_lon = sw.current.lat, sw.current.lon
-        for li, lead_hours in enumerate(DEFAULT_LEADS):
-            if not sw.mask[li]:
-                continue
-            pred_dx, pred_dy, pred_wind = pred_val[si, li]
-            pred_lat, pred_lon = displacement_to_latlon(base_lat, base_lon, pred_dx, pred_dy)
-            obs_dx, obs_dy, obs_wind = sw.y[li]
-            obs_lat, obs_lon = displacement_to_latlon(base_lat, base_lon, obs_dx, obs_dy)
-            pairs.append(
-                VerificationPair(
-                    forecast=ForecastPoint(
-                        lead_hours=lead_hours, lat=pred_lat, lon=pred_lon,
-                        max_wind_kt=float(pred_wind),
-                    ),
-                    obs_lat=obs_lat,
-                    obs_lon=obs_lon,
-                    obs_wind_kt=float(obs_wind),
-                )
-            )
-
-    if not pairs:
-        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
-    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
+    val_metrics = window_validation_metrics(stage, val_windows, pred_val, train_windows)
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 
@@ -445,6 +425,7 @@ def run_cnn_curriculum(
     streaming: bool = False,
     batch_size: int = 32,
     num_workers: int = 0,
+    basins: Sequence[str] | None = None,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the CNN baseline
     against real cached GriddedFields.
@@ -465,10 +446,13 @@ def run_cnn_curriculum(
     real CUDA OOM training full-batch against the real, growing cache).
     ``num_workers`` (streaming only, default 0) forwards to
     `streaming.make_dataloader` -- see that function's docstring.
+    ``basins``: see `real_run.run_lstm_curriculum`.
     """
     from ..models.cnn import build_cnn
 
     require_torch()
+    basins = DEFAULT_BASIN_INPUTS if basins is None else tuple(basins)
+    in_channels = len(CNN_FIELD_NAMES) + len(basins)
     rng = np.random.default_rng(seed)
     curriculum = Curriculum.standard("cnn", **(curriculum_kwargs or {}))
     run = CurriculumRun(curriculum=curriculum)
@@ -484,14 +468,14 @@ def run_cnn_curriculum(
 
         if model is None:
             model, _spec = build_cnn(
-                in_channels=len(CNN_FIELD_NAMES), latent_dim=latent_dim, lead_hours=DEFAULT_LEADS,
+                in_channels=in_channels, latent_dim=latent_dim, lead_hours=DEFAULT_LEADS,
             )
 
         stage_fn = train_cnn_stage_streaming if streaming else train_cnn_stage
         stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
         model, train_loss, val_loss, val_metrics, stats = stage_fn(
             model, stage, train_tracks, val_tracks, cache_dir, rng,
-            n_augment=n_augment, **stage_kwargs,
+            n_augment=n_augment, basins=basins, **stage_kwargs,
         )
 
         torch = require_torch()
@@ -516,11 +500,10 @@ def run_cnn_curriculum(
     assert val_metrics is not None
     x_mean, x_std, y_mean, y_std = stats
     arch_params = {
-        "in_channels": len(CNN_FIELD_NAMES), "latent_dim": latent_dim,
-        "lead_hours": list(DEFAULT_LEADS),
+        "in_channels": in_channels, "latent_dim": latent_dim, "lead_hours": list(DEFAULT_LEADS),
     }
     artifacts = RunArtifacts(
         model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
-        arch_params=arch_params,
+        arch_params=arch_params, basins=basins,
     )
     return run, val_metrics, artifacts

@@ -24,7 +24,7 @@ from ..deps import require_api_key, state_dependency
 router = APIRouter(prefix="/storms", tags=["storms"], dependencies=[Depends(require_api_key)])
 
 
-def _storm_summary(storm, trained_basins: frozenset[str]) -> schemas.StormSummary:
+def _storm_summary(storm, verified_basins: frozenset[str]) -> schemas.StormSummary:
     last = max(storm.cycles) if storm.cycles else None
     basin = storm_basin(storm.storm_id)
     return schemas.StormSummary(
@@ -43,22 +43,23 @@ def _storm_summary(storm, trained_basins: frozenset[str]) -> schemas.StormSummar
         peak_wind_kt=storm.track.peak_wind_kt,
         last_cycle=last,
         basin=basin,
-        trained_basin=basin in trained_basins,
+        trained_basin=basin in verified_basins,
     )
 
 
-def _trained_basins(state) -> frozenset[str]:
-    """`ModelRegistry.trained_basins`, after the same refresh the registry
-    routes do: a promotion or rollback made elsewhere shows up here within
-    the registry's refresh interval, not only after a restart."""
+def _served_basins(state) -> frozenset[str]:
+    """`ModelRegistry.verified_basins` -- the basins a forecast is in
+    distribution for -- after the same refresh the registry routes do: a
+    promotion or rollback made elsewhere shows up here within the
+    registry's refresh interval, not only after a restart."""
     state.refresh_registry_if_stale()
-    return state.registry.trained_basins()
+    return state.registry.verified_basins()
 
 
 @router.get("", response_model=list[schemas.StormSummary])
 def list_storms(state=Depends(state_dependency)) -> list[schemas.StormSummary]:
-    trained = _trained_basins(state)
-    return [_storm_summary(s, trained) for s in state.list_storms()]
+    verified = _served_basins(state)
+    return [_storm_summary(s, verified) for s in state.list_storms()]
 
 
 @router.get("/{storm_id}", response_model=schemas.StormDetail)
@@ -67,7 +68,7 @@ def get_storm(storm_id: str, state=Depends(state_dependency)) -> schemas.StormDe
         storm = state.get_storm(storm_id)
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
-    summary = _storm_summary(storm, _trained_basins(state))
+    summary = _storm_summary(storm, _served_basins(state))
     return schemas.StormDetail(
         **summary.model_dump(),
         history=[

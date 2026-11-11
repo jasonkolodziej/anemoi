@@ -1,8 +1,9 @@
 # Training and forecasting beyond the Atlantic
 
-**Status:** proposal, with phase 0 in this change. Every model today is
-trained on the Atlantic alone. Storms from other basins are forecast, but
-out of distribution, and flagged `basin_untrained:<basin>`.
+**Status:** phases 0 and 1 built; phase 1 is waiting on a training run.
+Every model serving today was trained on the Atlantic alone. Storms from
+other basins are forecast, but out of distribution, and flagged
+`basin_untrained:<basin>` until models trained on them pass their gates.
 
 **Recommendation in one line:** keep **one model per architecture**, train it
 on every basin with storms mirrored into one hemisphere and the basin given as
@@ -87,18 +88,28 @@ gridded caches grow with the storm count. The streaming dataloader
 
 ## Evaluation and promotion
 
-- **Per-basin metrics on every version.** Record track and intensity error at
-  each lead, per basin (`track_error_48h_nm:EP`, …), next to today's overall
-  metrics.
-- **Gates.**
-  - No regression in the Atlantic against the current champion. The Atlantic
-    stays the reference basin.
-  - Each newly enabled basin must beat a persistence/climatology baseline at
-    48 h on its own test seasons.
-  - A basin enters `trained_basins` only through a run that trained on it. In
-    phase 1 the console badge moves from "trained on" to "passed its gate"
-    (`verified_basins`), so a basin the models saw but don't yet forecast well
-    stays flagged.
+- **Per-basin metrics on every version** (`metrics/basin.py`). Each basin's
+  own track and intensity error at each lead (`EP/track_error_48h_nm`), its
+  training and validation sample counts (`EP/train_samples`), and what
+  persistence scores (`EP/persistence_track_error_48h_nm`) on exactly the
+  windows and leads the model was scored on -- a gridded model skips windows
+  with no cached field, and persistence skips the same ones
+  (`real_run.StageWindow.persistence`).
+- **Verified.** A model is verified in a basin when it trained there and
+  beats persistence -- holding the storm's last motion and wind -- there on
+  the promotion metric (`metrics.basin.verified_basins`; the tags and the
+  promotion rules both read it). Registered as the `verified_basins` tag. The
+  console badge and the `basin_untrained` flag read it: a basin is in
+  distribution once every Group 1 champion is verified in it
+  (`ModelRegistry.verified_basins`).
+- **Promotion** (`monitoring.yaml` `promotion.reference_basin: AL`,
+  `new_basin_tolerance: 0.05`):
+  - The candidate is compared with the incumbent on the Atlantic's storms
+    alone, and the thresholds are read there.
+  - It must stay verified in every basin the incumbent is verified in.
+  - If it is verified in a basin the incumbent isn't, it may be up to 5%
+    worse on the Atlantic; otherwise it must beat the incumbent outright.
+    5% is a starting value: re-derive it from the spread of repeat runs.
 - **Test seasons per basin.** Split boundaries are derived per basin from its
   own newest final season, as `season_boundaries` already does from HURDAT2.
 
@@ -112,7 +123,7 @@ gridded caches grow with the storm count. The streaming dataloader
 
 ## Phases
 
-**0 (this change).**
+**0 (built).**
 - The registry reads which basins a version trained on from its
   `trained_basins` tag. Phase 1's runners set it from the examples training
   actually consumed, not the archive they were given (which also holds
@@ -125,13 +136,30 @@ gridded caches grow with the storm count. The streaming dataloader
 - Nothing changes for today's Atlantic-only models. Once phase 1's models
   are promoted, Eastern Pacific storms lose the badge with no code change.
 
-**1: Eastern and Central Pacific (NHC, Northern Hemisphere).**
-- `anemoi hurdat2-fetch` also fetches the newest NE/N-Central Pacific file;
-  training reads both.
-- Add `data.basins` in `configs/curriculum.yaml` to choose them.
-- Basin input (rule 2), per-basin metrics and gates, per-basin cone radii.
-- **Done when** every champion is tagged `AL,CP,EP`, the Eastern Pacific gate
-  passes, and the Atlantic gate shows no regression.
+**1: Eastern and Central Pacific (NHC, Northern Hemisphere). Built.**
+- `configs/curriculum.yaml` `data.basins: [AL, EP, CP]`.
+- `anemoi hurdat2-fetch` fetches the Atlantic and the Northeast Pacific
+  archives into one file (all or nothing); training reads the configured
+  basins from it.
+- Basin input (rule 2) on all five Group 1 models (`training/basin_input.py`).
+  Its columns are recorded per version (`basin_inputs` tag), and serving
+  builds inputs from that tag, so a version from before it -- no basin
+  columns -- is served exactly as before.
+- Per-basin metrics, persistence baseline, verified basins and the
+  promotion rules above.
+- **Not yet:** per-basin cone radii. Eastern Pacific cycles still use NHC's
+  Atlantic radii.
+- **To run it:**
+  1. `anemoi hurdat2-fetch --out <path>` (the images and the training job do
+     this already).
+  2. `anemoi gdas-cache` and `anemoi era5-cache` for the new storms. A
+     gridded model trains only where fields are cached: without this step
+     the CNN, Transformer, GNN and PINN train on the Atlantic alone, and say
+     so (`trained_basins`).
+  3. A full training run. The Atlantic-only champions stay until a
+     candidate passes the rules above.
+- **Done when** every champion is verified in `EP` (and `CP`, given enough
+  storms) and none regressed on the Atlantic.
 
 **2: Western Pacific and North Indian Ocean (JTWC via IBTrACS).**
 - An IBTrACS loader using the `USA_*` columns only (rule 3).
