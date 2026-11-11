@@ -9,7 +9,9 @@ It runs training directly through the CLI (`anemoi train-schedule`) and does not
 ## What is in this folder
 
 - `entrypoint.sh`: translates environment variables into `anemoi train-schedule` CLI arguments, or runs any other `anemoi` subcommand passed as job arguments (see "One-off commands"). Baked into the `training` target of `../multistage.Dockerfile` (shared with the Cloudflare Containers API image, whose `api` target builds with `torch-cpu` instead of `torch`).
-- `cloudbuild.yaml`: builds `../multistage.Dockerfile`'s `training` target with Cloud Build and pushes it to Artifact Registry.
+- `../../.github/workflows/build-training-image.yml` (not in this folder): how the image is normally built -- on a GitHub-hosted runner, on every push to `main` that changes it, then the job is pointed at it (see "Build on every push to main").
+- `setup-ci.sh`: the one-time GCP setup that workflow needs.
+- `cloudbuild.yaml`: builds the same `training` target on Cloud Build, by hand (see "Build by hand on Cloud Build").
 - `workflows.train-schedule.yaml`: runs the per-model jobs in order (see "Workflow orchestration").
 
 ## Why Cloud Run Job (not service)
@@ -27,7 +29,7 @@ If your real run exceeds 1 hour, use one of these patterns:
 ## Prerequisites
 
 1. A Google Cloud project with billing enabled.
-2. APIs enabled: Cloud Run, Artifact Registry, Cloud Build, Secret Manager, and (for orchestration) Workflows:
+2. APIs enabled: Cloud Run, Artifact Registry, Secret Manager, Cloud Build (only to build by hand on it), and (for orchestration) Workflows:
 
    ```bash
    gcloud services enable run.googleapis.com artifactregistry.googleapis.com \
@@ -56,7 +58,9 @@ If your real run exceeds 1 hour, use one of these patterns:
      --role roles/run.viewer
    ```
 
-## Build and push image
+## Build by hand on Cloud Build
+
+CI builds and pushes the image on every push to `main` (next section), so this is only for a build outside it. It runs without CI's layer cache, so it reinstalls every dependency and pushes the whole image: about 11 minutes.
 
 Run from repository root. `gcloud builds submit --tag` alone won't work here: it only builds a Dockerfile at the root of the uploaded source, and this one lives at `docker/multistage.Dockerfile`.
 
@@ -69,7 +73,11 @@ gcloud builds submit \
 
 ## Build on every push to main
 
-`.github/workflows/build-training-image.yml` runs the build above on Cloud Build whenever the image's inputs change on `main`, then points `anemoi-train-schedule` at the new tag. It can also be run by hand from the Actions tab. It signs in with Workload Identity Federation: GCP trusts only this repository's `main` branch, as the `anemoi-ci-build` service account, and no key is stored anywhere.
+`.github/workflows/build-training-image.yml` builds the image on a GitHub-hosted runner whenever its inputs change on `main`, pushes it to Artifact Registry, and points `anemoi-train-schedule` at the new tag. It can also be run by hand from the Actions tab. It signs in with Workload Identity Federation: GCP trusts only this repository's `main` branch, as the `anemoi-ci-build` service account, and no key is stored anywhere.
+
+**Why a code change builds in minutes.** The image is mostly its dependencies: several GB, CUDA torch included. `multistage.Dockerfile` installs them in a stage of their own (`training-deps`) that depends only on `uv.lock` and `pyproject.toml`, and the runtime image copies them as one layer, with the project's own files in small layers on top. The build cache lives in Artifact Registry (`anemoi-train:buildcache`). So when only `src/` or `configs/` change, the dependency layer comes from the cache unchanged, and the push skips it because the registry already holds it. A `uv.lock` change rebuilds and pushes it in full, as does the first build.
+
+Before pushing, the workflow smoke-tests the image (`.github/scripts/smoke-test-image.sh`) and checks that torch is the CUDA build `uv.lock` pins from PyPI. A pull request that changes how the image is built (the Dockerfile, `pyproject.toml`, `uv.lock`, the workflow) runs the same build and checks without GCP access, and pushes nothing.
 
 One-time setup, run by a project owner from a shell where `gcloud` and `gh` are signed in:
 
@@ -83,12 +91,11 @@ The script does the following:
 2. Creates the `github` identity pool and its `anemoi-repo` provider. The provider accepts only GitHub runs from `jasonkolodziej/anemoi` on `main`.
 3. Creates the `anemoi-ci-build` service account, and lets runs from this repository act as it.
 4. Grants that account only what CI needs:
-   - submit and read builds (`cloudbuild.builds.editor`), and use the project's APIs (`serviceusage.serviceUsageConsumer`);
-   - read a failed build's log (`logging.viewer`);
-   - upload the build's source (`storage.admin` on `gs://anemoi-training_cloudbuild` only);
-   - run the build and the job as the default compute account (`iam.serviceAccountUser` on that account only);
-   - read the image repository (`artifactregistry.reader` on the `anemoi` repository only). Cloud Run checks that whoever updates a job can pull the image it's pointed at;
-   - update `anemoi-train-schedule` (`run.developer` on that job only).
+   - push and read images and the build cache (`artifactregistry.writer` on the `anemoi` repository only). Cloud Run also checks that whoever updates a job can pull the image it's pointed at;
+   - update `anemoi-train-schedule` (`run.developer` on that job only), whose executions run as the default compute account (`iam.serviceAccountUser` on that account only);
+   - use the project's APIs (`serviceusage.serviceUsageConsumer`).
+
+   It also removes the roles the earlier Cloud Build setup granted (`cloudbuild.builds.editor`, `logging.viewer`, `storage.admin` on the build bucket, `artifactregistry.reader`), if present.
 5. Sets the two repository variables below.
 
 You can run it again safely: anything that already exists is kept. A new service account takes a few seconds before IAM will accept bindings on it, failing with "does not exist" or "Policy modification failed", so the script retries those bindings. It runs under bash. Don't paste its lines into an interactive zsh: zsh doesn't treat `#` as a comment there, and runs the comment lines as commands.
@@ -124,10 +131,6 @@ gh variable list
 ```
 
 If either is missing or wrong, the workflow fails at "Authenticate to Google Cloud". A missing variable fails before contacting GCP. A wrong provider name gives `invalid_target`. A run from a branch other than `main` is rejected by the provider's condition with `unauthorized_client`.
-
-### Build logs
-
-The build logs to Cloud Build's GCS bucket, which `gcloud` can only stream with project-wide Viewer. So the workflow submits with `--async`, waits on the build's status, and prints the log from Cloud Logging if the build fails.
 
 ## Build and push image to GHCR
 
@@ -221,9 +224,11 @@ gcloud run jobs create anemoi-train-schedule \
   --memory 32Gi \
   --add-volume name=cache,type=cloud-storage,bucket=${CACHE_BUCKET} \
   --add-volume-mount volume=cache,mount-path=/cache \
-  --set-env-vars MODE=sequential,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
+  --set-env-vars MODE=sequential,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache_f006,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
   --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest,CF_ACCESS_CLIENT_ID=CF_ACCESS_CLIENT_ID:latest,CF_ACCESS_CLIENT_SECRET=CF_ACCESS_CLIENT_SECRET:latest,MLFLOW_TRACKING_URI=MLFLOW_TRACKING_URI:latest
 ```
+
+`GDAS_CACHE_DIR` is `/cache/gdas_cache_f006`: since #215, Stage B trains on the t-6 GFS cycle's f006 forecast, which is what live cycles read (`curriculum.yaml` `stage_b.nwp_lead_hours: 6`). A cache directory holds one lead (its `_meta.json`), so `gdas-cache` refuses to add f006 fields to `/cache/gdas_cache`, which holds the f000 analyses cached before #215.
 
 `REGISTRY_ROOT` can stay on local disk (`/tmp`, not `/cache`): `entrypoint.sh` runs `anemoi registry-pull` first, and the registry is mirrored to R2, so it doesn't need the cache bucket -- and a `/cache`-mounted GCS FUSE volume is slower for the many small registry writes than local disk.
 
@@ -292,6 +297,8 @@ gcloud run jobs update anemoi-train-schedule \
   --region us-central1 \
   --update-env-vars ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache
 ```
+
+The VM's GDAS cache predates #215 and holds f000 analyses. Stage B now trains on f006 (see "Create a Cloud Run Job" above), so fill `/cache/gdas_cache_f006` with `gdas-cache` ("One-off commands") and point `GDAS_CACHE_DIR` there rather than at the seeded copy.
 
 ### 6) Clean up helper resources
 
@@ -378,7 +385,7 @@ gcloud run jobs create anemoi-train-lstm \
   --memory 16Gi \
   --add-volume name=cache,type=cloud-storage,bucket=${CACHE_BUCKET} \
   --add-volume-mount volume=cache,mount-path=/cache \
-  --set-env-vars MODE=sequential,MODELS=lstm,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
+  --set-env-vars MODE=sequential,MODELS=lstm,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache_f006,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
   --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest,CF_ACCESS_CLIENT_ID=CF_ACCESS_CLIENT_ID:latest,CF_ACCESS_CLIENT_SECRET=CF_ACCESS_CLIENT_SECRET:latest,MLFLOW_TRACKING_URI=MLFLOW_TRACKING_URI:latest
 
 # Repeat for cnn, transformer, gnn, pinn -- same flags, MODELS=<name> and
@@ -402,7 +409,7 @@ gcloud run jobs create anemoi-train-derived \
   --memory 16Gi \
   --add-volume name=cache,type=cloud-storage,bucket=${CACHE_BUCKET} \
   --add-volume-mount volume=cache,mount-path=/cache \
-  --set-env-vars MODE=sequential,DERIVED_FROM_CHAMPIONS=1,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
+  --set-env-vars MODE=sequential,DERIVED_FROM_CHAMPIONS=1,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache_f006,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
   --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest,CF_ACCESS_CLIENT_ID=CF_ACCESS_CLIENT_ID:latest,CF_ACCESS_CLIENT_SECRET=CF_ACCESS_CLIENT_SECRET:latest,MLFLOW_TRACKING_URI=MLFLOW_TRACKING_URI:latest
 ```
 
@@ -476,23 +483,35 @@ Pass arguments to run any `anemoi` subcommand with the same image, secrets, and 
 ```bash
 gcloud run jobs execute anemoi-train-schedule --region us-central1 \
   --task-timeout 1800s \
-  --args=drift-reference-fit,--gdas-cache-dir,/cache/gdas_cache,--registry-root,/tmp/registry
+  --args=drift-reference-fit,--gdas-cache-dir,/cache/gdas_cache_f006,--registry-root,/tmp/registry
 ```
 
 `--task-timeout` here overrides the job's default (`86400s` above) for this one execution only -- useful for a short one-off command you don't want to wait a day for if it hangs. Run live 2026-09-23: fit from 1,794 real cached GDAS samples, ~4 minutes of container run time (most of an ~8-minute wall-clock execution was pulling the image), confirmed via `anemoi.api.real_state`'s drift report going from `n_live: 0` to real samples after.
 
 Add `--wait` to block until the execution finishes in your shell -- useful for a quick check, but it sometimes keeps polling briefly after the dashboard already shows the execution complete; the Cloud Console execution page or `gcloud run jobs executions describe <name>` is the source of truth, not the command returning.
 
+Filling the gridded caches for a split (here after adding the Eastern and Central Pacific, `docs/multi_basin.md`). Both commands skip fixes already cached, so they're safe to re-run, and a run cut off by the task timeout resumes from where it stopped. ERA5 is bandwidth-bound, so split it across tasks: each task fetches the shard given by its `CLOUD_RUN_TASK_INDEX`, and the job needs `--parallelism 0` (set once with `gcloud run jobs update`) for the tasks to run at the same time. GDAS is fast enough as one task:
+
+```bash
+gcloud run jobs execute anemoi-train-schedule --region us-central1 --tasks 10 \
+  --args=era5-cache,--hurdat2,/app/data/hurdat2-atl.txt,--cache-dir,/cache/era5_cache,--split,train,--max-workers,8,--sync-archive
+
+gcloud run jobs execute anemoi-train-schedule --region us-central1 \
+  --args=gdas-cache,--hurdat2,/app/data/hurdat2-atl.txt,--cache-dir,/cache/gdas_cache_f006,--split,train,--max-workers,4,--sync-archive
+```
+
+Repeat for `--split val` and `--split test`. Run 2026-11-11 for phase 1: GDAS train/val/test (3,427/802/866 fixes) in ~23/9/10 minutes, none failed; ERA5 at ~0.07 fixes/s per task (docs/train_infrastructure.md, "Real ERA5/GDAS fetch/cache").
+
 A real diffusion regularization candidate (#166): trains a new `diffusion`/`fusion` version against the current Group 1 champions without touching Group 1 itself, then measures its real calibration -- the same one-off pattern, chained (train, note the registered version number from the job's own log output, then backtest that version):
 
 ```bash
 gcloud run jobs execute anemoi-train-schedule --region us-central1 \
   --task-timeout 1800s \
-  --args=train-schedule,--derived-from-champions,--hurdat2,/app/data/hurdat2-atl.txt,--era5-cache-dir,/cache/era5_cache,--gdas-cache-dir,/cache/gdas_cache,--registry-root,/tmp/registry,--diffusion-dropout,0.1
+  --args=train-schedule,--derived-from-champions,--hurdat2,/app/data/hurdat2-atl.txt,--era5-cache-dir,/cache/era5_cache,--gdas-cache-dir,/cache/gdas_cache_f006,--registry-root,/tmp/registry,--diffusion-dropout,0.1
 
 gcloud run jobs execute anemoi-train-schedule --region us-central1 \
   --task-timeout 1800s \
-  --args=spread-backtest,--hurdat2,/app/data/hurdat2-atl.txt,--gdas-cache-dir,/cache/gdas_cache,--registry-root,/tmp/registry,--members,20,--diffusion-version,<version from the training job's log>
+  --args=spread-backtest,--hurdat2,/app/data/hurdat2-atl.txt,--gdas-cache-dir,/cache/gdas_cache_f006,--registry-root,/tmp/registry,--members,20,--diffusion-version,<version from the training job's log>
 ```
 
 Real runs 2026-09-23 (`DIFFUSION_DROPOUT=0.1`/`0.05`, `DIFFUSION_WEIGHT_DECAY=1e-4`, each ~9-13 minutes end to end including image pull): see "Common env knobs" below for the results and GitHub #166 for the full backtest output.

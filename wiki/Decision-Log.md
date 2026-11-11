@@ -777,6 +777,31 @@ The API job in `deploy.yml` runs it, since the cycle's product maths is what the
 
 ---
 
+### 58. The training image builds on GitHub runners, its dependencies cached as one layer (#224, #225, #227, #229) — *build, ci*
+
+**Decided:** CI builds the Cloud Run training image (CUDA torch, unchanged) on every push to `main` that changes it, on a GitHub-hosted runner, and points the `anemoi-train-schedule` job at it. Cloud Build stays for a build by hand.
+
+- **Why not Cloud Build.** Each build there took ~11 minutes: ~4 reinstalling every dependency (no cache between builds) and ~5.6 pushing the whole 3.45 GB image, because the runtime stage copied the dependencies and the project install as one venv layer that changed with every code change. Its upload had also been broken since #211 (`.gcloudignore` left out `configs/` and `.github/scripts/`, #224), and its default staging bucket needs project-wide bucket listing (#225).
+- **Layers.** `training-deps` installs the dependencies alone, keyed on `uv.lock` and `pyproject.toml`; the runtime image copies that venv as one layer, then what the project install added (12 files, ~112 KB), then `src/` and `configs/`. With BuildKit's registry cache in Artifact Registry (`anemoi-train:buildcache`), a code change reuses the dependency layer and the push skips it.
+- **Checks before push.** The smoke test, and torch's version against the one `uv.lock` pins from PyPI with CUDA set (`2.14.0+cu130`, CUDA 13.0) -- not the `+cpu` build. A PR that changes how the image is built runs both without GCP access.
+- **Auth.** Workload Identity Federation, trusting only this repository's `main` branch, as `anemoi-ci-build`: `artifactregistry.writer` on the repository, `run.developer` on the job, `iam.serviceAccountUser` on the account the job runs as (`docker/cloud-run-training/setup-ci.sh`). Cloud Run checks that whoever updates a job can pull its image (#227).
+
+**Enforced by** `tests/test_config_sync.py` (smoke-tested before pushed), and the workflow's own checks.
+
+---
+
+### 59. ERA5 caching is bandwidth-bound: read each variable once, and shard across tasks (#226, #228) — *data, performance*
+
+**Found** filling the caches for phase 1 (decision 57): ERA5 on Cloud Run ran at 0.07 fixes/s, ~64 hours for the 16,044 new train-split fixes.
+
+- **Cause.** ARCO-ERA5 stores each time step of a 3D variable as one chunk of all 37 levels over the whole globe (~150 MB raw), read whole whatever is selected. `era5_to_gridded_fields` selected 200 and 850 hPa separately, reading u and v twice: ~800 MB per sample (measured). More threads don't help: they share one machine's network link (4 fetches on 4 threads or 4 processes took as long as 4 in a row).
+- **Fix.** u and v are read once for both levels: 544 MB per sample (measured, fields identical). `era5-cache`/`gdas-cache` take `--shard-index`/`--shard-count`, defaulting to `CLOUD_RUN_TASK_INDEX`/`CLOUD_RUN_TASK_COUNT`, so `--tasks N` fetches N disjoint shards on N instances (`gridded_cache.shard_tracks`, striding by fix).
+- **Also (#226).** Cached `.npz` files are written in one sequential write. `np.savez` to a path seeks back to fill in zip headers, which gcsfuse's streaming upload can't take on the Cloud Run `/cache` mount: one `OutOfOrderError` per file, then a slower fallback. The files were intact either way (177 checked).
+
+**Enforced by** `tests/test_real_gridded.py` (each variable read once, levels in the right fields), `tests/test_gridded_cache.py` (shards disjoint, covering, balanced; one write per file).
+
+---
+
 ## Implementation → rebrand
 
 ### 14. Two product names for one platform — *naming*

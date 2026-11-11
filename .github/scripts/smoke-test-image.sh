@@ -14,7 +14,7 @@
 #   training  the curriculum, scheduler and promotion modules load
 #
 # Used by .github/workflows/deploy.yml (api, every PR and deploy),
-# publish-cloud-run-training.yml and docker/cloud-run-training/cloudbuild.yaml
+# build-training-image.yml and docker/cloud-run-training/cloudbuild.yaml
 # (training, before push).
 set -euo pipefail
 

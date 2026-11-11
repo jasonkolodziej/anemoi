@@ -1,25 +1,34 @@
 name: Build training image
 
-# Builds the Cloud Run training image on Cloud Build when its inputs change
-# on main, then points the anemoi-train-schedule job at it, so the next
-# training execution runs what is on main.
+# Builds the Cloud Run training image (CUDA torch) on a GitHub-hosted runner,
+# pushes it to Artifact Registry, and points the anemoi-train-schedule job at
+# it, so the next training execution runs what is on main.
 #
-# The build is docker/cloud-run-training/cloudbuild.yaml, unchanged: the same
-# config a manual `gcloud builds submit` runs (build-info, build, smoke test,
-# push). It runs on Cloud Build, not on this runner: the CUDA torch image is
-# too large for a hosted runner's disk.
+# Fast when only code or configs change: docker/multistage.Dockerfile keeps
+# the dependencies (several GB) in a layer of their own that depends only on
+# uv.lock and pyproject.toml, and the build cache lives in Artifact Registry
+# (anemoi-train:buildcache). A code change rebuilds and pushes only the small
+# project layers; the dependency layer is reused from the cache, and the
+# registry already holds it. A uv.lock change rebuilds it in full.
 #
-# Auth is Workload Identity Federation, no stored key. GCP trusts only this
-# repository's main branch (the provider's attribute condition), as the
-# anemoi-ci-build service account. One-time setup:
-# docker/cloud-run-training/setup-ci.sh (see README.md, "Build on every push to main").
+# On a pull request that changes how the image is built (not a code change),
+# it builds without the cache or GCP access, smoke-tests the image, and
+# checks torch is still the locked CUDA build. Nothing is pushed.
+#
+# Auth is Workload Identity Federation, no stored key: GCP trusts only this
+# repository's main branch, as the anemoi-ci-build service account. One-time
+# setup: docker/cloud-run-training/setup-ci.sh (see README.md, "Build on
+# every push to main").
 #
 # Repository variables (Settings > Secrets and variables > Actions >
 # Variables), not secrets -- neither value grants anything on its own:
-#   GCP_WIF_PROVIDER      projects/<number>/locations/global/workloadIdentityPools/github/providers/anemoi-repo
+#   GCP_WIF_PROVIDER        projects/<number>/locations/global/workloadIdentityPools/github/providers/anemoi-repo
 #   GCP_CI_SERVICE_ACCOUNT  anemoi-ci-build@anemoi-training.iam.gserviceaccount.com
 # How to look either up: the README section above, "The two repository
 # variables".
+#
+# docker/cloud-run-training/cloudbuild.yaml still builds the same image on
+# Cloud Build by hand, if ever needed.
 #
 # Updating the job doesn't touch an execution already running: it keeps the
 # image it started with.
@@ -29,7 +38,7 @@ on:
     branches:
       - main
     paths:
-      # What the training image is built from (.gcloudignore's allowlist).
+      # What the training image is built from.
       - src/**
       - configs/**
       - pyproject.toml
@@ -37,7 +46,18 @@ on:
       - docker/multistage.Dockerfile
       - docker/multistage.Dockerfile.dockerignore
       - docker/cloud-run-training/**
-      - .gcloudignore
+      - .github/scripts/write-build-info.sh
+      - .github/scripts/smoke-test-image.sh
+      - .github/workflows/build-training-image.yml
+  pull_request:
+    paths:
+      # How the image is built, not the code in it: a code change can't
+      # break the image's layout, and a cold CUDA build is long.
+      - pyproject.toml
+      - uv.lock
+      - docker/multistage.Dockerfile
+      - docker/multistage.Dockerfile.dockerignore
+      - docker/cloud-run-training/entrypoint.sh
       - .github/scripts/write-build-info.sh
       - .github/scripts/smoke-test-image.sh
       - .github/workflows/build-training-image.yml
@@ -48,11 +68,12 @@ on:
         type: boolean
         default: true
 
-# One build at a time, in push order: a newer push waits rather than racing
-# the older one to update the job. GitHub keeps only the newest waiting run.
+# On main, one build at a time in push order: a newer push waits rather
+# than racing the older one to update the job (GitHub keeps only the newest
+# waiting run). A superseded PR build is cancelled.
 concurrency:
-  group: build-training-image
-  cancel-in-progress: false
+  group: build-training-image-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -61,20 +82,26 @@ permissions:
 env:
   PROJECT_ID: anemoi-training
   REGION: us-central1
+  REGISTRY: us-central1-docker.pkg.dev
   IMAGE: us-central1-docker.pkg.dev/anemoi-training/anemoi/anemoi-train
   JOB: anemoi-train-schedule
+  # Pushes and updates the job; false on pull requests.
+  PUBLISH: ${{ github.event_name != 'pull_request' }}
 
 jobs:
   build:
-    name: Cloud Build -> ${{ github.sha }}
+    name: "Build training image${{ github.event_name == 'pull_request' && ' (check only)' || '' }}"
     runs-on: ubuntu-latest
-    # cloudbuild.yaml's own timeout is 3600s; this leaves room for queueing.
-    timeout-minutes: 75
+    # A cold CUDA build (no cache: first run, a uv.lock change, every PR
+    # run) is the slow case: ~6 min on ubuntu-latest, which has room for it
+    # (88 GB free) without clearing anything.
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
       - name: Check the repository variables are set
+        if: env.PUBLISH == 'true'
         env:
           GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
           GCP_CI_SERVICE_ACCOUNT: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
@@ -89,56 +116,115 @@ jobs:
           exit $missing
 
       - name: Authenticate to Google Cloud
+        id: auth
+        if: env.PUBLISH == 'true'
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_CI_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Log in to Artifact Registry
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
 
       - name: Set up gcloud
+        if: env.PUBLISH == 'true'
         uses: google-github-actions/setup-gcloud@v3
 
-      - name: Submit the build
-        id: submit
+      - name: Record the commit for the image
+        # anemoi.provenance (#214): registered models record the commit.
+        run: .github/scripts/write-build-info.sh "$GITHUB_SHA"
+
+      - name: Image metadata
+        id: meta
         run: |
           tag="${GITHUB_SHA::12}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          # --async: the builds log to Cloud Build's GCS bucket, which gcloud
-          # can only stream with project-wide Viewer. Wait on the status
-          # instead, and print the log from Cloud Logging if it fails.
-          # --gcs-source-staging-dir: with the default staging bucket,
-          # gcloud checks the bucket is this project's by listing every
-          # bucket in it (storage.buckets.list, project-wide). Naming the
-          # bucket skips that check; CI's role on this one bucket covers the
-          # rest.
-          id=$(gcloud builds submit --project "$PROJECT_ID" --async \
-            --gcs-source-staging-dir "gs://${PROJECT_ID}_cloudbuild/source" \
-            --config docker/cloud-run-training/cloudbuild.yaml \
-            --substitutions "_IMAGE=$IMAGE,_TAG=$tag" \
-            --format 'value(id)' .)
-          echo "id=$id" >> "$GITHUB_OUTPUT"
-          echo "Cloud Build $id: https://console.cloud.google.com/cloud-build/builds/$id?project=$PROJECT_ID" >> "$GITHUB_STEP_SUMMARY"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          if [ "$PUBLISH" = true ]; then
+            # mode=max: the builder stages too, so training-deps' layer is
+            # reused even though the runtime image only copies from it.
+            echo "cache_from=type=registry,ref=$IMAGE:buildcache" >> "$GITHUB_OUTPUT"
+            echo "cache_to=type=registry,ref=$IMAGE:buildcache,mode=max,image-manifest=true,oci-mediatypes=true" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Wait for the build
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Build and load locally first: an image that can't find its configs
+      # (read at import since #211) must fail here, not in a Cloud Run job.
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/multistage.Dockerfile
+          target: training
+          load: true
+          push: false
+          tags: anemoi-train:smoke
+          cache-from: ${{ steps.meta.outputs.cache_from }}
+          build-args: |
+            BUILD_DATE=${{ steps.meta.outputs.build_date }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.tag }}
+            REPO_URL=${{ github.server_url }}/${{ github.repository }}
+
+      - name: Smoke-test the training image
         env:
-          BUILD_ID: ${{ steps.submit.outputs.id }}
+          EXPECT_GIT_SHA: ${{ github.sha }}
+        run: .github/scripts/smoke-test-image.sh anemoi-train:smoke training
+
+      - name: Check torch is the locked CUDA build
+        # The image must carry the CUDA torch uv.lock pins from PyPI (the
+        # torch extra), not the CPU-only build from PyTorch's own index (the
+        # api image's torch-cpu extra).
         run: |
-          while :; do
-            status=$(gcloud builds describe "$BUILD_ID" --project "$PROJECT_ID" --format 'value(status)')
-            case "$status" in
-              QUEUED|PENDING|WORKING) sleep 30 ;;
-              SUCCESS) echo "Built $IMAGE:${{ steps.submit.outputs.tag }}"; exit 0 ;;
-              *)
-                echo "::error::Cloud Build $BUILD_ID ended $status"
-                gcloud logging read --project "$PROJECT_ID" --order asc --limit 400 \
-                  --format 'value(textPayload)' \
-                  "resource.type=\"build\" AND resource.labels.build_id=\"$BUILD_ID\"" | tail -n 120
-                exit 1 ;;
-            esac
-          done
+          expected=$(python3 -c '
+          import tomllib
+          lock = tomllib.load(open("uv.lock", "rb"))
+          versions = {p["version"] for p in lock["package"]
+                      if p["name"] == "torch" and p.get("source", {}).get("registry") == "https://pypi.org/simple"}
+          assert len(versions) == 1, versions
+          print(versions.pop())')
+          # PyPI's Linux wheel reports a local suffix uv.lock doesn't record
+          # (2.14.0+cu130); the CPU build would be +cpu.
+          docker run --rm --entrypoint python -e EXPECTED="$expected" anemoi-train:smoke -c '
+          import os, torch
+          print("torch", torch.__version__, "| CUDA", torch.version.cuda, "| expected", os.environ["EXPECTED"])
+          base, _, local = torch.__version__.partition("+")
+          assert base == os.environ["EXPECTED"], "not the locked torch"
+          assert torch.version.cuda and local != "cpu", "torch has no CUDA build"'
+
+      - name: Push image
+        id: push
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/multistage.Dockerfile
+          target: training
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+          # Same inputs as the build above, so every layer comes from the
+          # builder's local cache: a push of the tested image, not a rebuild.
+          cache-from: ${{ steps.meta.outputs.cache_from }}
+          cache-to: ${{ steps.meta.outputs.cache_to }}
+          build-args: |
+            BUILD_DATE=${{ steps.meta.outputs.build_date }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.tag }}
+            REPO_URL=${{ github.server_url }}/${{ github.repository }}
 
       - name: Point the job at the new image
-        if: github.event_name == 'push' || inputs.update_job
+        if: env.PUBLISH == 'true' && (github.event_name == 'push' || inputs.update_job)
         run: |
           gcloud run jobs update "$JOB" --project "$PROJECT_ID" --region "$REGION" \
-            --image "$IMAGE:${{ steps.submit.outputs.tag }}"
-          echo "$JOB now runs \`$IMAGE:${{ steps.submit.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+            --image "$IMAGE:${{ steps.meta.outputs.tag }}"
+          echo "$JOB now runs \`$IMAGE:${{ steps.meta.outputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"

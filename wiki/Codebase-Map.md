@@ -134,7 +134,7 @@ console/                   SvelteKit console on Cloudflare Workers (anemoi.syste
 wiki/                      source of the GitHub wiki, published on merge by .github/workflows/wiki.yml
 .github/
 ├── workflows/             ci · deploy (tests + one-approval production deploy) · wiki ·
-│                          publish-cloud-run-training · sync-issue-to-project
+│                          build-training-image · sync-issue-to-project
 └── scripts/               deploy-plan.sh (what to test/deploy), publish-wiki.sh,
                            smoke-test-image.sh (start an image before it ships)
 ```

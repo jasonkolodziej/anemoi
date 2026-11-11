@@ -1,5 +1,10 @@
 # Builds the `training` target of docker/multistage.Dockerfile (shared with
 # the Cloudflare Containers API image) and pushes it to Artifact Registry.
+#
+# By hand only: CI builds the image on GitHub runners, with a layer cache
+# (.github/workflows/build-training-image.yml). Cloud Build starts each
+# build with no cache, so this reinstalls every dependency and pushes the
+# whole image -- ~11 min.
 # `gcloud builds submit --tag` can't do this on its own: it only builds a
 # Dockerfile at the root of the uploaded source.
 #

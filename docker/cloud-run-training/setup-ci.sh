@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# One-time setup so .github/workflows/build-training-image.yml can build the
-# training image on Cloud Build and update its job, signing in with Workload
+# One-time setup so .github/workflows/build-training-image.yml can push the
+# training image to Artifact Registry and update its job, signing in with Workload
 # Identity Federation (no stored key). Run by a project owner, from anywhere
 # `gcloud` and `gh` are signed in:
 #
@@ -20,7 +20,7 @@ PROVIDER=anemoi-repo
 
 PROJECT_NUMBER=$(gcloud projects describe "${PROJECT_ID}" --format 'value(projectNumber)')
 CI_SA="anemoi-ci-build@${PROJECT_ID}.iam.gserviceaccount.com"
-# Cloud Build runs the build, and the job runs, as this account.
+# The job runs as this account.
 RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
 # retry <command...>: up to 6 tries, 10s apart -- for IAM's eventual
@@ -63,24 +63,29 @@ retry gcloud iam service-accounts add-iam-policy-binding "${CI_SA}" --project "$
 	--member "principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL}/attribute.repository/${REPO}"
 
 echo "== What it may do"
-# Submit and read builds, use the project's APIs, read a failed build's log.
-for role in roles/cloudbuild.builds.editor roles/serviceusage.serviceUsageConsumer roles/logging.viewer; do
-	retry gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-		--member "serviceAccount:${CI_SA}" --role "${role}" --condition None
-done
-# Upload the build's source.
-retry gcloud storage buckets add-iam-policy-binding "gs://${PROJECT_ID}_cloudbuild" \
-	--member "serviceAccount:${CI_SA}" --role roles/storage.admin
-# Run the build, and the job, as the runtime account.
+# Use the project's APIs.
+retry gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+	--member "serviceAccount:${CI_SA}" --role roles/serviceusage.serviceUsageConsumer --condition None
+# Push the image and its build cache (anemoi-train:buildcache), and read
+# them: Cloud Run also checks whoever updates a job can pull its image.
+retry gcloud artifacts repositories add-iam-policy-binding anemoi --project "${PROJECT_ID}" --location "${REGION}" \
+	--member "serviceAccount:${CI_SA}" --role roles/artifactregistry.writer
+# Point this one job at the new image, which runs as the runtime account.
 retry gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" --project "${PROJECT_ID}" \
 	--member "serviceAccount:${CI_SA}" --role roles/iam.serviceAccountUser
-# Read the image repository: Cloud Run checks whoever updates a job can
-# pull the image it's pointed at.
-retry gcloud artifacts repositories add-iam-policy-binding anemoi --project "${PROJECT_ID}" --location "${REGION}" \
-	--member "serviceAccount:${CI_SA}" --role roles/artifactregistry.reader
-# Point this one job at the new image.
 retry gcloud run jobs add-iam-policy-binding "${JOB}" --project "${PROJECT_ID}" --region "${REGION}" \
 	--member "serviceAccount:${CI_SA}" --role roles/run.developer
+
+echo "== What it no longer needs (builds moved off Cloud Build)"
+# Each is a no-op when already gone.
+for role in roles/cloudbuild.builds.editor roles/logging.viewer; do
+	gcloud projects remove-iam-policy-binding "${PROJECT_ID}" \
+		--member "serviceAccount:${CI_SA}" --role "${role}" --condition None >/dev/null 2>&1 || true
+done
+gcloud storage buckets remove-iam-policy-binding "gs://${PROJECT_ID}_cloudbuild" \
+	--member "serviceAccount:${CI_SA}" --role roles/storage.admin >/dev/null 2>&1 || true
+gcloud artifacts repositories remove-iam-policy-binding anemoi --project "${PROJECT_ID}" --location "${REGION}" \
+	--member "serviceAccount:${CI_SA}" --role roles/artifactregistry.reader >/dev/null 2>&1 || true
 
 echo "== Repository variables (Variables, not Secrets)"
 gh variable set GCP_WIF_PROVIDER --repo "${REPO}" \
