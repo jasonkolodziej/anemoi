@@ -18,6 +18,7 @@ from anemoi.data.gridded_cache import (
     build_fetch_tasks,
     cache_path,
     filter_tracks_by_min_valid_time,
+    load_cached_fields,
     run_fetch_cache,
     save_cached_fields,
     sync_cache_to_archive,
@@ -199,3 +200,50 @@ def test_run_fetch_cache_still_works_unaffected_by_the_archive_addition(tmp_path
     report = run_fetch_cache(tracks, tmp_path, fake_fetch, progress_every=0)
     assert report.n_fetched == 2
     assert report.n_failed == 0
+
+
+# --- save_cached_fields ----------------------------------------------------------
+
+def test_save_writes_each_file_start_to_end_in_one_write(tmp_path, monkeypatch):
+    """A GCS FUSE mount can only stream a file written in order; np.savez to
+    a path seeks back to fill in zip headers. The whole .npz must
+    reach the file in one write, and never be written through a seekable
+    handle on the file itself."""
+    import pathlib
+
+    writes: list[tuple[Path, int]] = []
+    real_write_bytes = pathlib.Path.write_bytes
+
+    def spy_write_bytes(self, data):
+        writes.append((self, len(data)))
+        return real_write_bytes(self, data)
+
+    monkeypatch.setattr(pathlib.Path, "write_bytes", spy_write_bytes)
+    # np.savez_compressed given a path (not a buffer) would write the file itself.
+    real_savez = np.savez_compressed
+
+    def savez_buffer_only(file, *args, **kwargs):
+        assert not isinstance(file, (str, Path)), "savez must write to a buffer, not the file"
+        return real_savez(file, *args, **kwargs)
+
+    monkeypatch.setattr(np, "savez_compressed", savez_buffer_only)
+
+    task = build_fetch_tasks([make_track("EP01", 1)])[0]
+    path = cache_path(tmp_path, task)
+    save_cached_fields(path, make_fields(), task)
+
+    assert writes == [(path, path.stat().st_size)]
+
+
+def test_save_then_load_round_trips(tmp_path):
+    task = build_fetch_tasks([make_track("EP01", 1)])[0]
+    fields = make_fields()
+    path = cache_path(tmp_path, task)
+    save_cached_fields(path, fields, task)
+
+    loaded = load_cached_fields(path)
+    assert loaded.valid_time == fields.valid_time
+    assert loaded.flavor == fields.flavor
+    assert loaded.nwp_lead_hours == fields.nwp_lead_hours
+    for name in ("u200", "v200", "u850", "v850", "z500", "rh700", "t700", "mslp", "sst", "ohc"):
+        np.testing.assert_array_equal(getattr(loaded, name), getattr(fields, name))
