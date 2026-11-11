@@ -1,8 +1,9 @@
 <script lang="ts">
 	/**
 	 * The cookie banner: shown on a visitor's first page, and again from
-	 * "Cookie settings" in the header. Until they choose, nothing optional
-	 * is stored or loaded (`$lib/consent.svelte`).
+	 * "Cookie settings" in the site footer (`site-footer.svelte`) or the
+	 * mobile menu (`mobile-sidebar.svelte`). Until they choose, nothing
+	 * optional is stored or loaded (`$lib/consent.svelte`).
 	 *
 	 * "Accept all" and "Necessary only" are the same size, side by side, so
 	 * refusing is as easy as agreeing. "Choose" opens a toggle per category.
