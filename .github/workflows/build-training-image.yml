@@ -105,7 +105,13 @@ jobs:
           # --async: the builds log to Cloud Build's GCS bucket, which gcloud
           # can only stream with project-wide Viewer. Wait on the status
           # instead, and print the log from Cloud Logging if it fails.
+          # --gcs-source-staging-dir: with the default staging bucket,
+          # gcloud checks the bucket is this project's by listing every
+          # bucket in it (storage.buckets.list, project-wide). Naming the
+          # bucket skips that check; CI's role on this one bucket covers the
+          # rest.
           id=$(gcloud builds submit --project "$PROJECT_ID" --async \
+            --gcs-source-staging-dir "gs://${PROJECT_ID}_cloudbuild/source" \
             --config docker/cloud-run-training/cloudbuild.yaml \
             --substitutions "_IMAGE=$IMAGE,_TAG=$tag" \
             --format 'value(id)' .)
