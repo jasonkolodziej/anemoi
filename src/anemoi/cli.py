@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -165,6 +166,14 @@ def _cmd_gridded_cache(
     split_tracks = filter_tracks(tracks, assignment, Split(args.split))
     print(f"{args.split}: {len(split_tracks)} storms, "
           f"{sum(len(t.fixes) for t in split_tracks)} fixes")
+    from .data.gridded_cache import shard_tracks
+
+    shard_index = getattr(args, "shard_index", 0)
+    shard_count = getattr(args, "shard_count", 1)
+    split_tracks = shard_tracks(split_tracks, shard_index, shard_count)
+    if shard_count > 1:
+        print(f"shard {shard_index}/{shard_count}: {len(split_tracks)} storms, "
+              f"{sum(len(t.fixes) for t in split_tracks)} fixes")
 
     report = run_fetch_cache(
         split_tracks,
@@ -1370,6 +1379,18 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--max-workers", dest="max_workers", type=int, default=default_max_workers)
         p.add_argument("--force", action="store_true", help="refetch even if already cached")
         p.add_argument("--progress-every", dest="progress_every", type=int, default=50)
+        # A Cloud Run job run with --tasks N sets these on each task, so one
+        # execution fetches a split as N disjoint shards in parallel.
+        p.add_argument(
+            "--shard-index", dest="shard_index", type=int,
+            default=int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0")),
+            help="which shard of the split to fetch (default: $CLOUD_RUN_TASK_INDEX, else 0)",
+        )
+        p.add_argument(
+            "--shard-count", dest="shard_count", type=int,
+            default=int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1")),
+            help="how many shards the split is cut into (default: $CLOUD_RUN_TASK_COUNT, else 1)",
+        )
         p.add_argument(
             "--sync-archive", dest="sync_archive", action="store_true",
             help="after fetching, upload any newly-cached files not yet in the durable "
