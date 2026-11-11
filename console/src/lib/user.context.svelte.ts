@@ -28,7 +28,8 @@
  * user.displayName;            // reactive
  * ```
  */
-import { Context, PersistedState } from "runed";
+import { Context } from "runed";
+import { consent } from "./consent.svelte";
 
 /** Local stand-in for a package-manager preference; not tied to any
  * external registry block. */
@@ -62,7 +63,9 @@ export interface UserIdentity {
  *
  * `locale` stores the user's preferred Paraglide locale (e.g. `"en"`,
  * `"es"`). When set, it is persisted in `localStorage` so returning
- * users can be redirected to their preferred language automatically.
+ * users can be redirected to their preferred language automatically --
+ * once the cookie banner's `preferences` category is allowed
+ * (`consent.svelte.ts`); until then it lasts for the page only.
  */
 export interface ExtraPreferences {
 	packageManager: PackageManager;
@@ -83,20 +86,39 @@ const DEFAULT_EXTRA: ExtraPreferences = {
 	locale: null,
 };
 
+function readExtras(): ExtraPreferences {
+	if (typeof localStorage === "undefined" || !consent.allows("preferences")) {
+		return DEFAULT_EXTRA;
+	}
+	try {
+		const raw = localStorage.getItem(USER_EXTRA_PREFS_KEY);
+		return raw === null ? DEFAULT_EXTRA : { ...DEFAULT_EXTRA, ...JSON.parse(raw) };
+	} catch {
+		return DEFAULT_EXTRA;
+	}
+}
+
 // ─── State class ─────────────────────────────────────────────────────────────
 
 export class UserState {
 	// ── Backing state ───────────────────────────────────────────────────────
 	#identity = $state<UserIdentity | null>(null);
-	readonly #extra: PersistedState<ExtraPreferences>;
+	// Not runed's PersistedState: that writes its default to localStorage
+	// the moment it's created, before the visitor has agreed to anything.
+	#extra = $state<ExtraPreferences>(readExtras());
 
 	constructor(identity?: UserIdentity | null) {
 		this.#identity = identity ?? null;
-		this.#extra = new PersistedState<ExtraPreferences>(
-			USER_EXTRA_PREFS_KEY,
-			DEFAULT_EXTRA,
-			{ storage: "local" },
-		);
+	}
+
+	#setExtra(next: ExtraPreferences): void {
+		this.#extra = next;
+		if (!consent.allows("preferences")) return;
+		try {
+			localStorage.setItem(USER_EXTRA_PREFS_KEY, JSON.stringify(next));
+		} catch {
+			/* blocked storage: kept for this page only */
+		}
 	}
 
 	// ── Identity ────────────────────────────────────────────────────────────
@@ -164,16 +186,16 @@ export class UserState {
 	// ── Extras (packageManager, locale) ─────────────────────────────────────
 
 	/** The current extras, persisted to `localStorage`. */
-	current: ExtraPreferences = $derived.by(() => this.#extra.current);
+	current: ExtraPreferences = $derived.by(() => this.#extra);
 
 	/** Update one or more extra preference fields. */
 	setConfig = (data: Partial<ExtraPreferences>): void => {
-		this.#extra.current = { ...this.#extra.current, ...data };
+		this.#setExtra({ ...this.#extra, ...data });
 	};
 
 	/** Shortcut — set the preferred package manager. */
 	setPackageManager = (pm: PackageManager): void => {
-		this.#extra.current = { ...this.#extra.current, packageManager: pm };
+		this.#setExtra({ ...this.#extra, packageManager: pm });
 	};
 
 	// ── i18n / Locale ───────────────────────────────────────────────────────
@@ -191,13 +213,13 @@ export class UserState {
 	 * }
 	 * ```
 	 */
-	locale: string | null = $derived.by(() => this.#extra.current.locale);
+	locale: string | null = $derived.by(() => this.#extra.locale);
 
 	/**
 	 * Convenience boolean — `true` when the user has explicitly chosen a locale.
 	 */
 	hasLocalePreference: boolean = $derived.by(
-		() => this.#extra.current.locale !== null,
+		() => this.#extra.locale !== null,
 	);
 
 	/**
@@ -210,7 +232,7 @@ export class UserState {
 	 * Pass `null` to clear the preference (revert to site default).
 	 */
 	setLocale = (locale: string | null): void => {
-		this.#extra.current = { ...this.#extra.current, locale };
+		this.#setExtra({ ...this.#extra, locale });
 	};
 }
 

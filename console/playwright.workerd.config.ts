@@ -22,7 +22,12 @@ export default defineConfig({
 	reporter: 'list',
 	globalSetup: './e2e/global-setup.ts',
 	globalTeardown: './e2e/global-teardown.ts',
-	use: { baseURL: 'http://localhost:8787', trace: 'retain-on-failure' },
+	use: {
+		baseURL: 'http://localhost:8787',
+		trace: 'retain-on-failure',
+		// The cookie banner already answered (see playwright.config.ts).
+		storageState: './e2e/fixtures/consent-decided.json',
+	},
 	// `@registration-closed` closes sign-up for the whole local D1, which
 	// would fail every other spec's sign-in running alongside it -- so it
 	// runs alone, once the rest have finished.
