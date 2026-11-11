@@ -8,6 +8,13 @@
 !/README.md
 !/LICENSE
 !/src/
+# Read at runtime by anemoi.config (#211); the image copies it.
+!/configs/
+# Cloud Build's own steps (cloudbuild.yaml): build-info.json (#214) and the
+# image smoke test.
+!/.github/
+/.github/*
+!/.github/scripts/
 !/docker/
 /docker/*
 !/docker/multistage.Dockerfile
