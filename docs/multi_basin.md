@@ -113,11 +113,15 @@ gridded caches grow with the storm count. The streaming dataloader
 ## Phases
 
 **0 (this change).**
-- Training records the basins it used (`trained_basins` tag).
+- The registry reads which basins a version trained on from its
+  `trained_basins` tag. Phase 1's runners set it from the examples training
+  actually consumed, not the archive they were given (which also holds
+  held-out seasons and storms a model may skip).
 - The API's `trained_basin` and the cycle's `basin_untrained:<basin>` flag
   come from what every Group 1 champion trained on (`ModelRegistry
-  .trained_basins`). A champion registered before the tag counts as
-  Atlantic-only.
+  .trained_basins`), re-read within the registry's refresh interval. A
+  champion without the tag counts as Atlantic-only, as every version so far
+  is.
 - Nothing changes for today's Atlantic-only models. Once phase 1's models
   are promoted, Eastern Pacific storms lose the badge with no code change.
 

@@ -141,14 +141,18 @@ NWP_LEAD_TAG = "nwp_lead_hours"
 HURDAT2_LAST_SEASON_TAG = "hurdat2_last_season"
 PINNED_HURDAT2_LAST_SEASON = 2023
 
-#: Registry tag: the ATCF basins of the storms a version trained on, sorted
-#: and comma-separated ("AL", "AL,CP,EP"). What `ModelRegistry
+#: Registry tag: the ATCF basins a version had training samples from,
+#: sorted and comma-separated ("AL", "AL,CP,EP"). What `ModelRegistry
 #: .trained_basins` reads to say which storms a forecast is in distribution
-#: for, instead of a hard-coded list (docs/multi_basin.md).
+#: for, instead of a hard-coded list (docs/multi_basin.md). It must come
+#: from the examples training consumed -- not the archive it was given,
+#: which also holds the held-out seasons and storms a model may skip -- so
+#: it is set by the training runners that count them (phase 1), never by
+#: `training_data_tags`.
 TRAINED_BASINS_TAG = "trained_basins"
-#: What a version without `TRAINED_BASINS_TAG` trained on: every one before
-#: it was trained on NHC's Atlantic HURDAT2 file alone, the only one
-#: `data.hurdat2_source` has ever fetched.
+#: What a version without `TRAINED_BASINS_TAG` trained on: every one so far
+#: was trained on NHC's Atlantic HURDAT2 file alone, the only one
+#: `data.hurdat2_source` fetches.
 LEGACY_TRAINED_BASINS = frozenset({"AL"})
 
 
@@ -166,11 +170,9 @@ def training_data_tags(hurdat2_path: object, tracks: list) -> dict[str, str]:
         except OSError:
             pass
     if tracks:
-        from ..data.atcf import storm_basin
         from ..data.splits import latest_final_season
 
         tags[HURDAT2_LAST_SEASON_TAG] = str(latest_final_season(tracks))
-        tags[TRAINED_BASINS_TAG] = ",".join(sorted({storm_basin(t.storm_id) for t in tracks}))
     try:
         from ..provenance import config_digest
 
