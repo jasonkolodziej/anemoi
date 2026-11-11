@@ -300,6 +300,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     )
     from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ModelRegistry, Stage
+    from .training.basin_gates import basin_tags, with_basin_baseline
     from .training.promotion import MetricSet, evaluate_promotion
 
     tracks = _training_tracks(args.hurdat2)
@@ -362,6 +363,9 @@ def cmd_train(args: argparse.Namespace) -> int:
         print(f"no real training runner yet for {args.model!r} -- see cmd_train's docstring")
         return 1
 
+    # What each basin has to beat to count as verified (docs/multi_basin.md).
+    val_metrics = with_basin_baseline(val_metrics, tracks)
+
     print(f"curriculum complete: {[r.stage_name for r in run.results]}")
     for r in run.results:
         print(
@@ -397,6 +401,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     tag_dict.update(standardization_tags(artifacts))
     tag_dict.update(gridded_input_tags(args.gdas_cache_dir))
     tag_dict.update(training_data_tags(args.hurdat2, tracks))
+    tag_dict.update(basin_tags(val_metrics))
     version = registry.register(
         args.model,
         run_id=f"cli-{datetime.now(UTC):%Y%m%dT%H%M%S}",

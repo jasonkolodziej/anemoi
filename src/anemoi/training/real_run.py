@@ -23,6 +23,7 @@ archive doesn't overlap `DEFAULT_BOUNDARIES`' train window at all).
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,7 +44,8 @@ from ..data.splits import (
 )
 from ..data.storm_relative import STORM_RELATIVE_COLUMNS, displacement_nm, storm_relative_sequence
 from ..geo import offset_positions
-from ..metrics.track import ForecastPoint, VerificationPair, to_metric_dict, verify
+from ..metrics.basin import absolute_pairs, per_basin_scores, sample_counts
+from ..metrics.track import VerificationPair, to_metric_dict, verify
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
 from .capacity_ablation import SEQUENCE_LENGTH
@@ -146,22 +148,65 @@ def verification_pairs(
     base_lon = np.asarray(base_lon, dtype=float)[:, None]
     pred_abs = displacements_to_absolute(pred, base_lat, base_lon)
     obs_abs = displacements_to_absolute(obs, base_lat, base_lon)
-    pairs: list[VerificationPair] = []
-    for si, li in zip(*np.nonzero(np.asarray(mask, dtype=bool)), strict=True):
-        plat, plon, pwind = pred_abs[si, li]
-        olat, olon, owind = obs_abs[si, li]
-        pairs.append(
-            VerificationPair(
-                forecast=ForecastPoint(
-                    lead_hours=lead_hours[li], lat=float(plat), lon=float(plon),
-                    max_wind_kt=float(pwind),
-                ),
-                obs_lat=float(olat),
-                obs_lon=float(olon),
-                obs_wind_kt=float(owind),
-            )
-        )
-    return pairs
+    return absolute_pairs(pred_abs, obs_abs, mask, lead_hours)
+
+
+def validation_metrics(
+    flavor: Flavor,
+    pred_abs: np.ndarray,
+    obs_abs: np.ndarray,
+    mask: np.ndarray,
+    *,
+    val_storm_ids: Sequence[str] = (),
+    train_storm_ids: Sequence[str] = (),
+    stage_name: str | None = None,
+    lead_hours: tuple[int, ...] = DEFAULT_LEADS,
+) -> MetricSet:
+    """A stage's validation `MetricSet`, the one every real runner builds:
+    the overall per-lead errors (`metrics.track`), and -- given each
+    sample's storm id -- the same errors and the sample counts for each
+    basin on its own (`metrics.basin`, docs/multi_basin.md).
+
+    ``pred_abs``/``obs_abs`` are ``(n, n_leads, 3)`` absolute (lat, lon,
+    wind_kt); ``mask`` is ``(n, n_leads)``. Raises when no (sample, lead)
+    is verifiable.
+    """
+    pairs = absolute_pairs(pred_abs, obs_abs, mask, lead_hours)
+    if not pairs:
+        where = f"stage {stage_name}: " if stage_name else ""
+        raise ValueError(f"{where}no verifiable (lead, sample) pairs in val")
+    values = to_metric_dict(verify(pairs))
+    if len(val_storm_ids):
+        values.update(per_basin_scores(pred_abs, obs_abs, mask, val_storm_ids, lead_hours))
+        values.update(sample_counts(val_storm_ids, "val"))
+    if len(train_storm_ids):
+        values.update(sample_counts(train_storm_ids, "train"))
+    return MetricSet(split="val", flavor=flavor, values=values)
+
+
+def displacement_validation_metrics(
+    stage: StageSpec,
+    base_lat: np.ndarray,
+    base_lon: np.ndarray,
+    pred: np.ndarray,
+    obs: np.ndarray,
+    mask: np.ndarray,
+    *,
+    val_storm_ids: Sequence[str] = (),
+    train_storm_ids: Sequence[str] = (),
+) -> MetricSet:
+    """`validation_metrics` for a model whose output is displacements:
+    ``pred`` and ``obs`` are ``(n, n_leads, 3)`` (dx_east_nm, dy_north_nm,
+    wind_kt) from each sample's base fix."""
+    base_lat = np.asarray(base_lat, dtype=float)[:, None]
+    base_lon = np.asarray(base_lon, dtype=float)[:, None]
+    return validation_metrics(
+        stage.flavor,
+        displacements_to_absolute(pred, base_lat, base_lon),
+        displacements_to_absolute(obs, base_lat, base_lon),
+        mask,
+        val_storm_ids=val_storm_ids, train_storm_ids=train_storm_ids, stage_name=stage.name,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,7 +219,8 @@ class StageSamples:
     leads are zero-filled and masked out rather than synthesised or dropped
     whole-sample. ``base_lat``/``base_lon`` are the window's current fix,
     needed to turn a predicted or true displacement back into an absolute
-    position for verification.
+    position for verification. ``storm_ids`` names each sample's storm, for
+    scoring each basin on its own (`validation_metrics`).
     """
 
     x: np.ndarray
@@ -182,6 +228,7 @@ class StageSamples:
     mask: np.ndarray
     base_lat: np.ndarray
     base_lon: np.ndarray
+    storm_ids: tuple[str, ...] = ()
 
     def __len__(self) -> int:
         return len(self.x)
@@ -297,6 +344,27 @@ def iter_stage_windows(
                 )
 
 
+def window_validation_metrics(
+    stage: StageSpec,
+    val_windows: Sequence[StageWindow],
+    pred: np.ndarray,
+    train_windows: Sequence[StageWindow] = (),
+) -> MetricSet:
+    """`displacement_validation_metrics` for the streaming runners, which
+    hold their samples as windows: ``pred`` is the model's ``(n, n_leads,
+    3)`` displacement forecast for ``val_windows``, in order."""
+    return displacement_validation_metrics(
+        stage,
+        np.array([sw.current.lat for sw in val_windows]),
+        np.array([sw.current.lon for sw in val_windows]),
+        pred,
+        np.stack([sw.y for sw in val_windows]),
+        np.stack([sw.mask for sw in val_windows]),
+        val_storm_ids=[sw.storm_id for sw in val_windows],
+        train_storm_ids=[sw.storm_id for sw in train_windows],
+    )
+
+
 def build_stage_samples(
     tracks: list[Track],
     rng: np.random.Generator,
@@ -315,6 +383,7 @@ def build_stage_samples(
     mask_rows: list[np.ndarray] = []
     base_lat_rows: list[float] = []
     base_lon_rows: list[float] = []
+    storm_ids: list[str] = []
 
     for sw in iter_stage_windows(tracks, rng, n_augment, noise):
         x_rows.append(storm_relative_sequence(sw.window))
@@ -322,6 +391,7 @@ def build_stage_samples(
         mask_rows.append(sw.mask)
         base_lat_rows.append(sw.current.lat)
         base_lon_rows.append(sw.current.lon)
+        storm_ids.append(sw.storm_id)
 
     if not x_rows:
         return StageSamples(
@@ -337,6 +407,7 @@ def build_stage_samples(
         mask=np.stack(mask_rows),
         base_lat=np.array(base_lat_rows),
         base_lon=np.array(base_lon_rows),
+        storm_ids=tuple(storm_ids),
     )
 
 
@@ -450,13 +521,11 @@ def train_lstm_stage(
         val_loss = float(masked_mse(pred_val_z, yv, mv).item())
         pred_val = pred_val_z.cpu().numpy() * y_std + y_mean
 
-    pairs = verification_pairs(
-        val_samples.base_lat, val_samples.base_lon, pred_val, val_samples.y, val_samples.mask,
+    val_metrics = displacement_validation_metrics(
+        stage, val_samples.base_lat, val_samples.base_lon, pred_val, val_samples.y,
+        val_samples.mask,
+        val_storm_ids=val_samples.storm_ids, train_storm_ids=train_samples.storm_ids,
     )
-
-    if not pairs:
-        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
-    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 
@@ -570,17 +639,7 @@ def train_lstm_stage_streaming(
         val_loss = val_diff2 / max(val_mask, 1.0)
         pred_val = np.concatenate(pred_val_rows, axis=0) * y_std + y_mean
 
-    pairs = verification_pairs(
-        np.array([sw.current.lat for sw in val_windows]),
-        np.array([sw.current.lon for sw in val_windows]),
-        pred_val,
-        np.stack([sw.y for sw in val_windows]),
-        np.stack([sw.mask for sw in val_windows]),
-    )
-
-    if not pairs:
-        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
-    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
+    val_metrics = window_validation_metrics(stage, val_windows, pred_val, train_windows)
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 

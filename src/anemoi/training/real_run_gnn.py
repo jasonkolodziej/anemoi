@@ -49,7 +49,6 @@ from ..data.features import sanitize_field_pixels
 from ..data.gridded_cache import FetchTask, cache_path, load_cached_fields
 from ..data.sources import Flavor
 from ..data.splits import Split, assign_splits, filter_tracks
-from ..metrics.track import ForecastPoint, VerificationPair, to_metric_dict, verify
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
 from .curriculum import Curriculum, CurriculumRun, StageResult, StageSpec
@@ -59,9 +58,10 @@ from .real_run import (
     LEAD_STEPS,
     RunArtifacts,
     boundaries_for_tracks,
-    displacement_to_latlon,
+    displacement_validation_metrics,
     freeze_encoder,
     iter_stage_windows,
+    window_validation_metrics,
 )
 
 GNN_FIELD_NAMES: tuple[str, ...] = (
@@ -159,6 +159,7 @@ class GnnStageSamples:
     base_lat: np.ndarray
     base_lon: np.ndarray
     topology: MeshTopology | None
+    storm_ids: tuple[str, ...] = ()
 
     def __len__(self) -> int:
         return len(self.x)
@@ -183,6 +184,7 @@ def build_gnn_samples(
     mask_rows: list[np.ndarray] = []
     base_lat_rows: list[float] = []
     base_lon_rows: list[float] = []
+    storm_ids: list[str] = []
     topo: MeshTopology | None = None
     shape: tuple[int, int] | None = None
 
@@ -213,6 +215,7 @@ def build_gnn_samples(
         mask_rows.append(sw.mask)
         base_lat_rows.append(sw.current.lat)
         base_lon_rows.append(sw.current.lon)
+        storm_ids.append(sw.storm_id)
 
     n_leads = len(LEAD_STEPS)
     if not x_rows:
@@ -231,6 +234,7 @@ def build_gnn_samples(
         base_lat=np.array(base_lat_rows),
         base_lon=np.array(base_lon_rows),
         topology=topo,
+        storm_ids=tuple(storm_ids),
     )
 
 
@@ -351,31 +355,11 @@ def train_gnn_stage(
         val_loss = float(masked_mse(pred_val_z, yv, mv).item())
         pred_val = pred_val_z.cpu().numpy() * y_std + y_mean
 
-    pairs: list[VerificationPair] = []
-    for si in range(len(val_samples)):
-        base_lat, base_lon = val_samples.base_lat[si], val_samples.base_lon[si]
-        for li, lead_hours in enumerate(DEFAULT_LEADS):
-            if not val_samples.mask[si, li]:
-                continue
-            pred_dx, pred_dy, pred_wind = pred_val[si, li]
-            pred_lat, pred_lon = displacement_to_latlon(base_lat, base_lon, pred_dx, pred_dy)
-            obs_dx, obs_dy, obs_wind = val_samples.y[si, li]
-            obs_lat, obs_lon = displacement_to_latlon(base_lat, base_lon, obs_dx, obs_dy)
-            pairs.append(
-                VerificationPair(
-                    forecast=ForecastPoint(
-                        lead_hours=lead_hours, lat=pred_lat, lon=pred_lon,
-                        max_wind_kt=float(pred_wind),
-                    ),
-                    obs_lat=obs_lat,
-                    obs_lon=obs_lon,
-                    obs_wind_kt=float(obs_wind),
-                )
-            )
-
-    if not pairs:
-        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
-    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
+    val_metrics = displacement_validation_metrics(
+        stage, val_samples.base_lat, val_samples.base_lon, pred_val, val_samples.y,
+        val_samples.mask,
+        val_storm_ids=val_samples.storm_ids, train_storm_ids=train_samples.storm_ids,
+    )
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 
@@ -548,31 +532,7 @@ def train_gnn_stage_streaming(
         val_loss = val_diff2 / max(val_mask, 1.0)
         pred_val = np.concatenate(pred_val_rows, axis=0) * y_std + y_mean
 
-    pairs: list[VerificationPair] = []
-    for si, sw in enumerate(val_windows):
-        base_lat, base_lon = sw.current.lat, sw.current.lon
-        for li, lead_hours in enumerate(DEFAULT_LEADS):
-            if not sw.mask[li]:
-                continue
-            pred_dx, pred_dy, pred_wind = pred_val[si, li]
-            pred_lat, pred_lon = displacement_to_latlon(base_lat, base_lon, pred_dx, pred_dy)
-            obs_dx, obs_dy, obs_wind = sw.y[li]
-            obs_lat, obs_lon = displacement_to_latlon(base_lat, base_lon, obs_dx, obs_dy)
-            pairs.append(
-                VerificationPair(
-                    forecast=ForecastPoint(
-                        lead_hours=lead_hours, lat=pred_lat, lon=pred_lon,
-                        max_wind_kt=float(pred_wind),
-                    ),
-                    obs_lat=obs_lat,
-                    obs_lon=obs_lon,
-                    obs_wind_kt=float(obs_wind),
-                )
-            )
-
-    if not pairs:
-        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
-    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
+    val_metrics = window_validation_metrics(stage, val_windows, pred_val, train_windows)
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 
 

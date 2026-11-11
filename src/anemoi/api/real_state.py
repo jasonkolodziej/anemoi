@@ -662,7 +662,7 @@ class RealState:
         if fix_source == "persisted":
             extra_flags.append("vitals_source:persisted")
         basin = storm_basin(storm_id)
-        trained_basin = basin in self.registry.trained_basins()
+        trained_basin = basin in self.registry.verified_basins()
         if not trained_basin:
             extra_flags.append(f"basin_untrained:{basin}")
 

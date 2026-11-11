@@ -37,14 +37,13 @@ from pathlib import Path
 import numpy as np
 
 from ..data.sources import Flavor
-from ..metrics.track import to_metric_dict, verify
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
 from .curriculum import Curriculum, CurriculumRun, StageResult, stage_b
 from .device import get_device
 from .promotion import MetricSet
 from .real_latents import JointLatentBundle, JointLatentSamples
-from .real_run import verification_pairs
+from .real_run import displacements_to_absolute, validation_metrics
 
 
 def _standardize(x: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -217,14 +216,14 @@ def train_diffusion_stage(
             pred_mean_z[i] = members.mean(dim=0).cpu().numpy()
     pred_mean = pred_mean_z * y_std + y_mean
 
-    pairs = verification_pairs(
-        val_samples.base_lat, val_samples.base_lon, pred_mean, val_samples.y, val_samples.mask,
-    )
-
-    if not pairs:
-        raise ValueError("no verifiable (lead, sample) pairs in val")
-    val_metrics = MetricSet(
-        split="val", flavor=Flavor.GDAS_FINETUNE, values=to_metric_dict(verify(pairs)),
+    base_lat = np.asarray(val_samples.base_lat, dtype=float)[:, None]
+    base_lon = np.asarray(val_samples.base_lon, dtype=float)[:, None]
+    val_metrics = validation_metrics(
+        Flavor.GDAS_FINETUNE,
+        displacements_to_absolute(pred_mean, base_lat, base_lon),
+        displacements_to_absolute(val_samples.y, base_lat, base_lon),
+        val_samples.mask,
+        val_storm_ids=val_samples.storm_ids, train_storm_ids=train_samples.storm_ids,
     )
     arch_params = {
         "latent_dim": train_samples.z.shape[-1], "hidden_dim": hidden_dim, "n_layers": n_layers,

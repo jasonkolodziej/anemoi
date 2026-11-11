@@ -346,6 +346,42 @@ def test_train_lstm_stage_streaming_batch_size_does_not_change_final_metrics_muc
 
 
 @pytest.mark.torch
+@pytest.mark.torch
+@pytest.mark.parametrize("streaming", [False, True])
+def test_a_run_on_two_basins_scores_each_on_its_own(streaming):
+    """One model trained on both (docs/multi_basin.md): its validation
+    metrics carry each basin's own errors and sample counts beside the
+    overall ones, on either training path."""
+    tracks = [
+        make_track("AL011985", season=1985, n=26, seed=0),
+        make_track("EP011985", season=1985, n=26, seed=10),
+        make_track("AL012021", season=2021, n=26, seed=1),
+        make_track("EP012021", season=2021, n=26, seed=11),
+        make_track("AL012022", season=2022, n=26, seed=7),   # Stage B validation
+        make_track("AL022022", season=2022, n=26, seed=8),
+        make_track("EP012022", season=2022, n=26, seed=12),
+        make_track("AL012023", season=2023, n=26, seed=3),   # the test season
+    ]
+
+    from anemoi.training.real_run import run_lstm_curriculum
+
+    kwargs = {"streaming": True, "batch_size": 8} if streaming else {}
+    _run, val_metrics, _artifacts = run_lstm_curriculum(
+        tracks, _fake_checkpoint_store(), seed=42, n_augment=1, hidden_dim=8, **kwargs,
+    )
+    values = val_metrics.values
+    for lead in (12, 48, 120):
+        assert math.isfinite(values[f"AL/track_error_{lead}h_nm"])
+        assert math.isfinite(values[f"EP/intensity_error_{lead}h_kt"])
+    # Two Atlantic validation storms to the Eastern Pacific's one; one
+    # training storm each (Stage B trains on 2021).
+    assert values["AL/val_samples"] == 2 * values["EP/val_samples"] > 0
+    assert values["AL/train_samples"] == values["EP/train_samples"] > 0
+    # The overall error is the two basins' pooled, so it lies between them.
+    lo, hi = sorted((values["AL/track_error_48h_nm"], values["EP/track_error_48h_nm"]))
+    assert lo <= values["track_error_48h_nm"] <= hi
+
+
 def test_run_lstm_curriculum_streaming_completes_both_stages():
     tracks = [
         make_track("AL011985", season=1985, n=26, seed=0),

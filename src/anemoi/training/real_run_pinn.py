@@ -50,7 +50,6 @@ from ..data.gridded_cache import FetchTask, cache_path, load_cached_fields
 from ..data.sources import Flavor
 from ..data.splits import Split, assign_splits, filter_tracks
 from ..data.storm_relative import STORM_RELATIVE_COLUMNS, storm_relative_sequence
-from ..metrics.track import ForecastPoint, VerificationPair, to_metric_dict, verify
 from ..models.base import DEFAULT_LEADS, require_torch
 from ..tracking.checkpoint_store import CheckpointStore
 from .capacity_ablation import SEQUENCE_LENGTH
@@ -62,6 +61,7 @@ from .real_run import (
     boundaries_for_tracks,
     displacements_to_absolute,
     iter_stage_windows,
+    validation_metrics,
 )
 
 #: Weights on each physics_residuals term in the training loss -- small
@@ -83,6 +83,7 @@ class PinnStageSamples:
     mask: np.ndarray
     base_lat: np.ndarray
     base_lon: np.ndarray
+    storm_ids: tuple[str, ...] = ()
 
     def __len__(self) -> int:
         return len(self.x_track)
@@ -109,6 +110,7 @@ def build_pinn_samples(
     mask_rows: list[np.ndarray] = []
     base_lat_rows: list[float] = []
     base_lon_rows: list[float] = []
+    storm_ids: list[str] = []
 
     for sw in iter_stage_windows(tracks, rng, n_augment, noise):
         task = FetchTask(
@@ -130,6 +132,7 @@ def build_pinn_samples(
         mask_rows.append(sw.mask)
         base_lat_rows.append(sw.current.lat)
         base_lon_rows.append(sw.current.lon)
+        storm_ids.append(sw.storm_id)
 
     n_leads = len(DEFAULT_LEADS)
     if not x_track_rows:
@@ -148,6 +151,7 @@ def build_pinn_samples(
         mask=np.stack(mask_rows),
         base_lat=np.array(base_lat_rows),
         base_lon=np.array(base_lon_rows),
+        storm_ids=tuple(storm_ids),
     )
 
 
@@ -536,28 +540,12 @@ def train_pinn_stage_streaming(
         pred_val = np.concatenate(pred_val_rows, axis=0)
         true_val = np.concatenate(true_val_rows, axis=0)
 
-    pairs: list[VerificationPair] = []
-    for si, sw in enumerate(val_windows):
-        for li, lead_hours in enumerate(DEFAULT_LEADS):
-            if not sw.mask[li]:
-                continue
-            plat, plon, pwind = pred_val[si, li]
-            tlat, tlon, twind = true_val[si, li]
-            pairs.append(
-                VerificationPair(
-                    forecast=ForecastPoint(
-                        lead_hours=lead_hours, lat=float(plat), lon=float(plon),
-                        max_wind_kt=float(pwind),
-                    ),
-                    obs_lat=float(tlat),
-                    obs_lon=float(tlon),
-                    obs_wind_kt=float(twind),
-                )
-            )
-
-    if not pairs:
-        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
-    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
+    val_metrics = validation_metrics(
+        stage.flavor, pred_val, true_val, np.stack([sw.mask for sw in val_windows]),
+        val_storm_ids=[sw.storm_id for sw in val_windows],
+        train_storm_ids=[sw.storm_id for sw in train_windows],
+        stage_name=stage.name,
+    )
     return model, train_loss, val_loss, val_metrics, (env_mean, env_std)
 
 
@@ -643,28 +631,11 @@ def train_pinn_stage(
         val_loss = float(masked_mse(pred_val_t, truev, mv).item())
         pred_val = pred_val_t.cpu().numpy()
 
-    pairs: list[VerificationPair] = []
-    for si in range(len(val_samples)):
-        for li, lead_hours in enumerate(DEFAULT_LEADS):
-            if not val_samples.mask[si, li]:
-                continue
-            plat, plon, pwind = pred_val[si, li]
-            tlat, tlon, twind = true_val[si, li]
-            pairs.append(
-                VerificationPair(
-                    forecast=ForecastPoint(
-                        lead_hours=lead_hours, lat=float(plat), lon=float(plon),
-                        max_wind_kt=float(pwind),
-                    ),
-                    obs_lat=float(tlat),
-                    obs_lon=float(tlon),
-                    obs_wind_kt=float(twind),
-                )
-            )
-
-    if not pairs:
-        raise ValueError(f"stage {stage.name}: no verifiable (lead, sample) pairs in val")
-    val_metrics = MetricSet(split="val", flavor=stage.flavor, values=to_metric_dict(verify(pairs)))
+    val_metrics = validation_metrics(
+        stage.flavor, pred_val, true_val, val_samples.mask,
+        val_storm_ids=val_samples.storm_ids, train_storm_ids=train_samples.storm_ids,
+        stage_name=stage.name,
+    )
     return model, train_loss, val_loss, val_metrics, (env_mean, env_std)
 
 

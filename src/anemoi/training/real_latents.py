@@ -94,6 +94,9 @@ class JointLatentSamples:
     true_absolute: np.ndarray  # (N, n_leads, 3) -- absolute (lat, lon, wind)
     context: np.ndarray  # (N, len(CONTEXT_FEATURE_NAMES))
     latent_dims: tuple[int, ...]
+    #: Each row's storm, for scoring each basin on its own
+    #: (`real_run.validation_metrics`). Empty: overall scores only.
+    storm_ids: tuple[str, ...] = ()
 
     def __len__(self) -> int:
         return len(self.z)
@@ -191,6 +194,7 @@ def _extract_for_tracks(
     base_lat_rows: list[float] = []
     base_lon_rows: list[float] = []
     context_rows: list[np.ndarray] = []
+    storm_ids: list[str] = []
 
     topo = None
     shape: tuple[int, int] | None = None
@@ -241,6 +245,7 @@ def _extract_for_tracks(
         base_lat_rows.append(sw.current.lat)
         base_lon_rows.append(sw.current.lon)
         context_rows.append(_context_features(sw))
+        storm_ids.append(sw.storm_id)
 
     latent_dims = (
         lstm_a.model.norm.normalized_shape[0],
@@ -334,7 +339,7 @@ def _extract_for_tracks(
     return JointLatentSamples(
         z=z, y=y, mask=mask, base_lat=base_lat, base_lon=base_lon,
         predictions=predictions, true_absolute=true_abs, context=context,
-        latent_dims=latent_dims,
+        latent_dims=latent_dims, storm_ids=tuple(storm_ids),
     )
 
 

@@ -47,6 +47,7 @@ from ..tracking.registry import (
     latent_signature,
 )
 from ..tracking.tags import Trigger
+from .basin_gates import basin_tags, with_basin_baseline
 from .curriculum import CurriculumRun
 from .orchestrator import OrchestrationError, RunOutcome, Task
 from .promotion import MetricSet, PromotionDecision, evaluate_promotion
@@ -298,6 +299,10 @@ class RealOrchestratorRunner:
         except Exception as exc:  # noqa: BLE001 - one model's failure must not crash the schedule
             return RunOutcome(task=task.name, ok=False, detail=f"{type(exc).__name__}: {exc}")
 
+        # What each basin has to beat to count as verified, on the same
+        # validation storms (docs/multi_basin.md): recorded with the
+        # metrics, and read by the promotion decision and the tags below.
+        val_metrics = with_basin_baseline(val_metrics, self.tracks)
         self.curriculum_runs[task.name] = run
         self.val_metrics[task.name] = val_metrics
 
@@ -350,6 +355,10 @@ class RealOrchestratorRunner:
         tag_dict.update(standardization_tags(artifacts))
         tag_dict.update(gridded_input_tags(self.gdas_cache_dir))
         tag_dict.update(training_data_tags(self.hurdat2_path, self.tracks))
+        # After training_data_tags: the basins this version really had
+        # samples from, and the ones it is verified in, replace the list
+        # of basins in the storm archive.
+        tag_dict.update(basin_tags(val_metrics))
         version = self.registry.register(
             task.name,
             run_id=f"orchestrator-{datetime.now(UTC):%Y%m%dT%H%M%S}",

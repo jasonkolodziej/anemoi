@@ -253,10 +253,14 @@ def test_pacific_storm_is_flagged_as_not_a_trained_basin(client, monkeypatch):
     assert body["trained_basin"] is False
 
 
-def test_a_basin_is_trained_once_every_served_model_trained_on_it(client, monkeypatch):
-    """`trained_basin` follows what the champions trained on (their
-    `trained_basins` tag), not a hard-coded list: Eastern Pacific training
-    turns the badge off without a code change (docs/multi_basin.md)."""
+def test_a_basin_is_in_distribution_once_every_served_model_is_verified_in_it(
+    client, monkeypatch,
+):
+    """`trained_basin` follows what the champions have shown (their
+    `verified_basins` tag: trained on the basin *and* better than
+    persistence there), not a hard-coded list -- so a verified Eastern
+    Pacific loses the badge without a code change, and one merely trained
+    on keeps it (docs/multi_basin.md)."""
     from anemoi.api import real_state
     from anemoi.data.besttrack import Fix, Track, TrackQuality
     from anemoi.data.sources import Flavor
@@ -274,10 +278,19 @@ def test_a_basin_is_trained_once_every_served_model_trained_on_it(client, monkey
     assert client.get("/v1/storms/EP172026").json()["trained_basin"] is False
 
     registry = real_state.get_real_state().registry
-    for name in GROUP1_MODELS:
-        v = registry.register(name, run_id=f"run-{name}", input_flavor=Flavor.GDAS_FINETUNE,
-                              metrics={}, tags={"trained_basins": "AL,EP"})
-        registry.transition(name, v.version, Stage.PRODUCTION)
+
+    def promote_all(verified: str) -> None:
+        for name in GROUP1_MODELS:
+            v = registry.register(
+                name, run_id=f"run-{name}", input_flavor=Flavor.GDAS_FINETUNE, metrics={},
+                tags={"trained_basins": "AL,EP", "verified_basins": verified},
+            )
+            registry.transition(name, v.version, Stage.PRODUCTION)
+
+    promote_all("AL")  # trained on the Eastern Pacific, not better than persistence there
+    assert client.get("/v1/storms/EP172026").json()["trained_basin"] is False
+
+    promote_all("AL,EP")
     assert client.get("/v1/storms/EP172026").json()["trained_basin"] is True
     listed = {s["storm_id"]: s["trained_basin"] for s in client.get("/v1/storms").json()}
     assert listed["EP172026"] is True

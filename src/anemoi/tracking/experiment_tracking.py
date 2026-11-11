@@ -142,14 +142,23 @@ HURDAT2_LAST_SEASON_TAG = "hurdat2_last_season"
 PINNED_HURDAT2_LAST_SEASON = 2023
 
 #: Registry tag: the ATCF basins of the storms a version trained on, sorted
-#: and comma-separated ("AL", "AL,CP,EP"). What `ModelRegistry
-#: .trained_basins` reads to say which storms a forecast is in distribution
-#: for, instead of a hard-coded list (docs/multi_basin.md).
+#: and comma-separated ("AL", "AL,CP,EP"), read by `ModelRegistry
+#: .trained_basins` (docs/multi_basin.md). For a Group 1 model it is the
+#: basins it had training samples from (`training.basin_gates.basin_tags`):
+#: a gridded model has none where no field was cached.
 TRAINED_BASINS_TAG = "trained_basins"
 #: What a version without `TRAINED_BASINS_TAG` trained on: every one before
 #: it was trained on NHC's Atlantic HURDAT2 file alone, the only one
-#: `data.hurdat2_source` has ever fetched.
+#: `data.hurdat2_source` fetched then.
 LEGACY_TRAINED_BASINS = frozenset({"AL"})
+
+#: Registry tag: of the basins a version trained on, the ones where it beat
+#: persistence on validation (`training.basin_gates`), sorted and
+#: comma-separated; empty when it beat it nowhere. What `ModelRegistry
+#: .verified_basins` reads to say which storms a forecast is in
+#: distribution for. Absent on versions before it: `LEGACY_TRAINED_BASINS`,
+#: which is what they were served as.
+VERIFIED_BASINS_TAG = "verified_basins"
 
 
 def training_data_tags(hurdat2_path: object, tracks: list) -> dict[str, str]:

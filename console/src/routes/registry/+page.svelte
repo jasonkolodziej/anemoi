@@ -81,7 +81,13 @@
 							</TableCell>
 							<TableCell class="font-data text-xs text-text-muted">
 								{#if e.latest}
-									{Object.entries(e.latest.metrics).map(([k, v]) => `${k}=${v.toFixed(2)}`).join(', ')}
+									<!-- The overall metrics only: each basin's own (`AL/…`, since
+									     docs/multi_basin.md) would triple this cell. Which basins
+									     the version covers is the badge beside its checkpoint. -->
+									{Object.entries(e.latest.metrics)
+										.filter(([k]) => !k.includes('/'))
+										.map(([k, v]) => `${k}=${v.toFixed(2)}`)
+										.join(', ')}
 								{/if}
 							</TableCell>
 							<TableCell class="font-data text-xs text-text-faint">
@@ -96,6 +102,15 @@
 										{/if}
 										{#if e.latest.tags?.arch_params}
 											<Badge variant="outline" title={e.latest.tags.arch_params}>arch_params</Badge>
+										{/if}
+										{#if e.latest.tags?.verified_basins !== undefined}
+											<Badge
+												variant="outline"
+												data-testid="verified-basins"
+												title={`Trained on ${e.latest.tags.trained_basins || 'no basin'}; better than persistence in ${e.latest.tags.verified_basins || 'none'}`}
+											>
+												{e.latest.tags.verified_basins || 'no basin'} verified
+											</Badge>
 										{/if}
 									</div>
 									{#if e.latest.tags?.git_commit || e.latest.tags?.storm_split || e.latest.tags?.gpu_type}
