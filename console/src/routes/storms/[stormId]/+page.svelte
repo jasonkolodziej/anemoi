@@ -35,6 +35,7 @@
     formatLatLon,
     formatUtc,
     parseCycleLabel,
+    runnableCycleRange,
   } from "$lib/utils";
 
   let { data }: { data: PageData } = $props();
@@ -91,6 +92,9 @@
 
   const cycleInput = $derived(cycleDraft ?? defaultCycleToRun(storm, now));
   const cycleProblem = $derived(cycleLabelProblem(cycleInput));
+  // The cycles the API would accept for this storm now: the date picker
+  // disables every day and hour outside it.
+  const cycleRange = $derived(runnableCycleRange(storm, now));
   // A label this storm already has can't be run again (409 `exists`,
   // #212): the form offers to show it instead.
   const cycleExists = $derived(
@@ -477,7 +481,10 @@
             class="font-data w-40 rounded-md border border-border-strong bg-bg px-2.5 py-1.5 text-xs text-text"
           />
         </div>
-        <CycleDateTimePicker bind:value={() => cycleInput, setCycleInput} />
+        <CycleDateTimePicker
+          bind:value={() => cycleInput, setCycleInput}
+          range={cycleRange}
+        />
         <div>
           <label
             for="members-input"

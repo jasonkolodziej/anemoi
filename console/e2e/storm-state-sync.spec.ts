@@ -677,14 +677,17 @@ test.describe("a signed-in forecaster running a cycle", () => {
     await expect(exists).toContainText("20261015_12Z has already run");
     await expect(runButton(page)).toBeDisabled();
 
+    // 18Z hasn't begun at 13:40Z, so the picker doesn't offer it.
+    await expect(hour(page).locator('option[value="18"]')).toBeDisabled();
+
     // Changing the cycle to run is moving on from that error.
-    await hour(page).selectOption("18");
+    await input(page).fill("20261012_00Z");
     await expect(banner(page)).toBeHidden();
-    await expectForm(page, "20261015_18Z");
+    await expectForm(page, "20261012_00Z");
     await expect(exists).toBeHidden();
 
     // Back to 12Z, and on to the cycle that exists.
-    await hour(page).selectOption("12");
+    await input(page).fill("20261015_12Z");
     await exists.getByRole("button", { name: "View it" }).click();
     await expectShowing(page, "20261015_12Z", "20261015_12Z");
   });
