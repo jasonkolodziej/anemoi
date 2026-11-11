@@ -208,6 +208,11 @@ def test_parse_grib2_index_gives_contiguous_byte_ranges():
 # --- era5_to_gridded_fields (synthetic Dataset matching the real schema) ------
 
 
+def xr_ones_like(array):
+    xr = pytest.importorskip("xarray")
+    return xr.ones_like(array)
+
+
 def _synthetic_era5_dataset():
     """Full (721, 1440) global 0.25 deg grid, matching the real ARCO-ERA5
     shape -- _crop_box requires it, and a scaled-down grid would silently
@@ -243,6 +248,43 @@ def test_era5_to_gridded_fields_converts_units_correctly():
     assert fields.sst.mean() == pytest.approx(28.5)  # K -> degC
     assert np.all(fields.ohc == OHC_PLACEHOLDER_KJ_CM2)
     assert 0.0 <= fields.rh700.mean() <= 100.0
+
+
+
+def test_era5_to_gridded_fields_reads_each_variable_once_at_the_right_levels():
+    """ARCO-ERA5 chunks hold every level of a time step over the whole globe,
+    so each .sel on a 3D variable downloads ~150 MB raw whatever it keeps.
+    u and v are needed at two levels: one read each, not one per level --
+    and each level still lands in its own field."""
+    from collections import Counter
+
+    ds = _synthetic_era5_dataset()
+    level_valued = ds["level"].astype(float) * xr_ones_like(ds["u_component_of_wind"])
+    ds["u_component_of_wind"] = level_valued
+    ds["v_component_of_wind"] = -level_valued
+
+    reads: Counter[str] = Counter()
+
+    class CountingDataset:
+        def __getitem__(self, name):
+            array = ds[name]
+
+            class CountingArray:
+                values = array.values
+
+                def sel(self, **sel):
+                    reads[name] += 1
+                    return array.sel(**sel)
+
+            return CountingArray()
+
+    fields = era5_to_gridded_fields(CountingDataset(), center_lat=0.0, center_lon=0.0, box_deg=20.0)
+
+    assert fields.u200.mean() == pytest.approx(200.0)
+    assert fields.u850.mean() == pytest.approx(850.0)
+    assert fields.v200.mean() == pytest.approx(-200.0)
+    assert fields.v850.mean() == pytest.approx(-850.0)
+    assert max(reads.values()) == 1, reads
 
 
 # --- gdas_to_gridded_fields (synthetic message dict matching the real schema) --

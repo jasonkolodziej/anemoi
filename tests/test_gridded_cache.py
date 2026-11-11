@@ -21,6 +21,7 @@ from anemoi.data.gridded_cache import (
     load_cached_fields,
     run_fetch_cache,
     save_cached_fields,
+    shard_tracks,
     sync_cache_to_archive,
 )
 from anemoi.data.sources import Flavor
@@ -247,3 +248,39 @@ def test_save_then_load_round_trips(tmp_path):
     assert loaded.nwp_lead_hours == fields.nwp_lead_hours
     for name in ("u200", "v200", "u850", "v850", "z500", "rh700", "t700", "mslp", "sst", "ohc"):
         np.testing.assert_array_equal(getattr(loaded, name), getattr(fields, name))
+
+
+# --- shard_tracks ----------------------------------------------------------------
+
+def _fix_keys(tracks):
+    return [(t.storm_id, f.valid_time) for t in tracks for f in t.fixes]
+
+
+def test_shards_are_disjoint_cover_the_split_and_are_balanced():
+    tracks = [make_track("AL01", 7), make_track("EP02", 1), make_track("CP03", 12)]
+    every = _fix_keys(tracks)
+    shards = [_fix_keys(shard_tracks(tracks, i, 4)) for i in range(4)]
+
+    seen = [key for shard in shards for key in shard]
+    assert sorted(seen) == sorted(every)  # covered...
+    assert len(seen) == len(set(seen))  # ...exactly once
+    sizes = [len(shard) for shard in shards]
+    assert max(sizes) - min(sizes) <= 1  # 20 fixes over 4 shards: 5 each
+
+
+def test_a_shard_drops_storms_with_no_fixes_in_it():
+    tracks = [make_track("EP02", 1), make_track("AL01", 3)]
+    assert [t.storm_id for t in shard_tracks(tracks, 1, 4)] == ["AL01"]
+
+
+def test_one_shard_is_the_whole_split():
+    tracks = [make_track("AL01", 3)]
+    assert _fix_keys(shard_tracks(tracks, 0, 1)) == _fix_keys(tracks)
+
+
+def test_shard_index_must_be_in_range():
+    import pytest
+
+    for index, count in [(4, 4), (-1, 4), (0, 0)]:
+        with pytest.raises(ValueError):
+            shard_tracks([make_track("AL01", 3)], index, count)

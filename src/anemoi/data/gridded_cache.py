@@ -67,6 +67,34 @@ def build_fetch_tasks(tracks: list[Track]) -> list[FetchTask]:
     ]
 
 
+def shard_tracks(tracks: list[Track], shard_index: int, shard_count: int) -> list[Track]:
+    """Keep every ``shard_count``-th fix, starting at ``shard_index``,
+    counted across all of ``tracks`` in order; drop storms left with none.
+
+    For splitting one cache run across parallel workers -- Cloud Run tasks,
+    each with its own network link. ERA5 fetches are bandwidth-bound (a
+    sample reads whole-globe chunks, ~0.6 GB), so more machines, not more
+    threads on one, is what speeds a split up. Striding by fix rather than
+    by storm gives every shard a near-equal share of fixes and seasons.
+    The shards of one split are disjoint and together cover it exactly.
+    """
+    if shard_count < 1 or not 0 <= shard_index < shard_count:
+        raise ValueError(f"shard {shard_index} of {shard_count}: need 0 <= index < count")
+    if shard_count == 1:
+        return list(tracks)
+    sharded = []
+    i = 0
+    for track in tracks:
+        kept = []
+        for fix in track.fixes:
+            if i % shard_count == shard_index:
+                kept.append(fix)
+            i += 1
+        if kept:
+            sharded.append(Track(storm_id=track.storm_id, fixes=tuple(kept)))
+    return sharded
+
+
 def filter_tracks_by_min_valid_time(tracks: list[Track], min_valid_time: datetime) -> list[Track]:
     """Drop fixes earlier than ``min_valid_time``, and storms left with none.
 

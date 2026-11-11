@@ -263,10 +263,17 @@ def era5_to_gridded_fields(
         arr = np.asarray(ds[var].sel(**sel).values, dtype=float)
         return _crop_box(arr, center_lat, center_lon, box_deg)
 
-    u200 = crop("u_component_of_wind", level=200)
-    v200 = crop("v_component_of_wind", level=200)
-    u850 = crop("u_component_of_wind", level=850)
-    v850 = crop("v_component_of_wind", level=850)
+    def crop_levels(var: str, levels: tuple[int, ...]) -> list[np.ndarray]:
+        # One read for every level: ARCO-ERA5 stores each time step of a 3D
+        # variable as one chunk of all 37 levels over the whole globe
+        # (~150 MB raw), read whole whatever is selected from it. Selecting
+        # 200 and 850 hPa separately read the u and v chunks twice each --
+        # ~800 MB per sample, 7 chunks, where 5 do.
+        arr = np.asarray(ds[var].sel(level=list(levels)).values, dtype=float)
+        return [_crop_box(level_arr, center_lat, center_lon, box_deg) for level_arr in arr]
+
+    u200, u850 = crop_levels("u_component_of_wind", (200, 850))
+    v200, v850 = crop_levels("v_component_of_wind", (200, 850))
     z500 = crop("geopotential", level=500) / STANDARD_GRAVITY_M_S2
     t700_k = crop("temperature", level=700)
     q700 = crop("specific_humidity", level=700)
