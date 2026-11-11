@@ -37,7 +37,7 @@ import { getDynamicHostInfo } from "./hosting";
  * D1 deliberately wins over the env var whenever a row exists -- this is
  * a live, auditable admin toggle (flip it with one SQL `UPDATE`, no
  * redeploy or secret change needed), not a bootstrap default. The env
- * var only matters before `better-auth.sql`'s migration has ever run
+ * var only matters before `migrations/0001_baseline.sql` has ever run
  * (seeds the row as `'false'`): once it has, setting the env var/secret
  * does nothing, by design -- closed-by-default shouldn't be
  * accidentally reopened by a forgotten deploy-time var. To actually open
