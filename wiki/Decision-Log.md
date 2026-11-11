@@ -747,6 +747,20 @@ Measured on the same inputs, main vs this change:
 
 The API job in `deploy.yml` runs it, since the cycle's product maths is what the API serves.
 
+### 56. Which basins the models know came from a constant, not the models — *provenance, design*
+
+`data.atcf.TRAINED_BASINS = {"AL"}` decided whether a storm's forecast was flagged `basin_untrained:<basin>` and whether the console showed its badge. That was true, since training has only read the Atlantic HURDAT2, but nothing tied it to the models: training on another basin would have left every one of its storms flagged until someone edited the constant, and once someone had, rolling back to an Atlantic-only champion would have left them unflagged.
+
+**Fix.**
+
+- A version's registry tag `trained_basins` (`"AL"`, `"AL,CP,EP"`) says which basins it trained on. It must come from the examples training consumed -- the archive a run is given also holds held-out seasons and storms a model may skip -- so the archive's provenance (`training_data_tags`) never sets it; phase 1's runners do, from their sample counts.
+- `ModelRegistry.trained_basins()` is the basins **every** Group 1 champion trained on, since a cycle can combine any of them. A champion without the tag counts as Atlantic-only (`LEGACY_TRAINED_BASINS`), which every version so far is.
+- The storm list, the storm page and the cycle (`basin_untrained:<basin>`, `provenance.trained_basin`) read it; the storm routes refresh the registry first, as the registry routes do, so a promotion or rollback made elsewhere shows within its refresh interval. The constant is gone.
+
+**Plan.** `docs/multi_basin.md` proposes how the other basins come in: one model per architecture rather than per basin, Southern Hemisphere storms mirrored into the Northern, the basin as an input, 1-minute winds only (JTWC's columns in IBTrACS outside NHC's basins), and per-basin promotion gates with the Atlantic unable to regress. Phases: Eastern/Central Pacific, then Western Pacific and North Indian, then the Southern Hemisphere.
+
+**Enforced by** `tests/test_registry.py` (no champion, a champion without the tag, champions tagged, one Atlantic-only champion keeping a basin out, an unpromoted candidate changing nothing), `tests/test_retrain_seasons.py` (the tag on a run), `tests/test_api_real_state.py` (an Eastern Pacific storm flagged until every champion is tagged with it).
+
 ---
 
 ## Implementation → rebrand

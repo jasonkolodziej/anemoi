@@ -305,6 +305,27 @@ class ModelRegistry:
     def production(self, name: str) -> ModelVersion | None:
         return self.in_stage(name, Stage.PRODUCTION)
 
+    def trained_basins(self) -> frozenset[str]:
+        """The basins every Group 1 champion trained on: the storms a
+        forecast is in distribution for. A cycle can combine any of them,
+        so a basin counts only when all of them saw it.
+
+        Read from each champion's `TRAINED_BASINS_TAG`; a version registered
+        before that tag counts as Atlantic-only (`LEGACY_TRAINED_BASINS`).
+        With no champion at all no model serves, and the answer is the same.
+        """
+        from .experiment_tracking import LEGACY_TRAINED_BASINS, TRAINED_BASINS_TAG
+
+        basins: frozenset[str] | None = None
+        for name in GROUP1_MODELS:
+            champion = self.champion(name)
+            if champion is None:
+                continue
+            raw = champion.tags.get(TRAINED_BASINS_TAG, "")
+            seen = frozenset(b for b in raw.split(",") if b) or LEGACY_TRAINED_BASINS
+            basins = seen if basins is None else basins & seen
+        return LEGACY_TRAINED_BASINS if basins is None else basins
+
     def champion(self, name: str) -> ModelVersion | None:
         """The version actually serving real inference right now -- the
         correct incumbent for a promotion decision (§5.3). Production if

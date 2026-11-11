@@ -629,7 +629,7 @@ class RealState:
         coastline: tuple[float, float] | None,
         run: RunRequest,
     ) -> CycleOutput:
-        from ..data.atcf import TRAINED_BASINS, storm_basin
+        from ..data.atcf import storm_basin
         from ..data.gdas_cache import GDAS_ARCHIVE_START
         from ..training.real_inference_cycle import build_real_deterministic_fn
         from ..training.real_inference_ensemble import build_real_ensemble_fn
@@ -658,7 +658,8 @@ class RealState:
         if fix_source == "persisted":
             extra_flags.append("vitals_source:persisted")
         basin = storm_basin(storm_id)
-        if basin not in TRAINED_BASINS:
+        trained_basin = basin in self.registry.trained_basins()
+        if not trained_basin:
             extra_flags.append(f"basin_untrained:{basin}")
 
         # The gridded fields, fetched once, before anything runs (#215): the
@@ -728,7 +729,7 @@ class RealState:
                 "fix_source": fix_source,
                 "fix": fix,
                 "basin": basin,
-                "trained_basin": basin in TRAINED_BASINS,
+                "trained_basin": trained_basin,
                 "started_at": started_at,
                 "nwp": nwp,
                 **provenance.summary(),
