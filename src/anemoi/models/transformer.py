@@ -57,7 +57,14 @@ def build_transformer(
                 norm_first=True,
                 activation="gelu",
             )
-            self.encoder = nn.TransformerEncoder(layer, num_layers=n_layers)
+            # enable_nested_tensor=False: PyTorch's nested-tensor fast path
+            # needs post-norm layers, and these are pre-norm (norm_first), so
+            # it would only be skipped with a UserWarning in every log. Off
+            # changes nothing computed and no weights; inputs are fixed-size
+            # crops, so there's no padding for it to skip anyway.
+            self.encoder = nn.TransformerEncoder(
+                layer, num_layers=n_layers, enable_nested_tensor=False
+            )
             self.norm = nn.LayerNorm(d_model)
             self.head = nn.Linear(d_model, spec.output_dim)
             # Synoptic regime classification head (§3.2 outputs).
