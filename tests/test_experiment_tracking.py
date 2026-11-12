@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -171,6 +172,69 @@ def test_log_curriculum_stages_returns_none_without_a_client():
         split="val", flavor=Flavor.GDAS_FINETUNE, values={"track_error_48h_nm": 40.0},
     )
     assert et.log_curriculum_stages(None, "lstm", run, val_metrics) is None
+
+
+def _two_stage_run():
+    from anemoi.training.curriculum import Curriculum, CurriculumRun
+
+    run = CurriculumRun(curriculum=Curriculum.standard("lstm"))
+    run.record(StageResult(
+        stage_name="A", flavor=Flavor.ERA5_PRETRAIN, epochs_completed=60,
+        final_train_loss=1.0, final_val_loss=1.1, checkpoint_uri="s3://fake/A.pt",
+    ))
+    run.record(StageResult(
+        stage_name="B", flavor=Flavor.GDAS_FINETUNE, epochs_completed=20,
+        final_train_loss=0.5, final_val_loss=0.6, checkpoint_uri="s3://fake/B.pt",
+    ))
+    return run
+
+
+class _RecordingStore:
+    def __init__(self) -> None:
+        self.uploads: dict[str, dict] = {}
+
+    def upload(self, local_path, key):
+        import json
+
+        self.uploads[key] = json.loads(Path(local_path).read_text())
+        return f"s3://fake/{key}"
+
+
+def test_stage_runs_are_written_to_durable_storage_without_mlflow():
+    """MLflow is optional: with no client at all, every stage still lands
+    in durable storage with what MLflow would have recorded."""
+    store = _RecordingStore()
+    val_metrics = MetricSet(
+        split="val", flavor=Flavor.GDAS_FINETUNE, values={"track_error_48h_nm": 40.0},
+    )
+
+    assert et.log_curriculum_stages(
+        None, "lstm", _two_stage_run(), val_metrics, checkpoint_store=store,
+    ) is None
+
+    [(key, body)] = store.uploads.items()
+    assert key.startswith("runs/lstm/") and key.endswith(".json")
+    a, b = body["stages"]
+    assert (a["stage"], b["stage"]) == ("A", "B")
+    assert a["metrics"] == {"train_loss": 1.0, "val_loss": 1.1}
+    # val_metrics belong to the deployable stage only, as in MLflow.
+    assert b["metrics"]["track_error_48h_nm"] == 40.0
+    assert b["params"] == {"epochs_completed": 20, "checkpoint_uri": "s3://fake/B.pt"}
+    assert b["mlflow_run_id"] is None
+    assert b["tags"]  # the validated RunTags, same as MLflow's run tags
+
+
+def test_a_failing_store_never_fails_training():
+    class BrokenStore:
+        def upload(self, local_path, key):
+            raise OSError("R2 is down")
+
+    val_metrics = MetricSet(
+        split="val", flavor=Flavor.GDAS_FINETUNE, values={"track_error_48h_nm": 40.0},
+    )
+    et.log_curriculum_stages(
+        None, "lstm", _two_stage_run(), val_metrics, checkpoint_store=BrokenStore(),
+    )
 
 
 # --- mlflow-dependent (real entities, stub client) --------------------------

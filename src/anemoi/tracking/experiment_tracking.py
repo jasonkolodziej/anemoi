@@ -391,6 +391,70 @@ def log_stage_run(
         return None
 
 
+#: Durable-storage prefix for stage-run records: one JSON per curriculum run,
+#: ``runs/<model>/<UTC timestamp>.json``. They hold what each MLflow run
+#: holds, so MLflow being down or unconfigured loses nothing.
+STAGE_RUNS_PREFIX = "runs"
+
+
+def stage_run_record(
+    model_name: str,
+    stage: StageSpec,
+    result: StageResult,
+    *,
+    execution_mode: ExecutionMode = ExecutionMode.SEQUENTIAL,
+    val_metrics: MetricSet | None = None,
+    latest_season: int | None = None,
+    trigger: Trigger = Trigger.MANUAL_SWEEP,
+    mlflow_run_id: str | None = None,
+) -> dict:
+    """One completed stage as plain JSON: the tags, metrics and params
+    `log_stage_run` sends to MLflow, plus the MLflow run id when there is
+    one."""
+    tags = build_run_tags(
+        model_name, stage, execution_mode=execution_mode, val_metrics=val_metrics,
+        latest_season=latest_season, trigger=trigger,
+    )
+    metrics = {"train_loss": result.final_train_loss, "val_loss": result.final_val_loss}
+    if val_metrics is not None:
+        metrics.update(val_metrics.values)
+    return {
+        "model": model_name,
+        "stage": stage.name,
+        "run_name": f"{model_name}-{stage.name}",
+        "experiment": experiment_name(model_name),
+        "completed_at": (result.completed_at or datetime.now(UTC)).isoformat(),
+        "tags": tags.to_dict() if tags else {},
+        "metrics": metrics,
+        "params": {
+            "epochs_completed": result.epochs_completed,
+            "checkpoint_uri": result.checkpoint_uri,
+        },
+        "mlflow_run_id": mlflow_run_id,
+    }
+
+
+def write_stage_runs(checkpoint_store, model_name: str, records: list[dict]) -> str | None:
+    """Upload one curriculum run's stage records to durable storage; returns
+    the key, or None if there's no store or the upload failed -- like
+    every tracking write, this must never fail a training run."""
+    if checkpoint_store is None or not records:
+        return None
+    import tempfile
+    from pathlib import Path
+
+    key = f"{STAGE_RUNS_PREFIX}/{model_name}/{datetime.now(UTC):%Y%m%dT%H%M%S%fZ}.json"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "stage_runs.json"
+            body = {"model": model_name, "stages": records}
+            path.write_text(json.dumps(body, indent=2, default=str))
+            checkpoint_store.upload(path, key)
+        return key
+    except Exception:  # noqa: BLE001 - tracking must never fail a training run
+        return None
+
+
 def log_curriculum_stages(
     mlflow_client: MlflowClient | None,
     model_name: str,
@@ -400,6 +464,7 @@ def log_curriculum_stages(
     execution_mode: ExecutionMode = ExecutionMode.SEQUENTIAL,
     latest_season: int | None = None,
     trigger: Trigger = Trigger.MANUAL_SWEEP,
+    checkpoint_store=None,
 ) -> str | None:
     """Log every completed stage in `run` as its own real MLflow run,
     attaching `val_metrics` (the deployable stage's real verification
@@ -407,19 +472,34 @@ def log_curriculum_stages(
     for (`run_*_curriculum` doesn't surface earlier stages' val_metrics to
     its caller). Returns the deployable stage's real MLflow run_id, or
     None if mlflow_client is None or nothing could be logged.
-    """
-    if mlflow_client is None:
-        return None
 
+    Every stage is also written to ``checkpoint_store`` (durable storage,
+    `write_stage_runs`) whether or not MLflow is configured or reachable,
+    so MLflow is optional: it's a view onto these records, not their only
+    copy.
+    """
     deployable_run_id: str | None = None
+    records: list[dict] = []
     n = len(run.results)
-    for i, (stage, result) in enumerate(zip(run.curriculum.stages, run.results, strict=True)):
+    # Only the stages that completed (a run can stop early, or hold none).
+    completed = zip(run.curriculum.stages[:n], run.results, strict=True)
+    for i, (stage, result) in enumerate(completed):
         is_deployable = i == n - 1
+        stage_metrics = val_metrics if is_deployable else None
         run_id = log_stage_run(
             mlflow_client, model_name, stage, result,
-            execution_mode=execution_mode, val_metrics=val_metrics if is_deployable else None,
+            execution_mode=execution_mode, val_metrics=stage_metrics,
             latest_season=latest_season, trigger=trigger,
         )
         if is_deployable:
             deployable_run_id = run_id
+        try:
+            records.append(stage_run_record(
+                model_name, stage, result, execution_mode=execution_mode,
+                val_metrics=stage_metrics, latest_season=latest_season, trigger=trigger,
+                mlflow_run_id=run_id,
+            ))
+        except Exception:  # noqa: BLE001 - tracking must never fail a training run
+            pass
+    write_stage_runs(checkpoint_store, model_name, records)
     return deployable_run_id

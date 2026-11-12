@@ -350,6 +350,7 @@ class RealOrchestratorRunner:
         mlflow_run_id = log_curriculum_stages(
             self.registry.mlflow_client, task.name, run, val_metrics,
             execution_mode=task.execution_mode, latest_season=latest_season, trigger=self.trigger,
+            checkpoint_store=self.registry.checkpoint_store,
         )
         tag_dict = tags.to_dict() if tags else {}
         artifacts = self.trained_artifacts.get(task.name)
