@@ -436,3 +436,33 @@ def test_log_curriculum_stages_attaches_val_metrics_only_to_the_deployable_stage
     stage_b_metrics = {m.key for m in log_batch_calls[1][2]}
     assert "track_error_48h_nm" not in stage_a_metrics
     assert "track_error_48h_nm" in stage_b_metrics
+
+
+@pytest.mark.tracking
+def test_stage_records_are_rewritten_with_the_mlflow_run_ids():
+    """With MLflow up: the first upload has no run ids (it happens before
+    MLflow is contacted), the second rewrites the same key with each
+    stage's returned run id."""
+    import json
+
+    uploads: list[tuple[str, dict]] = []
+
+    class SequenceStore:
+        def upload(self, local_path, key):
+            uploads.append((key, json.loads(Path(local_path).read_text())))
+            return f"s3://fake/{key}"
+
+    val_metrics = MetricSet(
+        split="val", flavor=Flavor.GDAS_FINETUNE, values={"track_error_48h_nm": 40.0},
+    )
+    deployable_run_id = et.log_curriculum_stages(
+        _StubMlflowClient(), "lstm", _two_stage_run(), val_metrics,
+        checkpoint_store=SequenceStore(),
+    )
+
+    assert deployable_run_id == "run-2"
+    assert len(uploads) == 2
+    (first_key, first), (second_key, second) = uploads
+    assert first_key == second_key
+    assert [s["mlflow_run_id"] for s in first["stages"]] == [None, None]
+    assert [s["mlflow_run_id"] for s in second["stages"]] == ["run-1", "run-2"]
