@@ -311,3 +311,15 @@ def test_an_eastern_pacific_cycle_falls_back_to_nhcs_pacific_radii():
     al = run_cycle(plan, make_fix(), deterministic_fn, crashing)
     ep = run_cycle(plan, replace(make_fix(), storm_id="EP092026"), deterministic_fn, crashing)
     assert ep.products.cone[-1].radius_nm < al.products.cone[-1].radius_nm
+
+
+def test_a_pacific_climatological_ensemble_is_drawn_from_pacific_radii():
+    """Review of #239: callers that pass `climatological_ensemble` as their
+    ensemble (the CLI's demo cycle, the demo API) must give it the storm's
+    basin, or an EP storm's members are spread on Atlantic radii."""
+    det = deterministic_fn(plan_cycle(T, LatencyOracle()), make_fix())
+    al = climatological_ensemble(det, n_members=400, seed=3, basin="AL")
+    ep = climatological_ensemble(det, n_members=400, seed=3, basin="EP")
+    from anemoi.inference.postprocess import cone_radius_from_spread
+
+    assert cone_radius_from_spread(ep, 120) < cone_radius_from_spread(al, 120)
