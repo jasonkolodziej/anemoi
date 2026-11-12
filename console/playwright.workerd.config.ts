@@ -13,12 +13,16 @@ import { defineConfig, devices } from '@playwright/test';
 // all line up with the browser's origin. `/api/v1/*` 500s in the server
 // log are expected: the anemoi-api-real service binding isn't running.
 //
+// The Develop pages' suite (develop-pages.spec.ts) runs here too: those
+// pages are signed-in only, and sign-in needs this suite's local D1. It
+// serves their API calls in the browser from fixtures/develop-api.json.
+//
 // The storm page's state-sync suite runs here too: it mocks every API call
 // in the browser (no demo API, which CI doesn't start), so it needs nothing
 // but the built Worker -- and sign-in, for its run-a-cycle case.
 export default defineConfig({
 	testDir: './e2e',
-	testMatch: ['auth.spec.ts', 'storm-state-sync.spec.ts'],
+	testMatch: ['auth.spec.ts', 'storm-state-sync.spec.ts', 'develop-pages.spec.ts'],
 	reporter: 'list',
 	globalSetup: './e2e/global-setup.ts',
 	globalTeardown: './e2e/global-teardown.ts',

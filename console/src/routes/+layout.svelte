@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { NavEntry } from "$lib/components/navigation/navigation-menu.svelte";
   import { onMount } from "svelte";
   import type { Snippet } from "svelte";
   import "../app.css";
@@ -48,13 +49,21 @@
       .catch(() => {});
   });
 
-  const nav = [
+  // Develop: the operator pages. Each requires sign-in (its -guard.ts).
+  const nav: NavEntry[] = [
     { href: "/", label: "Storms" },
     { href: "/models", label: "Models" },
     { href: "/sources", label: "Sources" },
-    { href: "/registry", label: "Registry" },
-    { href: "/monitoring", label: "Monitoring" },
-    { href: "/retraining", label: "Retraining" },
+    {
+      type: "dropdown",
+      label: "Develop",
+      items: [
+        { href: "/architecture", title: "Architecture", description: "The live system and each served model's layers." },
+        { href: "/registry", title: "Registry", description: "Versions, stages, and the active model-set pin." },
+        { href: "/monitoring", title: "Monitoring", description: "Drift, train/serve skew, and calibration." },
+        { href: "/retraining", title: "Retraining", description: "What's due to retrain, and why." },
+      ],
+    },
     { href: "/docs", label: "Docs" },
   ];
 </script>

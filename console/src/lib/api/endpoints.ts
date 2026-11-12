@@ -1,6 +1,7 @@
 import { apiFetch } from './client';
 import type {
 	ActivePin,
+	ArchitectureOut,
 	CycleResult,
 	DriftReportOut,
 	HealthOut,
@@ -43,6 +44,9 @@ export const getCycle = (stormId: string, cycle: string) =>
 export const listRegistry = () => apiFetch<RegistryEntry[]>('/v1/registry');
 export const getModelRegistry = (model: string) => apiFetch<RegistryEntry>(`/v1/registry/${model}`);
 export const getActivePin = () => apiFetch<ActivePin | null>('/v1/registry/pins/active');
+/** Signed-in users only (anemoi-api-real's gate, docker/api/src/routing.ts). */
+export const getArchitecture = (model: string, version?: number) =>
+	apiFetch<ArchitectureOut>(`/v1/registry/${model}/architecture`, { query: { version } });
 
 export const getDriftAll = () => apiFetch<DriftReportOut[]>('/v1/monitoring/drift');
 export const getDrift = (model: string) => apiFetch<DriftReportOut>(`/v1/monitoring/drift/${model}`);

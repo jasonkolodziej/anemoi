@@ -10,7 +10,7 @@ would recognise. Everything else here is additive.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -298,6 +298,44 @@ class RegistryEntry(BaseModel):
     latest: ModelVersionOut | None
     production: ModelVersionOut | None
     versions: list[ModelVersionOut]
+
+
+class TensorOut(BaseModel):
+    name: str
+    shape: list[int]
+
+
+class LayerOut(BaseModel):
+    path: str
+    type: str
+    depth: int
+    output_shape: list[int] | None
+    own_params: int
+    total_params: int
+
+
+class ArchitectureOut(BaseModel):
+    """What a model version is made of (`models.architecture.describe`):
+    built from its ``arch_params`` tag, one example input of the shape
+    training feeds it, every module's output shape and parameters."""
+
+    model: str
+    #: The version described; None when no registered version has
+    #: ``arch_params`` and the builder's defaults were used.
+    version: int | None
+    stage: str | None
+    arch_params: dict[str, Any]
+    defaults: bool
+    batched: bool
+    input_dim: int
+    latent_dim: int
+    lead_hours: list[int]
+    output_dim: int
+    inputs: list[TensorOut]
+    outputs: list[TensorOut]
+    layers: list[LayerOut]
+    total_params: int
+    trainable_params: int
 
 
 class ActivePin(BaseModel):

@@ -15,13 +15,10 @@
 	import HurricaneIcon from "$lib/components/anemoi/HurricaneIcon.svelte";
 	import Github from "$lib/icons/github.svelte";
 	import { consent } from "$lib/consent.svelte";
+	import type { NavEntry } from "$lib/components/navigation/navigation-menu.svelte";
 
-	interface NavItem {
-		href: string;
-		label: string;
-	}
 	interface Props {
-		nav: NavItem[];
+		nav: NavEntry[];
 		/** Real /v1/health.anemoi_version, fetched once by +layout.svelte --
 		 * null until that resolves. Not fetched here too; one shared value
 		 * for both the desktop bar and this drawer. */
@@ -103,19 +100,32 @@
 				</Dialog.Close>
 			</div>
 			<nav class="flex-1 space-y-0.5 overflow-y-auto p-2">
-				{#each nav as item (item.href)}
+				{#snippet link(href: string, label: string, nested = false)}
 					<a
-						href={item.href}
+						{href}
 						onclick={() => (open = false)}
 						class={cn(
-							"block rounded-md px-3 py-2 text-sm font-medium transition-colors",
-							isActive(item.href)
+							"block rounded-md py-2 text-sm font-medium transition-colors",
+							nested ? "pl-6 pr-3" : "px-3",
+							isActive(href)
 								? "bg-surface-raised text-text"
 								: "text-text-muted hover:bg-surface-raised/60 hover:text-text",
 						)}
 					>
-						{item.label}
+						{label}
 					</a>
+				{/snippet}
+				{#each nav as entry (entry.type === "dropdown" ? entry.label : entry.href)}
+					{#if entry.type === "dropdown"}
+						<p class="px-3 pt-3 pb-1 text-[11px] font-semibold tracking-wide text-text-faint uppercase">
+							{entry.label}
+						</p>
+						{#each entry.items as item (item.href)}
+							{@render link(item.href, item.title, true)}
+						{/each}
+					{:else}
+						{@render link(entry.href, entry.label)}
+					{/if}
 				{/each}
 			</nav>
 			<div

@@ -20,12 +20,8 @@
 	import Github from "$lib/icons/github.svelte";
 	import { UserContext } from "$lib/user.context.svelte";
 
-	interface NavItem {
-		href: string;
-		label: string;
-	}
 	interface Props {
-		nav: NavItem[];
+		nav: NavEntry[];
 		/** Real /v1/health.anemoi_version, fetched once by +layout.svelte --
 		 * null until that resolves. Not fetched here too; one shared value
 		 * for both this bar and MobileSidebar's drawer. */
@@ -33,10 +29,7 @@
 	}
 	let { nav, anemoiVersion = null }: Props = $props();
 
-	// `nav`'s plain {href, label} shape is already a valid NavLinkEntry
-	// (its `type` defaults to "link") -- no transform needed to hand it to
-	// the generalized nav-menu component.
-	let items = $derived(nav as NavEntry[]);
+	let items = $derived(nav);
 
 	function isActive(href: string): boolean {
 		if (href === "/") return page.url.pathname === "/";
