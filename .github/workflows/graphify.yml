@@ -64,3 +64,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: .github/scripts/commit-graph.sh "${{ github.sha }}" "${{ github.ref_name }}"
+
+      # TEMPORARY (reverted before merge): proves commit-graph.sh's commit is
+      # signed when made with GITHUB_TOKEN, against a throwaway branch.
+      - name: TEMP verify a signed API commit
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          b="tmp/graphify-ci-commit-test-${GITHUB_RUN_ID}"
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/heads/${b}" -f sha="${HEAD_SHA}" --jq .ref
+          trap 'gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${b}" && echo "deleted ${b}"' EXIT
+          .github/scripts/commit-graph.sh "${HEAD_SHA}" "${b}"
+          gh api "repos/${GITHUB_REPOSITORY}/commits/${b}" --jq '"tip \(.sha[0:8]) by \(.commit.committer.name), parent \(.parents[0].sha[0:8]), verified \(.commit.verification.verified)"'
