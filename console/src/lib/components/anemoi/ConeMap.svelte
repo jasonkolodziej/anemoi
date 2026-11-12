@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { unwrapLon } from "$lib/geo";
   /**
    * Track + cone of uncertainty on a real interactive MapLibre map
    * (svelte-maplibre-gl -- https://svelte-maplibre-gl.mierune.dev/docs/
@@ -201,7 +202,7 @@
       : (forecastTrack[0]?.lon ?? cone[0]?.lon ?? 0),
   );
   function u(lon: number): number {
-    return lon + 360 * Math.round((refLon - lon) / 360);
+    return unwrapLon(lon, refLon);
   }
 
   // Standard spherical destination-point formula (bearing swept 0..360)
