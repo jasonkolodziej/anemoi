@@ -10,8 +10,12 @@
   import { pollWhileVisible } from "$lib/poll";
   import { setWaiterLoading } from "$lib/stores/waiter";
   import { recall, remember } from "$lib/lastKnown";
+  import { Button } from "$lib/components/ui/button";
+  import { page } from "$app/state";
+  import { goto } from "$app/navigation";
 
   const OUTAGE = "Could not reach Anemoi-API";
+
   let storms = $state<StormSummary[] | null>(null);
   let plans = $state<CyclePlanOut[] | null>(null);
   let error = $state<string | null>(null);
@@ -21,6 +25,33 @@
   // True while the page shows what this browser remembered from its last
   // visit and the fresh answer hasn't landed yet.
   let refreshing = $state(false);
+
+  // Basin filter (docs/multi_basin.md phase 4): one chip per basin with an
+  // active storm, kept in the URL (?basin=EP) so a filtered list can be
+  // shared or reloaded. Shown only when there's more than one basin.
+  const BASIN_NAMES: Record<string, string> = {
+    AL: "Atlantic",
+    EP: "Eastern Pacific",
+    CP: "Central Pacific",
+    WP: "Western Pacific",
+    IO: "North Indian",
+    SH: "Southern Hemisphere",
+  };
+  const basinFilter = $derived(page.url.searchParams.get("basin")?.toUpperCase() ?? null);
+  const basinCounts = $derived.by(() => {
+    const counts = new Map<string, number>();
+    for (const s of storms ?? []) counts.set(s.basin, (counts.get(s.basin) ?? 0) + 1);
+    return [...counts.entries()].sort(([a], [b]) => a.localeCompare(b));
+  });
+  const shown = $derived(
+    basinFilter ? (storms ?? []).filter((s) => s.basin === basinFilter) : (storms ?? []),
+  );
+  function setBasin(basin: string | null) {
+    const url = new URL(page.url);
+    if (basin) url.searchParams.set("basin", basin);
+    else url.searchParams.delete("basin");
+    goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+  }
 
   interface Remembered {
     date: string;
@@ -116,8 +147,34 @@
         : "No storms in the current demo season."}
     </p>
   {:else}
+    {#if basinCounts.length > 1}
+      <div class="mb-4 flex flex-wrap gap-2" role="group" aria-label="Filter storms by basin">
+        <Button
+          size="sm"
+          variant={basinFilter ? "outline" : "secondary"}
+          aria-pressed={!basinFilter}
+          onclick={() => setBasin(null)}>All <span class="font-data text-text-faint">{storms.length}</span></Button
+        >
+        {#each basinCounts as [basin, n] (basin)}
+          <Button
+            size="sm"
+            variant={basinFilter === basin ? "secondary" : "outline"}
+            aria-pressed={basinFilter === basin}
+            title={BASIN_NAMES[basin] ?? basin}
+            onclick={() => setBasin(basinFilter === basin ? null : basin)}
+            >{basin} <span class="font-data text-text-faint">{n}</span></Button
+          >
+        {/each}
+      </div>
+    {/if}
+    {#if shown.length === 0}
+      <p class="text-sm text-text-faint">
+        No active storms in the {BASIN_NAMES[basinFilter ?? ""] ?? basinFilter} basin.
+        <button class="text-action hover:text-action-strong" onclick={() => setBasin(null)}>Show all</button>
+      </p>
+    {/if}
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {#each storms as storm (storm.storm_id)}
+      {#each shown as storm (storm.storm_id)}
         <StormCard {storm} />
       {/each}
     </div>

@@ -375,9 +375,9 @@
           {#if !storm.trained_basin}
             <span
               class="font-data rounded-full border border-status-degraded/40 px-2 py-0.5 text-[10px] tracking-wide text-status-degraded uppercase"
-              title="No trained model has seen a {storm.basin}-basin storm -- every model here was trained on Atlantic storms only, so this forecast is a genuine out-of-distribution extrapolation"
+              title="Not every served model has shown skill in the {storm.basin} basin yet: each must have trained there and beaten persistence (docs/multi_basin.md), so this forecast is out of distribution"
             >
-              {storm.basin} basin -- untrained
+              {storm.basin} basin -- not verified
             </span>
           {/if}
           {#if cycle}
