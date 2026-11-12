@@ -69,12 +69,13 @@ TRANSFORMER_OPTIM: TransformerOptim = transformer_optim()
 
 def lr_factor(step: int, total_steps: int, warmup_fraction: float, min_fraction: float) -> float:
     """Multiplier on the peak rate at optimiser ``step`` (0-based): linear
-    warmup to 1, then cosine down to ``min_fraction`` at the last step."""
+    warmup to 1, then cosine down to ``min_fraction`` at the last update,
+    ``total_steps - 1`` -- the last index a stage's loop uses."""
     total_steps = max(total_steps, 1)
     warmup = int(round(warmup_fraction * total_steps))
     if warmup and step < warmup:
         return (step + 1) / warmup
-    span = max(total_steps - warmup, 1)
+    span = max(total_steps - 1 - warmup, 1)
     progress = min(max(step - warmup, 0) / span, 1.0)
     return min_fraction + (1.0 - min_fraction) * 0.5 * (1.0 + math.cos(math.pi * progress))
 

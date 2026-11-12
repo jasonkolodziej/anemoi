@@ -16,11 +16,17 @@ def test_warmup_rises_linearly_to_the_peak():
     assert lr_factor(9, 100, 0.1, 0.1) == pytest.approx(1.0)
 
 
-def test_cosine_decays_to_the_floor_by_the_last_step():
+def test_cosine_decays_to_the_floor_on_the_last_update():
+    # Updates are indices 0..total_steps-1; warmup is 0..9 here.
     assert lr_factor(10, 100, 0.1, 0.1) == pytest.approx(1.0)
-    mid = lr_factor(55, 100, 0.1, 0.1)
-    assert mid == pytest.approx(0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * 0.5)))
-    assert lr_factor(100, 100, 0.1, 0.1) == pytest.approx(0.1)
+    mid = lr_factor(10 + 89 // 2, 100, 0.1, 0.1)
+    assert mid == pytest.approx(0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * (89 // 2) / 89)))
+    assert lr_factor(99, 100, 0.1, 0.1) == pytest.approx(0.1)
+
+
+def test_a_short_stage_still_ends_on_the_floor():
+    """Review of #238: a two-update stage used to finish at 0.55."""
+    assert lr_factor(1, 2, 0.0, 0.1) == pytest.approx(0.1)
 
 
 def test_no_warmup_starts_at_the_peak():
@@ -45,6 +51,10 @@ def test_the_optimiser_caps_the_stage_rate_warms_up_and_clips():
     first_lr = opt.opt.param_groups[0]["lr"]
     assert first_lr < opt.peak  # warming up
     opt.zero_grad()
-    loss = (p * 1e6).sum()  # a huge gradient
+    loss = (p * 1e6).sum()  # a gradient of norm ~1.7e6
     opt.step(loss)
-    assert torch.linalg.vector_norm(p.detach()) < 1.0  # clipped, so the step stayed small
+    # The gradient left after the step is the clipped one: AdamW normalises
+    # its own update, so the parameters alone wouldn't show a missing clip.
+    assert torch.linalg.vector_norm(p.grad) == pytest.approx(
+        TRANSFORMER_OPTIM.grad_clip_norm, rel=1e-4,
+    )
