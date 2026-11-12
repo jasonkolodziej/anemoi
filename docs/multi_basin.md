@@ -1,9 +1,23 @@
 # Training and forecasting beyond the Atlantic
 
-**Status:** phases 0 and 1 built; phase 1 is waiting on a training run.
-Every model serving today was trained on the Atlantic alone. Storms from
-other basins are forecast, but out of distribution, and flagged
+**Status:** phase 1 done for the Eastern Pacific (2026-11-12): every Group 1
+champion is trained and verified in AL and EP, none regressed on the
+Atlantic, and EP storms are served in distribution. The Central Pacific
+waits for Stage B training storms (phase 1 below). Storms from any other
+basin are forecast, but out of distribution, and flagged
 `basin_untrained:<basin>` until models trained on them pass their gates.
+
+First multi-basin champions (48 h track error, nm; persistence in brackets):
+
+| Model | AL | EP | CP (36 windows) |
+|---|---|---|---|
+| lstm v12 | 271 (338) | 176 (252) | 88 (186) |
+| cnn v8 | 225 (338) | 152 (252) | 121 (186) |
+| transformer v8 | 261 (338) | 139 (252) | 118 (186) |
+| gnn v7 | 291 (338) | 164 (252) | 111 (186) |
+| pinn v7 | 299 (334) | 197 (257) | 418 (222) |
+| diffusion v12 | 293 (335) | 191 (253) | 152 (186) |
+| fusion v12 | 231 (335) | 136 (253) | 69 (186) |
 
 **Recommendation in one line:** keep **one model per architecture**, train it
 on every basin with storms mirrored into one hemisphere and the basin given as

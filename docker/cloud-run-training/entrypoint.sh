@@ -55,7 +55,9 @@ fi
 # as before. LOCALIZE_CACHE=0 turns this off.
 if [ "${LOCALIZE_CACHE:-1}" = "1" ]; then
   LOCAL_CACHE_ROOT="${LOCAL_CACHE_ROOT:-/tmp/anemoi-cache}"
-  if anemoi cache-localize --src "${ERA5_CACHE_DIR}" --dst "${LOCAL_CACHE_ROOT}/era5"; then
+  # A derived-only re-sync (latents, diffusion, fusion) reads GDAS alone.
+  if [ -z "${DERIVED_FROM_CHAMPIONS}" ] \
+    && anemoi cache-localize --src "${ERA5_CACHE_DIR}" --dst "${LOCAL_CACHE_ROOT}/era5"; then
     ERA5_CACHE_DIR="${LOCAL_CACHE_ROOT}/era5"
   fi
   if anemoi cache-localize --src "${GDAS_CACHE_DIR}" --dst "${LOCAL_CACHE_ROOT}/gdas"; then

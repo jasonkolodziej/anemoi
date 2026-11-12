@@ -574,3 +574,59 @@ def test_a_servable_derived_champion_is_still_a_real_bar(runner, fake_load_run_a
 
     assert not runner.promotions["fusion"].promote_to_staging
     assert runner.registry.champion("fusion").run_id == "synced-fusion"
+
+
+# --- latents come from the champions real inference will serve ---------------
+
+_LATENTS = Task(
+    name="latents", kind="latents", depends_on=(),
+    execution_mode=ExecutionMode.SEQUENTIAL, gpu_memory_gb=24, hours_low=1.5, hours_high=3.0,
+)
+
+
+def test_a_subset_run_extracts_latents_with_the_other_models_champions(
+    runner, fake_load_run_artifacts,
+):
+    """Found 2026-11-12: a transformer-only run failed at latents ("Group 1
+    model(s) not yet trained"), leaving diffusion and fusion desynced from
+    the new champion until a separate re-sync. The other four now come
+    from their champions."""
+    _register_group1_versions(runner.registry, champion_version=1, n_versions=1)
+    runner(Task(
+        name="transformer", kind="train", depends_on=(), execution_mode=ExecutionMode.SEQUENTIAL,
+        gpu_memory_gb=8, hours_low=1.0, hours_high=2.0,
+    ))
+
+    outcome = runner(_LATENTS)
+
+    assert outcome.ok, outcome.detail
+    loaded = {name for name, _ in fake_load_run_artifacts}
+    assert {"lstm", "cnn", "gnn", "pinn"} <= loaded
+    champions = {m: runner.registry.champion(m).version for m in runner.group1_versions}
+    assert runner.group1_versions == champions  # what diffusion/fusion's signature records
+
+
+def test_a_trained_model_that_failed_its_gate_conditions_nothing(
+    runner, fake_load_run_artifacts, monkeypatch,
+):
+    """Found 2026-11-12: transformer v7 failed its gate but still
+    conditioned diffusion/fusion v11, so they were desynced from the served
+    v5. A version that wasn't promoted is replaced by the champion."""
+    _register_group1_versions(runner.registry, champion_version=1, n_versions=1)
+
+    def worse(*args, **kwargs):
+        run, _metrics, artifacts = _fake_curriculum_run("lstm")
+        m = dict(FAKE_METRICS_VALUES)
+        m["track_error_48h_nm"] = FAKE_METRICS_VALUES["track_error_48h_nm"] * 10
+        return run, MetricSet(split="val", flavor=Flavor.GDAS_FINETUNE, values=m), artifacts
+
+    monkeypatch.setattr("anemoi.training.real_run.run_lstm_curriculum", worse)
+    runner(Task(
+        name="lstm", kind="train", depends_on=(), execution_mode=ExecutionMode.SEQUENTIAL,
+        gpu_memory_gb=8, hours_low=1.0, hours_high=2.0,
+    ))
+    assert not runner.promotions["lstm"].promote_to_staging
+
+    assert runner(_LATENTS).ok
+    assert runner.group1_versions["lstm"] == 1  # the champion, not this run's v2
+    assert ("lstm", 1) in fake_load_run_artifacts
