@@ -125,17 +125,40 @@ def _run_pinn(r: RealOrchestratorRunner) -> tuple[CurriculumRun, MetricSet]:
 
 def _run_latents(r: RealOrchestratorRunner) -> tuple[None, None]:
     """Not a model -- extracts real Anemoi-Spread/fusion conditioning
-    latents from the five just-trained Group 1 models (`training
-    .real_latents`). Raises (caught by ``__call__``, same as every other
-    task) if a Group 1 model hasn't actually run yet in this schedule --
-    `orchestrator.build_schedule` guarantees the dependency ordering, but
-    this runner is deliberately still checked rather than trusted, since a
-    caller could invoke it directly."""
+    latents (`training.real_latents`) from the Group 1 models real
+    inference will serve once this schedule's promotions are applied: each
+    model's current champion (production, else staging).
+
+    A model trained in this run is used only if it became that champion;
+    otherwise -- not trained here (``--models`` is a subset), or trained but
+    not promoted -- its champion is loaded from the registry, as
+    `seed_from_champions` does. Found on the first multi-basin run
+    (2026-11-12): latents always came from this run's own versions, so a
+    transformer that failed its gate (v7) still conditioned diffusion and
+    fusion v11, leaving them desynced from the served v5; and a
+    transformer-only run failed here outright, leaving them stale until a
+    `--derived-from-champions` re-sync.
+
+    Raises (caught by ``__call__``, same as every other task) if a Group 1
+    model has neither a promoted version from this run nor a champion."""
+    from .real_inference import load_run_artifacts
     from .real_latents import extract_joint_latents
 
-    missing = [m for m in GROUP1_MODELS if m not in r.trained_artifacts]
+    missing = []
+    for name in GROUP1_MODELS:
+        champion = r.registry.champion(name)
+        if champion is None:
+            if name not in r.trained_artifacts:
+                missing.append(name)
+            continue  # nothing served yet: this run's version is all there is
+        if r.group1_versions.get(name) == champion.version and name in r.trained_artifacts:
+            continue  # trained here and promoted: already loaded
+        r.trained_artifacts[name] = load_run_artifacts(name, champion, r.checkpoint_store)
+        r.group1_versions[name] = champion.version
     if missing:
-        raise OrchestrationError(f"latents: Group 1 model(s) not yet trained: {missing}")
+        raise OrchestrationError(
+            f"latents: Group 1 model(s) not yet trained and with no champion: {missing}"
+        )
 
     r.joint_latents = extract_joint_latents(
         r.tracks, r.trained_artifacts, r.gdas_cache_dir, seed=r.seed, n_augment=1,
