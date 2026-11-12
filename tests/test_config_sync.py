@@ -45,6 +45,7 @@ CONSUMERS = (
     "anemoi.inference.scheduler",
     "anemoi.inference.postprocess",
     "anemoi.training.curriculum",
+    "anemoi.training.optim",
     "anemoi.training.promotion",
     "anemoi.training.triggers",
     "anemoi.monitoring.skew",

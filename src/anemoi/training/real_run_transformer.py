@@ -42,6 +42,7 @@ from ..tracking.checkpoint_store import CheckpointStore
 from .basin_input import DEFAULT_BASIN_INPUTS, with_basin_channels
 from .curriculum import Curriculum, CurriculumRun, StageResult, StageSpec
 from .device import get_device
+from .optim import TransformerOptimizer
 from .promotion import MetricSet
 from .real_run import (
     LEAD_STEPS,
@@ -252,15 +253,14 @@ def train_transformer_stage(
     mt = torch.as_tensor(train_samples.mask, dtype=torch.float32, device=device).unsqueeze(-1)
 
     trainable = [p for p in model.parameters() if p.requires_grad]
-    opt = torch.optim.Adam(trainable, lr=stage.learning_rate)
+    opt = TransformerOptimizer(torch, trainable, stage.learning_rate, total_steps=stage.epochs)
 
     model.train()
     for _ in range(stage.epochs):
         opt.zero_grad()
         pred, _regime = model(xt)
         loss = masked_mse(pred, yt, mt)
-        loss.backward()
-        opt.step()
+        opt.step(loss)
 
     model.eval()
     with torch.no_grad():
@@ -384,7 +384,9 @@ def train_transformer_stage_streaming(
         return diff2.sum(), mask3.sum()
 
     trainable = [p for p in model.parameters() if p.requires_grad]
-    opt = torch.optim.Adam(trainable, lr=stage.learning_rate)
+    opt = TransformerOptimizer(
+        torch, trainable, stage.learning_rate, total_steps=stage.epochs * len(train_loader),
+    )
 
     model.train()
     for _ in range(stage.epochs):
@@ -395,8 +397,7 @@ def train_transformer_stage_streaming(
             pred, _regime = model(xb)
             diff2_sum, mask_sum = masked_mse_sums(pred, yb, mb)
             loss = diff2_sum / mask_sum.clamp(min=1.0)
-            loss.backward()
-            opt.step()
+            opt.step(loss)
 
     model.eval()
     with torch.no_grad():
