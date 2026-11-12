@@ -264,5 +264,6 @@ The training entrypoint now copies both caches into `/tmp` first
 (`anemoi cache-localize`) and sets `ANEMOI_FIELDS_MEMO=1`, under which
 `data.gridded_cache.load_cached_fields` keeps each decoded sample (keyed by
 path, mtime and size, arrays read-only) and the forked workers share it
-copy-on-write. Measured locally on the real CNN dataset: 4,776 -> 28,278
-windows/s with 7 workers. Wiki Decision Log 62.
+copy-on-write. Measured locally on the real CNN dataset, memo off -> on:
+4,776 -> 21,754 windows/s with 4 workers, 8,832 -> 28,278 with 7 (the GPU
+job runs 7). Wiki Decision Log 62.

@@ -362,7 +362,7 @@ The earlier plan for six per-model GPU jobs under the 1-hour cap is superseded b
 
 This folder includes `workflows.train-schedule.yaml`, a Cloud Workflows definition that:
 
-1. Runs a list of Cloud Run jobs in order (its default list names six per-model `anemoi-train-*` jobs that were never created -- pass your own `jobs` list, e.g. `["anemoi-train-schedule"]` or `["anemoi-train-gpu"]`, to orchestrate what's actually running).
+1. Runs a list of Cloud Run jobs in order (its default list names six per-model `anemoi-train-*` jobs that were never created -- pass your own `jobs` list, e.g. `["anemoi-train-schedule"]`, to orchestrate what's actually running. For the GPU job pass `"region": "us-east4"` too, since the workflow defaults to `us-central1`, and a `timeoutSeconds` above the run's length -- its default 7200 is shorter than a full 3 h 08 min schedule, e.g. `{"region": "us-east4", "jobs": ["anemoi-train-gpu"], "timeoutSeconds": 43200}`).
 2. Each `jobs.run` call blocks until that job's execution reaches a terminal state (Workflows' connectors do this for any long-running-operation call automatically) and returns the `Execution`.
 3. Stops immediately if an execution has any failed or cancelled task, or if the API call itself fails -- either way the job step raises, and an uncaught raise ends the workflow with `state: FAILED`.
 
