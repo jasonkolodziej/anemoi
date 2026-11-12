@@ -255,3 +255,14 @@ verification semantics exactly. The immediate real stopgap for the
 run can now use `streaming=True` instead, without reducing augmentation.
 Only `real_latents.py` (§6) and mid-stage checkpointing (§8) remain, both
 deliberately deferred as lower urgency, not forgotten.
+
+**Reading the cache (2026-11-12, #234/#236).** Streaming reads each
+window's fields from the cache every epoch, which on Cloud Run meant a
+gcsfuse round trip per sample (GPU at 0%) and, once the caches were copied
+into memory, a `.npz` decode per sample per epoch (GPU ~9%, CPU saturated).
+The training entrypoint now copies both caches into `/tmp` first
+(`anemoi cache-localize`) and sets `ANEMOI_FIELDS_MEMO=1`, under which
+`data.gridded_cache.load_cached_fields` keeps each decoded sample (keyed by
+path, mtime and size, arrays read-only) and the forked workers share it
+copy-on-write. Measured locally on the real CNN dataset: 4,776 -> 28,278
+windows/s with 7 workers. Wiki Decision Log 62.

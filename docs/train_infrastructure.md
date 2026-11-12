@@ -360,11 +360,12 @@ tracks.
 CNN, Transformer and GNN (`training.real_run_cnn` / `real_run_transformer`
 / `real_run_gnn`, `--model cnn|transformer|gnn`, `slurm/train_cnn.sbatch` /
 `train_transformer.sbatch` / `train_gnn.sbatch`) came next: real GOES
-imagery and real station/buoy networks aren't fetched yet (PLAN.md's
-Satellite row; `ndbc`/`dropsonde`/`microwave` aren't fetched for real
-either), but all three architectures just need *some* multi-channel
-spatial input, so they read the real cached `GriddedFields` (all 10
-fields) instead of waiting on those. Reads from
+imagery and station/buoy networks have fetch adapters (`data.real_goes`,
+`data.real_ndbc`, `data.real_dropsonde`, `data.real_microwave`, all since
+2026-09-22) but no model reads them yet -- `docs/input_sources_plan.md`
+orders that work -- and all three architectures just need *some*
+multi-channel spatial input, so they read the real cached `GriddedFields`
+(all 10 fields) instead. Reads from
 `--era5-cache-dir`/`--gdas-cache-dir` (the same dirs `era5-cache`/
 `gdas-cache` fetch into); a fix with no cached file yet is skipped, not an
 error, so all three train on however much is cached at the moment invoked

@@ -52,6 +52,11 @@ stage.
 
 ### 0. Make the console say what's used (small, any time)
 
+Partly done in #239 (2026-11-12): the storm badge reads "not verified" with
+a title saying what verified means, and the storm list filters by basin.
+Still open: the Sources page's Role / Used-by columns, the Architecture
+page listing every unused source, and the phone layout.
+
 - **Sources page.** Label the column **Role** and add **Used by**, served by
   `/v1/sources` from the same input mapping the system view draws (e.g.
   "LSTM · labels", "verification", "not used by a model yet").

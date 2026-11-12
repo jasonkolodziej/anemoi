@@ -20,11 +20,7 @@ Training is batch work that runs to completion and exits. Cloud Run Jobs are the
 
 ## Important runtime constraint
 
-GPU-backed Cloud Run Job tasks have a maximum task timeout of 1 hour (CPU-only tasks: up to 168 hours).
-If your real run exceeds 1 hour, use one of these patterns:
-
-1. Run CPU-only jobs with longer timeout.
-2. Split work into shorter executions (for example by model subset using `MODELS=` and/or by using `DERIVED_FROM_CHAMPIONS=1`).
+GPU-backed Cloud Run Job tasks are capped at 1 hour per task by default; CPU-only tasks can run up to 168 hours. A GPU task can run up to **12 hours** when the job is created with the beta launch stage (`gcloud beta run jobs ...`, "Long running GPU jobs"), which is how `anemoi-train-gpu` below runs a full schedule (3 h 08 min measured) in one execution. GPU tasks can also be preempted, and the jobs here run with `--max-retries 0`, so a preempted run is re-run by hand.
 
 ## Prerequisites
 
@@ -208,7 +204,7 @@ podman system prune -a -f
 
 ## Create a Cloud Run Job (CPU baseline)
 
-This profile avoids the 1-hour GPU task cap and is the easiest migration path.
+This is the CPU-only job, `anemoi-train-schedule` in `us-central1`: the one CI points at the newest image, and the one used for the one-off commands below (cache filling in particular). Real training runs on the GPU job, `anemoi-train-gpu` (next section), since 2026-11-12.
 
 This is the real job run in `anemoi-training` (2026-09-23): a CPU-only job with the cache bucket mounted at `/cache` and the full secret set, including MLflow (item 5 above) -- omit the last three `--set-secrets` entries if you skipped MLflow.
 
@@ -319,118 +315,54 @@ gcloud compute disks delete anemoi-train-from-snap \
 
 This preserves your expensive pre-fetched caches while keeping Cloud Run stateless at the compute layer.
 
-## Optional GPU update
+## The GPU job: `anemoi-train-gpu` (us-east4)
 
-For L4, Cloud Run requires at least 4 CPU and 16 GiB memory, and GPU jobs must set `--no-gpu-zonal-redundancy`.
-Remember task timeout is limited to 3600s for GPU tasks.
-Cloud Run's GPU driver is 580.x (CUDA 13.0), which matches the CUDA build of torch the image installs from `uv.lock`.
+The job real training runs on since 2026-11-12 (wiki Decision Log 62-65). One L4, 8 vCPU, 32 GiB, a 12-hour task timeout, reading the same `us-central1` cache bucket across regions (a few GB per run, at US-internal rates).
 
-```bash
-gcloud run jobs update anemoi-train-schedule \
-  --region us-central1 \
-  --gpu 1 \
-  --gpu-type nvidia-l4 \
-  --no-gpu-zonal-redundancy \
-  --cpu 4 \
-  --memory 16Gi \
-  --task-timeout 3600s
-```
+**Quota.** Cloud Run GPUs need their own quota, separate from Compute Engine's: "Total Nvidia L4 GPU allocation without zonal redundancy, per project per region" under the Cloud Run Admin API. A request for `us-central1` was denied and `us-east4` approved (2026-11-11), which is why the job lives there. GPU jobs must set `--no-gpu-zonal-redundancy` (Cloud Run offers no zonal-redundant GPU jobs), and the quota check counts `parallelism`, so set it explicitly.
 
-## Recommended multi-job GPU split plan -- not yet validated, CPU baseline is what's actually running
-
-Source Plan: PLAN.md §5 and #22 execution stream.
-
-**As of 2026-09-23, `anemoi-train-schedule` (the CPU baseline above) is the real job in use, and no per-model GPU jobs have been created.** The CPU job's `86400s` timeout has real headroom against the 1-hour GPU cap, so there's been no need to split it yet. This section is the plan for if/when a full CPU run turns out too slow -- it hasn't been benchmarked, and the "important limitation" below (some models may not fit in an hour even split out) was already a known risk when it was written, not resolved since.
-
-Before creating any of these jobs, measure real per-model wall-clock time from an `anemoi-train-schedule` execution's logs (each model's stage boundaries are logged) -- that's the actual evidence for whether the split even clears the 1-hour cap, not the assumption below.
-
-If you want to use Cloud Run GPU jobs, split the schedule into independent executions.
-Each execution should run a narrow unit of work and write checkpoints to object storage.
-
-Current practical split:
-
-1. `anemoi-train-lstm` with `MODELS=lstm`
-2. `anemoi-train-cnn` with `MODELS=cnn`
-3. `anemoi-train-transformer` with `MODELS=transformer`
-4. `anemoi-train-gnn` with `MODELS=gnn`
-5. `anemoi-train-pinn` with `MODELS=pinn`
-6. `anemoi-train-derived` with `DERIVED_FROM_CHAMPIONS=1`
-
-Why this shape:
-
-- Group 1 models are isolated, so one failure does not invalidate all others.
-- The derived run (`latents/diffusion/fusion`) is started only after all Group 1 runs complete.
-- Every run reuses the same image and entrypoint, only env vars differ.
-
-Important limitation today:
-
-- Splitting by model does not guarantee sub-1-hour completion for every model.
-- In current real runs, some models can exceed one hour depending on cache size and runtime conditions.
-- If strict sub-1-hour GPU tasks are mandatory, you need finer-grained CLI units than currently exposed (for example stage-level or shard-level commands).
-
-Create one model-specific GPU job (repeat with different `MODELS=` values):
+**Create it** (once; `gcloud beta` for the 12-hour timeout):
 
 ```bash
-gcloud run jobs create anemoi-train-lstm \
-  --region us-central1 \
-  --image us-central1-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/anemoi-train:latest \
-  --tasks 1 \
-  --parallelism 1 \
-  --max-retries 0 \
-  --task-timeout 3600s \
-  --gpu 1 \
-  --gpu-type nvidia-l4 \
-  --no-gpu-zonal-redundancy \
-  --cpu 4 \
-  --memory 16Gi \
-  --add-volume name=cache,type=cloud-storage,bucket=${CACHE_BUCKET} \
-  --add-volume-mount volume=cache,mount-path=/cache \
-  --set-env-vars MODE=sequential,MODELS=lstm,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache_f006,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
-  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest,CF_ACCESS_CLIENT_ID=CF_ACCESS_CLIENT_ID:latest,CF_ACCESS_CLIENT_SECRET=CF_ACCESS_CLIENT_SECRET:latest,MLFLOW_TRACKING_URI=MLFLOW_TRACKING_URI:latest
-
-# Repeat for cnn, transformer, gnn, pinn -- same flags, MODELS=<name> and
-# the job name changed.
+gcloud beta run jobs create anemoi-train-gpu \
+  --project anemoi-training --region us-east4 \
+  --image us-central1-docker.pkg.dev/anemoi-training/anemoi/anemoi-train:<tag> \
+  --service-account 269717490483-compute@developer.gserviceaccount.com \
+  --cpu 8 --memory 32Gi --gpu 1 --gpu-type nvidia-l4 --no-gpu-zonal-redundancy \
+  --task-timeout 43200s --max-retries 0 --tasks 1 --parallelism 1 \
+  --set-env-vars MODE=sequential,STREAMING=1,NUM_WORKERS=7,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache_f006,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
+  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest,CF_ACCESS_CLIENT_ID=CF_ACCESS_CLIENT_ID:latest,CF_ACCESS_CLIENT_SECRET=CF_ACCESS_CLIENT_SECRET:latest \
+  --add-volume name=cache,type=cloud-storage,bucket=anemoi-training-cache \
+  --add-volume-mount volume=cache,mount-path=/cache
 ```
 
-Create derived-only job:
+No `MLFLOW_TRACKING_URI`: MLflow is optional (Decision Log 61), and this job runs without it; every stage's record goes to R2 (`runs/<model>/<timestamp>.json`) and the registry mirrors there on every write.
+
+**Run it.** A plain execute trains the full schedule. Per-run overrides go on the execution, not the job:
 
 ```bash
-gcloud run jobs create anemoi-train-derived \
-  --region us-central1 \
-  --image us-central1-docker.pkg.dev/${PROJECT_ID}/${REPO_NAME}/anemoi-train:latest \
-  --tasks 1 \
-  --parallelism 1 \
-  --max-retries 0 \
-  --task-timeout 3600s \
-  --gpu 1 \
-  --gpu-type nvidia-l4 \
-  --no-gpu-zonal-redundancy \
-  --cpu 4 \
-  --memory 16Gi \
-  --add-volume name=cache,type=cloud-storage,bucket=${CACHE_BUCKET} \
-  --add-volume-mount volume=cache,mount-path=/cache \
-  --set-env-vars MODE=sequential,DERIVED_FROM_CHAMPIONS=1,STREAMING=1,NUM_WORKERS=4,ERA5_CACHE_DIR=/cache/era5_cache,GDAS_CACHE_DIR=/cache/gdas_cache_f006,REGISTRY_ROOT=/tmp/registry,HURDAT2_PATH=/app/data/hurdat2-atl.txt \
-  --set-secrets S3_ARTIFACT_API_ENDPOINT=S3_ARTIFACT_API_ENDPOINT:latest,S3_ARTIFACT_BUCKET=S3_ARTIFACT_BUCKET:latest,S3_ARTIFACT_ACCESS_KEYID=S3_ARTIFACT_ACCESS_KEYID:latest,S3_ARTIFACT_SECRET_ACCESS_KEY=S3_ARTIFACT_SECRET_ACCESS_KEY:latest,CF_ACCESS_CLIENT_ID=CF_ACCESS_CLIENT_ID:latest,CF_ACCESS_CLIENT_SECRET=CF_ACCESS_CLIENT_SECRET:latest,MLFLOW_TRACKING_URI=MLFLOW_TRACKING_URI:latest
+gcloud beta run jobs execute anemoi-train-gpu --region us-east4 --async                                      # full schedule
+gcloud beta run jobs execute anemoi-train-gpu --region us-east4 --async --update-env-vars MODELS=transformer  # one Group 1 model
+gcloud beta run jobs execute anemoi-train-gpu --region us-east4 --async --update-env-vars DERIVED_FROM_CHAMPIONS=1  # latents/diffusion/fusion only
 ```
 
-Execute in order:
+A subset run also re-extracts latents and retrains diffusion and fusion against the champions it leaves in place (#240), so the served set stays coherent. The derived-only run skips the ERA5 copy (latents read GDAS alone).
 
-```bash
-gcloud run jobs execute anemoi-train-lstm --region us-central1
-gcloud run jobs execute anemoi-train-cnn --region us-central1
-gcloud run jobs execute anemoi-train-transformer --region us-central1
-gcloud run jobs execute anemoi-train-gnn --region us-central1
-gcloud run jobs execute anemoi-train-pinn --region us-central1
-gcloud run jobs execute anemoi-train-derived --region us-central1
-```
+**Image.** CI points only the `us-central1` CPU job at each new image. After a merge, update this job by hand: `gcloud beta run jobs update anemoi-train-gpu --region us-east4 --image ...:<tag>`. A running execution keeps the image digest it started with.
 
-For automation, run this order from Cloud Workflows or CI/CD, and gate each step on successful completion -- see "Workflow orchestration" below, which does exactly this (once the GPU split above is actually in use; today it orchestrates whatever job names you give it, GPU-split or not).
+**What the entrypoint does before training** (`entrypoint.sh`): copies both caches into `/tmp` (memory-backed; ~2.6 GB in ~3.5 minutes with 64 parallel copies, `anemoi cache-localize`) and turns on `ANEMOI_FIELDS_MEMO=1` so each cached sample is decoded once per process and shared with the DataLoader's forked workers. Without these, the gridded models left the GPU at 0-9% (Decision Log 62).
+
+**Measured** (2026-11-12, image `c68519a`, all 8 tasks OK): 3 h 08 min end to end. LSTM 6.6 min, CNN 27 min, transformer 91-95 min, GNN 32 min, PINN ~23 min, latents + diffusion + fusion ~4 min; a transformer-only run ~1 h 35 min, a derived-only re-sync ~10 min. GPU utilisation ~20-27% on the CNN (a small model at batch 32 is bound by per-step overhead), ~50% on the transformer, ~58% on the GNN; memory steady at ~28% of 32 GiB.
+
+**Watching a run.** The training code logs little between stages (one `Using CUDA GPU.` per stage, the `[OK]`/`[FAILED]` summary at the end), so watch Cloud Monitoring's per-minute `run.googleapis.com/container/{gpu,cpu,memory}/utilizations` for the job alongside the logs; a GPU at 0% with the CPU at 1-3% for minutes is a stall, not training.
+
+The earlier plan for six per-model GPU jobs under the 1-hour cap is superseded by this single job; `workflows.train-schedule.yaml` below still runs any list of jobs in order, if a split is ever wanted.
 
 ## Workflow orchestration (included)
 
 This folder includes `workflows.train-schedule.yaml`, a Cloud Workflows definition that:
 
-1. Runs a list of Cloud Run jobs in order (default: the six `anemoi-train-*` GPU-split jobs above, unvalidated per that section -- pass your own `jobs` list, e.g. `["anemoi-train-schedule"]`, to orchestrate what's actually running).
+1. Runs a list of Cloud Run jobs in order (its default list names six per-model `anemoi-train-*` jobs that were never created -- pass your own `jobs` list, e.g. `["anemoi-train-schedule"]` or `["anemoi-train-gpu"]`, to orchestrate what's actually running).
 2. Each `jobs.run` call blocks until that job's execution reaches a terminal state (Workflows' connectors do this for any long-running-operation call automatically) and returns the `Execution`.
 3. Stops immediately if an execution has any failed or cancelled task, or if the API call itself fails -- either way the job step raises, and an uncaught raise ends the workflow with `state: FAILED`.
 
@@ -445,7 +377,7 @@ gcloud workflows deploy anemoi-train-orchestrator \
   --service-account anemoi-workflows@${PROJECT_ID}.iam.gserviceaccount.com
 ```
 
-Execute with defaults (the six GPU-split jobs -- only meaningful once those jobs exist):
+Execute with defaults (the six per-model jobs -- only meaningful if those jobs are ever created):
 
 ```bash
 gcloud workflows run anemoi-train-orchestrator \
@@ -521,7 +453,9 @@ Real runs 2026-09-23 (`DIFFUSION_DROPOUT=0.1`/`0.05`, `DIFFUSION_WEIGHT_DECAY=1e
 - `MODE=sequential|parallel`
 - `MODELS=lstm,cnn,transformer,gnn,pinn`
 - `STREAMING=1` enables the streaming DataLoader path. It defaults to on in this entrypoint but off in the VM's `slurm/train_schedule.sbatch`, so set it explicitly when comparing runs across the two.
-- `NUM_WORKERS=0..N` DataLoader workers
+- `NUM_WORKERS=0..N` DataLoader workers (`7` on the 8-vCPU GPU job; the CPU job's default is 4)
+- `LOCALIZE_CACHE=0` skips copying the caches into `/tmp` before training (default on; `LOCAL_CACHE_ROOT` moves the copy); a derived-only run copies GDAS alone
+- `ANEMOI_FIELDS_MEMO=0` turns off keeping each decoded cache sample in memory (default on in this entrypoint; off everywhere else)
 - `BATCH_SIZE=<int>` optional explicit batch size
 - `DERIVED_FROM_CHAMPIONS=1` retrains only `latents/diffusion/fusion`
 - `DIFFUSION_DROPOUT=<float>` / `DIFFUSION_WEIGHT_DECAY=<float>` diffusion-only regularization (#166 follow-up to early stopping); both default to unset (0.0, unchanged behavior). Real ablation run 2026-09-23 against the same 637-window `spread-backtest` validation set used for v6/v7: `DIFFUSION_DROPOUT=0.1` alone took the 72-120h spread/skill ratio from 0.44-0.72 (severely underdispersed, diffusion v7) to 0.85-0.98 (calibrated, v8) and the served 120h cone's miss rate from 81% to 49% -- `DIFFUSION_WEIGHT_DECAY=1e-4` alone (v9) and `DIFFUSION_DROPOUT=0.05` alone (v10) each landed within noise of the v7 baseline, confirming a real threshold effect rather than a smooth one. `diffusion v8` is now staged. See GitHub #166 for the full real results.
@@ -531,3 +465,4 @@ Real runs 2026-09-23 (`DIFFUSION_DROPOUT=0.1`/`0.05`, `DIFFUSION_WEIGHT_DECAY=1e
 - The container defaults `HURDAT2_PATH` to `/app/data/hurdat2-atl.txt` baked into the image.
 - `entrypoint.sh` calls `anemoi registry-pull` in best-effort mode before training so ephemeral workers can hydrate a prior registry mirror.
 - Checkpoint and registry durability still depend on valid `S3_ARTIFACT_*` credentials.
+- MLflow is optional: `MLFLOW_TRACKING_URI` unset, or a server that doesn't answer one probe at startup, means the run skips it (it used to retry each call for ~4 minutes against a 502). Stage records always land in R2 under `runs/<model>/`.

@@ -145,12 +145,14 @@ gridded caches grow with the storm count. The streaming dataloader
 - The API's `trained_basin` and the cycle's `basin_untrained:<basin>` flag
   come from what every Group 1 champion trained on (`ModelRegistry
   .trained_basins`), re-read within the registry's refresh interval. A
-  champion without the tag counts as Atlantic-only, as every version so far
-  is.
-- Nothing changes for today's Atlantic-only models. Once phase 1's models
-  are promoted, Eastern Pacific storms lose the badge with no code change.
+  champion without the tag counts as Atlantic-only, as every version before
+  2026-11-12 was.
+- Nothing changed for the Atlantic-only models; once phase 1's models were
+  promoted (2026-11-12), Eastern Pacific storms lost the badge with no code
+  change.
 
-**1: Eastern and Central Pacific (NHC, Northern Hemisphere). Built.**
+**1: Eastern and Central Pacific (NHC, Northern Hemisphere). Built and run
+(2026-11-12; the runs and what they found are wiki Decision Log 61-65).**
 - `configs/curriculum.yaml` `data.basins: [AL, EP, CP]`.
 - `anemoi hurdat2-fetch` fetches the Atlantic and the Northeast Pacific
   archives into one file (all or nothing); training reads the configured
@@ -174,8 +176,10 @@ gridded caches grow with the storm count. The streaming dataloader
      gridded model trains only where fields are cached: without this step
      the CNN, Transformer, GNN and PINN train on the Atlantic alone, and say
      so (`trained_basins`).
-  3. A full training run. The Atlantic-only champions stay until a
-     candidate passes the rules above.
+  3. A full training run (`docker/cloud-run-training/README.md`, the GPU
+     job). The incumbent champions stay until a candidate passes the rules
+     above; a subset run re-syncs diffusion and fusion to whatever champions
+     it leaves in place (#240).
 - **Done when** every champion is verified in `EP` (and `CP`, given enough
   storms) and none regressed on the Atlantic.
 - **CP waits for its storms (decided 2026-11-12).** A basin counts as
