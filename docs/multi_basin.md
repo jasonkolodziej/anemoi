@@ -164,6 +164,17 @@ gridded caches grow with the storm count. The streaming dataloader
      candidate passes the rules above.
 - **Done when** every champion is verified in `EP` (and `CP`, given enough
   storms) and none regressed on the Atlantic.
+- **CP waits for its storms (decided 2026-11-12).** A basin counts as
+  trained from Stage B's training samples, and Stage B's training seasons
+  (2021-2023 for an archive ending in 2025) hold no storm with a CP id:
+  CP ids go only to storms that form there, one in 2024 and two in 2025.
+  Eleven EP storms in those seasons did track into Central Pacific waters,
+  so the models see its geography, but they count as EP. Stage A's 1,148
+  ERA5 CP fixes aren't counted: it's the stage the served weights are
+  fine-tuned away from, and counting it would verify CP on 36 validation
+  windows. Nothing to change: the boundaries roll with the newest final
+  season, so the 2024 CP storm enters Stage B's training split once the
+  2026 season is final, and CP is gated like any basin from then.
 
 **2: Western Pacific and North Indian Ocean (JTWC via IBTrACS).**
 - An IBTrACS loader using the `USA_*` columns only (rule 3).
