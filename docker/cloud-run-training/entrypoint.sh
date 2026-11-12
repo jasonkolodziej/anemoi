@@ -63,6 +63,12 @@ if [ "${LOCALIZE_CACHE:-1}" = "1" ]; then
   fi
 fi
 
+# Decode each cache file once per process instead of once per window per
+# epoch (data.gridded_cache.FIELDS_MEMO_ENV): the per-sample decode, not the
+# GPU, was what limited the gridded models. ~5 GB decoded, shared with the
+# DataLoader's forked workers. ANEMOI_FIELDS_MEMO=0 turns it off.
+export ANEMOI_FIELDS_MEMO="${ANEMOI_FIELDS_MEMO:-1}"
+
 ARGS=(
   train-schedule
   --mode "${MODE}"

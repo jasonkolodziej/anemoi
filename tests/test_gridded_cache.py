@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from anemoi.data.besttrack import Fix, Track, TrackQuality
 from anemoi.data.features import GriddedFields
@@ -284,3 +285,53 @@ def test_shard_index_must_be_in_range():
     for index, count in [(4, 4), (-1, 4), (0, 0)]:
         with pytest.raises(ValueError):
             shard_tracks([make_track("AL01", 3)], index, count)
+
+
+# --- decoded-fields memo (ANEMOI_FIELDS_MEMO) ---------------------------------
+
+
+def _saved(tmp_path, name="AL092005/2005082318.npz"):
+    from anemoi.data.gridded_cache import FetchTask, save_cached_fields
+
+    path = tmp_path / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    task = FetchTask(
+        storm_id="AL092005", valid_time=datetime(2005, 8, 23, 18, tzinfo=UTC), lat=23.0, lon=-75.0,
+    )
+    save_cached_fields(path, make_fields(), task)
+    return path
+
+
+def test_memo_off_decodes_every_read(tmp_path, monkeypatch):
+    from anemoi.data.gridded_cache import load_cached_fields
+
+    monkeypatch.delenv("ANEMOI_FIELDS_MEMO", raising=False)
+    path = _saved(tmp_path)
+    a, b = load_cached_fields(path), load_cached_fields(path)
+    assert a is not b
+    assert a.u200.flags.writeable
+
+
+def test_memo_on_decodes_once_with_read_only_arrays(tmp_path, monkeypatch):
+    from anemoi.data.gridded_cache import load_cached_fields
+
+    monkeypatch.setenv("ANEMOI_FIELDS_MEMO", "1")
+    path = _saved(tmp_path)
+    a, b = load_cached_fields(path), load_cached_fields(path)
+    assert a is b
+    with pytest.raises(ValueError):  # shared: an in-place change must fail loudly
+        a.u200[0, 0] = 0.0
+
+
+def test_memo_decodes_a_rewritten_file_again(tmp_path, monkeypatch):
+    import os
+
+    from anemoi.data.gridded_cache import load_cached_fields
+
+    monkeypatch.setenv("ANEMOI_FIELDS_MEMO", "1")
+    path = _saved(tmp_path)
+    first = load_cached_fields(path)
+    _saved(tmp_path)
+    st = path.stat()
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
+    assert load_cached_fields(path) is not first
