@@ -937,6 +937,24 @@ def cmd_drift_reference_fit(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cache_localize(args: argparse.Namespace) -> int:
+    """Copy a gridded cache to local disk (`data.cache_localize`). Exit 1 on
+    any failure, so the entrypoint keeps training on the original cache."""
+    from .data.cache_localize import localize_cache
+
+    try:
+        report = localize_cache(args.src, args.dst, workers=args.workers)
+    except Exception as exc:  # noqa: BLE001 - reported; the caller falls back
+        print(f"cache-localize: {args.src} -> {args.dst} failed: {type(exc).__name__}: {exc}")
+        return 1
+    print(
+        f"cache-localize: {args.src} -> {args.dst}: {report.n_copied} copied "
+        f"({report.n_bytes / 1e9:.2f} GB), {report.n_skipped} already there, "
+        f"{report.elapsed_s:.0f}s"
+    )
+    return 0
+
+
 def cmd_hurdat2_fetch(args: argparse.Namespace) -> int:
     """Download the newest HURDAT2 NHC has published (#216) to ``--out``,
     with its manifest beside it: every archive that holds a configured
@@ -1325,6 +1343,15 @@ def main(argv: list[str] | None = None) -> int:
         help="ATCF basins to fetch, e.g. AL EP CP (default: curriculum.yaml data.basins)",
     )
     p.set_defaults(func=cmd_hurdat2_fetch)
+
+    p = sub.add_parser(
+        "cache-localize",
+        help="copy a gridded cache to local disk once, so training doesn't read the bucket per epoch",
+    )
+    p.add_argument("--src", required=True, help="cache directory to copy (e.g. /cache/era5_cache)")
+    p.add_argument("--dst", required=True, help="local directory to copy it to (e.g. /tmp/era5)")
+    p.add_argument("--workers", type=int, default=64, help="parallel copies (default 64)")
+    p.set_defaults(func=cmd_cache_localize)
 
     p = sub.add_parser(
         "noise-calibrate",

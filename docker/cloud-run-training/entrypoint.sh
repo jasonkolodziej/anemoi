@@ -47,6 +47,22 @@ if [ "$#" -gt 0 ]; then
   exec anemoi "$@"
 fi
 
+# Training streams every window's fields from the caches each epoch. The
+# /cache bucket mount (gcsfuse) keeps no file contents between opens, so
+# that would be a bucket round trip per sample per epoch, with the GPU
+# waiting. The caches are a few GB, so copy them into /tmp (memory-backed on
+# Cloud Run) once and train from there. On any failure, train from /cache
+# as before. LOCALIZE_CACHE=0 turns this off.
+if [ "${LOCALIZE_CACHE:-1}" = "1" ]; then
+  LOCAL_CACHE_ROOT="${LOCAL_CACHE_ROOT:-/tmp/anemoi-cache}"
+  if anemoi cache-localize --src "${ERA5_CACHE_DIR}" --dst "${LOCAL_CACHE_ROOT}/era5"; then
+    ERA5_CACHE_DIR="${LOCAL_CACHE_ROOT}/era5"
+  fi
+  if anemoi cache-localize --src "${GDAS_CACHE_DIR}" --dst "${LOCAL_CACHE_ROOT}/gdas"; then
+    GDAS_CACHE_DIR="${LOCAL_CACHE_ROOT}/gdas"
+  fi
+fi
+
 ARGS=(
   train-schedule
   --mode "${MODE}"
