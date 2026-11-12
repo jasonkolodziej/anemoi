@@ -34,6 +34,24 @@ for (const path of DEVELOP) {
 	});
 }
 
+// The bug a direct visit doesn't show: navigating in the browser from another
+// page makes no server request unless the page has a server load, so the
+// guard never ran and the page rendered signed out.
+test('the Develop menu sends a signed-out visitor to sign in, client-side navigation included', async ({ page }) => {
+	await page.goto('/');
+	for (const [title, path] of [
+		['Architecture', '/architecture'],
+		['Registry', '/registry'],
+		['Monitoring', '/monitoring'],
+		['Retraining', '/retraining'],
+	]) {
+		await page.getByRole('button', { name: 'Develop' }).click();
+		await page.getByRole('link', { name: new RegExp(`^${title}`) }).click();
+		await expect(page).toHaveURL(new RegExp(`/auth/login\\?next=${encodeURIComponent(path)}`));
+		await page.goto('/');
+	}
+});
+
 test.describe('signed in', () => {
 	test.beforeEach(async ({ page }) => {
 		await serveDemoApi(page);
