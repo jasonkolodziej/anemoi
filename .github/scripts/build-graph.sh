@@ -17,6 +17,14 @@ set -euo pipefail
 : "${GRAPHIFY_VERSION:?set GRAPHIFY_VERSION (pinned in .github/workflows/graphify.yml)}"
 graphify() { uvx --from "graphifyy==${GRAPHIFY_VERSION}" graphify "$@"; }
 
+# Always build from an empty graphify-out/. extract reads whatever is already
+# there (the previous graph.json, the AST cache, manifest.json), and a build
+# on top of an existing graph comes out differently from a fresh one: the
+# placeholder nodes for external imports ($env, svelte-sonner, ...) come and
+# go between runs. From empty, the same tree gives byte-identical output, and
+# a local run of this script agrees with CI. The comparison below reads the
+# committed graph from git, not from disk. A full build takes seconds.
+rm -rf graphify-out
 graphify extract . --code-only
 # --no-label: community naming needs an LLM. --no-viz: graph.html is not committed.
 graphify cluster-only . --no-label --no-viz
