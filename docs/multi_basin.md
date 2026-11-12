@@ -147,8 +147,12 @@ gridded caches grow with the storm count. The streaming dataloader
   columns -- is served exactly as before.
 - Per-basin metrics, persistence baseline, verified basins and the
   promotion rules above.
-- **Not yet:** per-basin cone radii. Eastern Pacific cycles still use NHC's
-  Atlantic radii.
+- Per-basin cone radii: a cycle draws its climatological cone (the fallback
+  and the underdispersion check) from its storm's basin, NHC's one column
+  for the Eastern and Central North Pacific (`configs/inference.yaml`
+  `ensemble.climatological_cone_nm_by_basin`; 138 vs 200 nm at 120 h in
+  2026). Other basins keep the Atlantic's until NHC-equivalent radii are
+  chosen for them.
 - **To run it:**
   1. `anemoi hurdat2-fetch --out <path>` (the images and the training job do
      this already).

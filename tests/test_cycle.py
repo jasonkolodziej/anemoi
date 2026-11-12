@@ -297,3 +297,17 @@ def test_climatological_fallback_spread_grows_with_lead_time():
 def test_operational_flavor_guard_rejects_pretrain_features():
     with pytest.raises(CycleError, match="production runs on"):
         assert_operational_flavor(Flavor.ERA5_PRETRAIN)
+
+
+def test_an_eastern_pacific_cycle_falls_back_to_nhcs_pacific_radii():
+    """The fallback ensemble and its cone are drawn from the storm's own
+    basin's radii: tighter in the Eastern Pacific than the Atlantic."""
+    from dataclasses import replace
+
+    def crashing(_det, _n):
+        raise RuntimeError("diffusion unavailable")
+
+    plan = plan_cycle(T, LatencyOracle())
+    al = run_cycle(plan, make_fix(), deterministic_fn, crashing)
+    ep = run_cycle(plan, replace(make_fix(), storm_id="EP092026"), deterministic_fn, crashing)
+    assert ep.products.cone[-1].radius_nm < al.products.cone[-1].radius_nm

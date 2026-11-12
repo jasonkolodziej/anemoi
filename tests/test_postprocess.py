@@ -231,3 +231,26 @@ def test_a_real_24_hour_surge_is_still_detected():
 
     winds = [60, 60, 60, 60, 95, 95, 95]  # 48h -> 72h is +35kt in exactly 24h
     assert rapid_intensification_probability([_member(DEFAULT_LEADS, winds)]) == 1.0
+
+
+# --- per-basin climatological radii (NHC's Eastern/Central Pacific column) ---
+
+
+def test_pacific_storms_get_nhcs_pacific_radii_and_others_the_atlantics():
+    from anemoi.inference.postprocess import CLIMATOLOGICAL_CONE_NM, climatological_cone_nm
+
+    assert climatological_cone_nm("EP")[120] == 138.0
+    assert climatological_cone_nm("CP") == climatological_cone_nm("EP")
+    assert climatological_cone_nm("AL") is CLIMATOLOGICAL_CONE_NM
+    # A basin NHC publishes no column for (not trained yet) keeps the Atlantic's.
+    assert climatological_cone_nm("WP") is CLIMATOLOGICAL_CONE_NM
+    assert climatological_cone_nm(None) is CLIMATOLOGICAL_CONE_NM
+
+
+def test_a_climatological_cone_uses_the_storms_basin():
+    from anemoi.inference.postprocess import climatological_cone_nm
+
+    al, _ = build_cone(members(n=5), basin="AL")
+    ep, _ = build_cone(members(n=5), basin="EP")
+    assert [c.radius_nm for c in ep] == [climatological_cone_nm("EP")[c.lead_hours] for c in ep]
+    assert ep[-1].radius_nm < al[-1].radius_nm  # 138 vs 200 nm at 120 h

@@ -22,11 +22,17 @@ from datetime import datetime
 import numpy as np
 
 from ..data import sources
+from ..data.atcf import storm_basin
 from ..data.besttrack import Fix, TrackQuality, assert_input_safe
 from ..data.sources import Flavor
 from ..geo import offset_positions
 from ..time_utils import cycle_label
-from .postprocess import CLIMATOLOGICAL_CONE_NM, EnsembleMember, ForecastProducts, build_products
+from .postprocess import (
+    EnsembleMember,
+    ForecastProducts,
+    build_products,
+    climatological_cone_nm,
+)
 from .scheduler import CyclePlan
 
 
@@ -188,6 +194,7 @@ def climatological_ensemble(
     deterministic: DeterministicForecast,
     n_members: int = 20,
     seed: int = 0,
+    basin: str | None = None,
 ) -> list[EnsembleMember]:
     """Fallback ensemble when Anemoi-Spread is unavailable (§10.1).
 
@@ -198,6 +205,7 @@ def climatological_ensemble(
     a probabilistic product on the wire.
     """
     rng = np.random.default_rng(seed)
+    climo = climatological_cone_nm(basin)
     base_lat = np.asarray(deterministic.lats, dtype=float)
     base_lon = np.asarray(deterministic.lons, dtype=float)
     members: list[EnsembleMember] = []
@@ -207,7 +215,7 @@ def climatological_ensemble(
         # is done for all leads at once.
         dists, bearings, winds = [], [], []
         for k, lead in enumerate(deterministic.lead_hours):
-            radius = CLIMATOLOGICAL_CONE_NM.get(lead, 60.0)
+            radius = climo.get(lead, 60.0)
             # 67th-percentile radius -> sigma via the Rayleigh quantile.
             sigma = radius / np.sqrt(-2.0 * np.log(1.0 - 0.67))
             dists.append(float(abs(rng.normal(0.0, sigma))))
@@ -290,6 +298,9 @@ def run_cycle(
         if status.unexpectedly_missing:
             flags.append(f"missing:{status.source_key}")
 
+    # The storm's basin picks its cone's climatological radii (NHC publishes
+    # its own for the Eastern and Central Pacific).
+    basin = storm_basin(initial_fix.storm_id)
     deterministic = deterministic_fn(plan, initial_fix)
     effective_members = plan.requested_ensemble_members
     if requested_members is not None:
@@ -304,11 +315,11 @@ def run_cycle(
     except Exception as exc:  # noqa: BLE001 - any Anemoi-Spread failure degrades, never blocks
         flags.append(f"spread_fallback:{type(exc).__name__}")
         members = climatological_ensemble(
-            deterministic, n_members=effective_members, seed=ensemble_seed,
+            deterministic, n_members=effective_members, seed=ensemble_seed, basin=basin,
         )
 
     products = build_products(
-        members, coastline=coastline, degraded=bool(flags)
+        members, coastline=coastline, degraded=bool(flags), basin=basin,
     )
     return CycleOutput(
         plan=plan,
