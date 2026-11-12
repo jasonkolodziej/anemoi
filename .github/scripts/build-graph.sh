@@ -6,12 +6,14 @@
 #
 # Writes `changed=true|false` to $GITHUB_OUTPUT when run in Actions.
 #
-# Code-only: tree-sitter extraction runs locally with no LLM and no API key,
-# and the same tree always yields the same graph.json, so a rebuild that finds
-# nothing new is byte-identical apart from the commit it was built at. That
-# stamp (graph.json's built_at_commit, the report's date and "Built from commit"
-# lines) is ignored when deciding whether to commit; otherwise every push to
-# main would add a 6 MB graph.json revision whose only change is a SHA.
+# Code-only: tree-sitter extraction runs locally with no LLM and no API key.
+# Only a change in the code's structure (nodes and edges) is worth a commit;
+# otherwise every push to main would add a 6 MB graph.json revision whose
+# only change is the built_at_commit stamp or a reshuffled clustering.
+#
+# CI's build is the canonical one. A local run should match it, except where
+# gitignored generated files exist locally (console/src/lib/wiki-content/
+# after a console build adds a couple of resolved import edges).
 set -euo pipefail
 
 : "${GRAPHIFY_VERSION:?set GRAPHIFY_VERSION (pinned in .github/workflows/graphify.yml)}"
@@ -67,8 +69,17 @@ if (( nodes < 1000 )); then
   exit 1
 fi
 
-normalise_graph()  { jq -S 'del(.built_at_commit)'; }
-normalise_report() { grep -v -E '^# Graph Report|^- Built from commit'; }
+# What counts as a change is the code structure: the set of nodes and edges.
+# Community ids, the order nodes and edges are listed in, and the report
+# (derived from the clustering) are left out because they depend on the order
+# the filesystem lists files in, which differs between machines and can
+# differ between runners. When the structure does change, the commit carries
+# fresh clustering with it.
+normalise_graph() {
+  jq -S '{graph, directed, multigraph, hyperedges,
+          nodes: (.nodes | map(del(.community, .community_name)) | sort_by(.id)),
+          links: (.links | map(tojson) | sort)}'
+}
 
 changed=false
 if ! git cat-file -e HEAD:graphify-out/graph.json 2>/dev/null \
@@ -79,15 +90,15 @@ else
   # Normalise into files rather than comparing two pipes, so neither side is
   # cut off mid-write when the comparison stops early.
   tmp=$(mktemp -d)
-  git show HEAD:graphify-out/graph.json      | normalise_graph  > "$tmp/old.json"
-  normalise_graph  < graphify-out/graph.json                    > "$tmp/new.json"
-  git show HEAD:graphify-out/GRAPH_REPORT.md | normalise_report > "$tmp/old.md"
-  normalise_report < graphify-out/GRAPH_REPORT.md               > "$tmp/new.md"
-  if cmp -s "$tmp/old.json" "$tmp/new.json" && cmp -s "$tmp/old.md" "$tmp/new.md"; then
-    echo "graph unchanged apart from its commit stamp"
+  git show HEAD:graphify-out/graph.json | normalise_graph > "$tmp/old.json"
+  normalise_graph < graphify-out/graph.json               > "$tmp/new.json"
+  if cmp -s "$tmp/old.json" "$tmp/new.json"; then
+    echo "graph structure unchanged; not committing"
   else
     changed=true
     echo "graph changed structurally"
+    diff <(jq -r '.nodes[].id' "$tmp/old.json") <(jq -r '.nodes[].id' "$tmp/new.json") \
+      | grep '^[<>]' | head -20 || true
   fi
   rm -r "$tmp"
 fi
