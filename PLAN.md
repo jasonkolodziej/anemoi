@@ -126,6 +126,13 @@ offset between those analysis systems.
 
 Citations for everything below are in `docs/references.md`.
 
+**Next after multi-basin training: real input sources.** Eight sources have
+real adapters, and only best track and GDAS/ERA5 feed a model. GDAS's SST
+and OHC are constant placeholders, so Stage B and serving have no real ocean
+signal. Order, gates and what stays verification-only are in
+`docs/input_sources_plan.md`: OISST first, GOES second, GEFS and microwave
+only if the evidence calls for them, dropsonde and buoys for verification.
+
 
 **Sample size -- measured (LSTM proxy); transformer itself still open.** The
 real HURDAT2 archive gives 561 training-split storms / 16,474 synoptic fixes
