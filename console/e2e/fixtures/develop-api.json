@@ -4320,5 +4320,117 @@
    "reason": "cascade",
    "trigger_tag": "drift_detected"
   }
+ ],
+ "/v1/sources": [
+  {
+   "fmt": "CSV / ATCF",
+   "is_operational": false,
+   "key": "besttrack_final",
+   "max_latency_minutes": 525600.0,
+   "notes": "Post-season reanalysed. Labels and verification only.",
+   "provider": "NHC / NOAA (HURDAT2)",
+   "retention": "permanent",
+   "role": "labels_only",
+   "typical_latency_minutes": 259200.0
+  },
+  {
+   "fmt": "ATCF text",
+   "is_operational": true,
+   "key": "besttrack_working",
+   "max_latency_minutes": 90.0,
+   "notes": "Gating input for the cycle. Noisy real-time fixes.",
+   "provider": "NHC ATCF (a-/b-deck, TC-Vitals)",
+   "retention": "not kept upstream as issued: the working b-deck is overwritten with the final best track after the season, and TC-Vitals/CurrentStorms have no documented retention -- archived verbatim to durable storage after every cycle (data.atcf_archive, #213)",
+   "role": "operational",
+   "typical_latency_minutes": 45.0
+  },
+  {
+   "fmt": "BUFR / NetCDF",
+   "is_operational": true,
+   "key": "dropsonde",
+   "max_latency_minutes": 180.0,
+   "notes": "Event-driven; absent for most cycles. Real per-level profile decode via eccodes' BUFR reader -- standard WMO descriptors (pressure/airTemperature/dewpointTemperature/ windSpeed/windDirection/nonCoordinateGeopotentialHeight), no proprietary format to reverse-engineer. Confirmed live: levels are surface-first (pressure decreases monotonically through the array).",
+   "provider": "NOAA / AFRC (implemented, data.real_dropsonde)",
+   "retention": "permanent",
+   "role": "operational",
+   "typical_latency_minutes": 60.0
+  },
+  {
+   "fmt": "GRIB2",
+   "is_operational": true,
+   "key": "ensemble_perturbations",
+   "max_latency_minutes": 360.0,
+   "notes": "Anemoi-Spread conditioning; t-6 members valid at t. Real fetch reuses real_gridded's GDAS_LEVEL_MESSAGES/_parse_grib2_index directly -- confirmed live that GEFS's .idx carries the exact same messages in the identical format. Fetch only, no Anemoi-Spread conditioning contract wired in yet (nothing consumes it).",
+   "provider": "GEFS (implemented, data.real_ensemble) / ECMWF EPS (not implemented)",
+   "retention": "2017-01-01-present in noaa-gefs-pds (verified via direct S3 listing, 2026-09-22) -- not the unverified 'rolling 1yr' this entry previously claimed",
+   "role": "operational",
+   "typical_latency_minutes": 240.0
+  },
+  {
+   "fmt": "GRIB2",
+   "is_operational": true,
+   "key": "gdas_gfs",
+   "max_latency_minutes": 240.0,
+   "notes": "Operational gridded input; cycle t consumes the t-6 cycle. No public pre-converted Zarr exists for GDAS/GFS pressure levels (verified -- dynamical.org's GFS Icechunk stores are surface/near-surface only), so GRIB2 remains the most performant format available for this source. data.real_gridded.fetch_gdas_grib2_fields() reads it via per-message byte-range fetch against the AWS Open Data mirror (anonymous, no NOMADS access-window constraint) rather than downloading the full ~450 MB file. Do not confuse this bucket (noaa-gfs-bdp-pds) with the older, Unidata-maintained noaa-gfs-pds, which documents an explicit rolling 4-week archive -- that policy does not apply here.",
+   "provider": "NOAA NOMADS (live cycle feed); AWS Open Data (bulk archival mirror)",
+   "retention": "2021-01-01-present in noaa-gfs-bdp-pds (verified via direct S3 listing, 2026-09-16); no documented retention policy for this bucket either way -- see data.gridded_cache's archive-sync path, which backfills this into permanent storage rather than depending on NOAA's bucket as the system of record",
+   "role": "operational",
+   "typical_latency_minutes": 210.0
+  },
+  {
+   "fmt": "NetCDF (real per-product fetch: ABI-L2-CMIPF for IR/WV/VIS, ABI-L2-SSTF for SST, ABI-L2-RRQPEF for rain rate)",
+   "is_operational": true,
+   "key": "goes",
+   "max_latency_minutes": 20.0,
+   "notes": "Real storm-relative crop via lazy fsspec+h5netcdf partial reads (confirmed live: ~8 MB transferred per crop from a real ~430 MB full-disk file, not a full download) and real pyproj geostationary-projection geolocation (verified against a real active storm's real position). DQF-flagged pixels masked to NaN, not presented as good.",
+   "provider": "NOAA AWS (GOES-18/19) -- implemented, data.real_goes",
+   "retention": "rolling 1yr raw; permanent storm-relative crops",
+   "role": "operational",
+   "typical_latency_minutes": 5.0
+  },
+  {
+   "fmt": "gzip'd raw uint8 bytemap (not HDF5 -- corrected 2026-09-22 against the real, fetched format; see data.real_microwave)",
+   "is_operational": true,
+   "key": "microwave",
+   "max_latency_minutes": 240.0,
+   "notes": "Orbit-dependent; opportunistic. typical_latency/max_latency above are unverified against the real daily-file upload cadence (confirmed same-day but not yet precisely timed) -- left as-is rather than guessed at; a real latency verification pass is separate future work.",
+   "provider": "RSS (SSMIS, F16/F17/F18)",
+   "retention": "rolling 2yr + permanent storm crops",
+   "role": "operational",
+   "typical_latency_minutes": 60.0
+  },
+  {
+   "fmt": "whitespace-separated text (not JSON/NetCDF -- corrected 2026-09-22 against the real realtime2 product; see data.real_ndbc)",
+   "is_operational": true,
+   "key": "ndbc",
+   "max_latency_minutes": 60.0,
+   "notes": "",
+   "provider": "NDBC buoy / C-MAN",
+   "retention": "rolling 45 days in the real-time product this reads (data.real_ndbc); NDBC's separate historical archive holds more, not fetched here -- corrected from the registry's earlier unverified 'rolling 3yr'",
+   "role": "operational",
+   "typical_latency_minutes": 15.0
+  },
+  {
+   "fmt": "NetCDF",
+   "is_operational": true,
+   "key": "sst_ohc",
+   "max_latency_minutes": 2880.0,
+   "notes": "SST half is real (data.real_sst, OISST v2.1). OHC half deliberately isn't: NOAA OSPO's ERDDAP OHC/TCHP products looked live (real 200, real schema) but their real data stops at 2026-01-26, confirmed ~8 months stale as of this writing -- serving that as current would be worse than the existing placeholder. GODAS/ORAS5 remains the documented path; its exact real access point wasn't found in the time spent.",
+   "provider": "NOAA NCEI OISST v2.1 (SST, implemented) + NOAA OSPO ERDDAP (OHC, not implemented)",
+   "retention": "rolling 5yr",
+   "role": "operational",
+   "typical_latency_minutes": 1440.0
+  },
+  {
+   "fmt": "Zarr",
+   "is_operational": false,
+   "key": "era5",
+   "max_latency_minutes": 129600.0,
+   "notes": "Stage A pretraining and the ERA5T skew audit only. data.real_gridded.open_era5() reads the pre-converted, analysis-ready ARCO-ERA5 Zarr store directly -- anonymous, no CDS account, no rate limit -- rather than requesting GRIB/NetCDF through CDS, which is the most performant path for this source now that it exists.",
+   "provider": "Google ARCO-ERA5 (Zarr, anonymous GCS); Copernicus CDS (origin, GRIB/NetCDF)",
+   "retention": "rolling 10yr + permanent storm-relative extracts",
+   "role": "pretrain_only",
+   "typical_latency_minutes": 7200.0
+  }
  ]
 }

@@ -42,12 +42,13 @@ export function cycleRunStormId(method: string, pathname: string): string | null
  *   /v1/retraining/...                 what's due to retrain
  *   /v1/monitoring/drift[/{model}]     input drift
  *   /v1/monitoring/calibration         spread/skill per lead
+ *   /v1/sources                        the data source registry
  *
  * Not the registry listing, the active pin or /v1/monitoring/skew: the
  * public storm page reads those. An API key counts as signed in.
  * Matched on the decoded path, like the cycle gate. */
 const SIGNED_IN_READ_RE =
-	/^\/v1\/(registry\/[^/]+\/architecture|retraining(\/.*)?|monitoring\/drift(\/[^/]+)?|monitoring\/calibration)\/?$/i;
+	/^\/v1\/(registry\/[^/]+\/architecture|retraining(\/.*)?|monitoring\/drift(\/[^/]+)?|monitoring\/calibration|sources)\/?$/i;
 
 /** Does this request need a resolved user? Any method -- a read gated here
  * is gated whatever it's sent as. An undecodable path is already refused by

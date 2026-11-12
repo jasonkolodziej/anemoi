@@ -144,7 +144,7 @@ A signed-in caller can send `Cache-Control: no-cache` when a read must reflect a
 | GET | `/registry/pins/active` | The currently pinned model set (§5.7) — `null` if nothing's pinned |
 | GET | `/registry/{model}/architecture?version=N` | What a version is made of: built from its `arch_params` tag, one input of the shape training feeds it, every module's output shape and parameter count (`models.architecture`). Defaults to the version the active pin serves, else production, else the newest; `defaults: true` when the version predates `arch_params` and the builder's defaults were used. Signed-in only (below). Drawn by the console's **Develop → Architecture** page |
 
-**Who may read** (real deployment, enforced by anemoi-api-real's Worker, `docker/api/src/routing.ts`). Reads are open, except the ones only the console's Develop pages make, which need a signed-in caller or an API key and return `401` otherwise: `/registry/{model}/architecture`, `/retraining/*`, `/monitoring/drift[/{model}]` and `/monitoring/calibration`. The registry listing, the active pin and `/monitoring/skew` stay open: the public storm page reads them.
+**Who may read** (real deployment, enforced by anemoi-api-real's Worker, `docker/api/src/routing.ts`). Reads are open, except the ones only the console's Develop pages make, which need a signed-in caller or an API key and return `401` otherwise: `/registry/{model}/architecture`, `/retraining/*`, `/monitoring/drift[/{model}]`, `/monitoring/calibration` and `/sources`. The registry listing, the active pin and `/monitoring/skew` stay open: the public storm page reads them.
 
 ### Monitoring
 

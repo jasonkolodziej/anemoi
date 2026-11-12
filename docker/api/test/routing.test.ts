@@ -49,6 +49,8 @@ test('the Develop pages\' reads need a signed-in user; the public storm page\'s 
 		'/v1/monitoring/drift/cnn',
 		'/v1/monitoring/calibration',
 		'/v1/monitoring/%63alibration',
+		'/v1/sources',
+		'/v1/%73ources/',
 	]) {
 		assert.equal(requiresSignedInUser(path), true, path);
 	}

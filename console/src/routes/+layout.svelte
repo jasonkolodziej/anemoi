@@ -54,7 +54,6 @@
   const nav: NavEntry[] = [
     { href: "/", label: "Storms" },
     { href: "/models", label: "Models" },
-    { href: "/sources", label: "Sources" },
     {
       type: "dropdown",
       label: "Develop",
@@ -78,6 +77,11 @@
           href: "/retraining",
           title: "Retraining",
           description: "What's due to retrain, and why.",
+        },
+        {
+          href: "/sources",
+          title: "Sources",
+          description: "The data a forecast cycle may read, and how late it runs.",
         },
       ],
     },

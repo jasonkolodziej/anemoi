@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { test, expect, type Page } from '@playwright/test';
 import { signUpViaMagicLink } from './helpers/auth';
 
-// The Develop pages (architecture, registry, monitoring, retraining) are
+// The Develop pages (architecture, registry, monitoring, retraining, sources) are
 // signed-in only: each has a -guard.ts, and anemoi-api-real refuses the
 // reads only they make (docker/api/src/routing.ts). This runs in the
 // workerd suite because sign-in needs the local D1 `vite dev` doesn't have.
@@ -25,7 +25,7 @@ async function serveDemoApi(page: Page) {
 	});
 }
 
-const DEVELOP = ['/architecture', '/registry', '/monitoring', '/retraining'];
+const DEVELOP = ['/architecture', '/registry', '/monitoring', '/retraining', '/sources'];
 
 for (const path of DEVELOP) {
 	test(`${path} sends a signed-out visitor to sign in, then back`, async ({ page }) => {
@@ -44,6 +44,7 @@ test('the Develop menu sends a signed-out visitor to sign in, client-side naviga
 		['Registry', '/registry'],
 		['Monitoring', '/monitoring'],
 		['Retraining', '/retraining'],
+		['Sources', '/sources'],
 	]) {
 		await page.getByRole('button', { name: 'Develop' }).click();
 		await page.getByRole('link', { name: new RegExp(`^${title}`) }).click();
@@ -58,10 +59,10 @@ test.describe('signed in', () => {
 		await signUpViaMagicLink(page, `develop-${test.info().testId}-${Date.now()}@example.com`);
 	});
 
-	test('the Develop menu lists all four pages', async ({ page }) => {
+	test('the Develop menu lists all five pages', async ({ page }) => {
 		await page.goto('/');
 		await page.getByRole('button', { name: 'Develop' }).click();
-		for (const title of ['Architecture', 'Registry', 'Monitoring', 'Retraining']) {
+		for (const title of ['Architecture', 'Registry', 'Monitoring', 'Retraining', 'Sources']) {
 			await expect(page.getByRole('link', { name: new RegExp(`^${title}`) })).toBeVisible();
 		}
 	});
@@ -152,6 +153,15 @@ test.describe('signed in', () => {
 		await expect(page.getByText('No real cycles have been audited yet')).toHaveCount(0);
 		await expect(page.getByText(/cone nominal \d+%/)).toBeVisible();
 		await expect(page.getByText(/intensity nominal \d+%/)).toBeVisible();
+		expect(pageErrors).toEqual([]);
+	});
+
+	test('sources lists the data source registry', async ({ page }) => {
+		const pageErrors: string[] = [];
+		page.on('pageerror', (err) => pageErrors.push(err.message));
+		await page.goto('/sources');
+		await expect(page.getByRole('heading', { name: /source/i }).first()).toBeVisible();
+		await expect(page.getByRole('row').nth(1)).toBeVisible();
 		expect(pageErrors).toEqual([]);
 	});
 
