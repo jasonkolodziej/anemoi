@@ -17,6 +17,30 @@ set -euo pipefail
 : "${GRAPHIFY_VERSION:?set GRAPHIFY_VERSION (pinned in .github/workflows/graphify.yml)}"
 graphify() { uvx --from "graphifyy==${GRAPHIFY_VERSION}" graphify "$@"; }
 
+# graphify resolves the console's `$lib/...` imports through the path aliases
+# in console/.svelte-kit/tsconfig.json, which `svelte-kit sync` generates and
+# git ignores. Without it (CI, a fresh clone) every `$lib` import collapses
+# into one unresolved `$lib` node and the console loses ~400 edges. Stand in
+# for it with just the aliases it would define; a real one (from a local
+# `pnpm dev`/`check`) is left alone and yields the same graph.
+kit_tsconfig=console/.svelte-kit/tsconfig.json
+if [[ ! -f "$kit_tsconfig" ]]; then
+  mkdir -p "$(dirname "$kit_tsconfig")"
+  cat > "$kit_tsconfig" <<'JSON'
+{
+  "compilerOptions": {
+    "paths": {
+      "$lib": ["../src/lib"],
+      "$lib/*": ["../src/lib/*"],
+      "$app/types": ["./types/index.d.ts"]
+    },
+    "rootDirs": ["..", "./types"]
+  }
+}
+JSON
+  echo "wrote a stand-in ${kit_tsconfig} for \$lib alias resolution"
+fi
+
 # Always build from an empty graphify-out/. extract reads whatever is already
 # there (the previous graph.json, the AST cache, manifest.json), and a build
 # on top of an existing graph comes out differently from a fresh one: the
@@ -43,22 +67,29 @@ if (( nodes < 1000 )); then
   exit 1
 fi
 
-normalise_graph()  { jq -S 'del(.built_at_commit)' "$1"; }
-normalise_report() { grep -v -E '^# Graph Report|^- Built from commit' "$1"; }
+normalise_graph()  { jq -S 'del(.built_at_commit)'; }
+normalise_report() { grep -v -E '^# Graph Report|^- Built from commit'; }
 
 changed=false
 if ! git cat-file -e HEAD:graphify-out/graph.json 2>/dev/null \
   || ! git cat-file -e HEAD:graphify-out/GRAPH_REPORT.md 2>/dev/null; then
   changed=true
   echo "no committed graph yet"
-elif ! diff -q <(git show HEAD:graphify-out/graph.json | normalise_graph /dev/stdin) \
-               <(normalise_graph graphify-out/graph.json) >/dev/null \
-  || ! diff -q <(git show HEAD:graphify-out/GRAPH_REPORT.md | normalise_report /dev/stdin) \
-               <(normalise_report graphify-out/GRAPH_REPORT.md) >/dev/null; then
-  changed=true
-  echo "graph changed structurally"
 else
-  echo "graph unchanged apart from its commit stamp"
+  # Normalise into files rather than comparing two pipes, so neither side is
+  # cut off mid-write when the comparison stops early.
+  tmp=$(mktemp -d)
+  git show HEAD:graphify-out/graph.json      | normalise_graph  > "$tmp/old.json"
+  normalise_graph  < graphify-out/graph.json                    > "$tmp/new.json"
+  git show HEAD:graphify-out/GRAPH_REPORT.md | normalise_report > "$tmp/old.md"
+  normalise_report < graphify-out/GRAPH_REPORT.md               > "$tmp/new.md"
+  if cmp -s "$tmp/old.json" "$tmp/new.json" && cmp -s "$tmp/old.md" "$tmp/new.md"; then
+    echo "graph unchanged apart from its commit stamp"
+  else
+    changed=true
+    echo "graph changed structurally"
+  fi
+  rm -r "$tmp"
 fi
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
