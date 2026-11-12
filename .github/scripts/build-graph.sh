@@ -55,6 +55,16 @@ graphify extract . --code-only
 # --no-label: community naming needs an LLM. --no-viz: graph.html is not committed.
 graphify cluster-only . --no-label --no-viz
 
+# graphify's report tells readers to refresh with `graphify update .`, which
+# skips the $lib stand-in above and builds on the old graph. Point at this
+# script instead (the report is regenerated on every build, so this is too).
+report=graphify-out/GRAPH_REPORT.md
+if [[ -f "$report" ]]; then
+  advice='- Run `GRAPHIFY_VERSION='"${GRAPHIFY_VERSION}"' .github/scripts/build-graph.sh` after code changes (no API cost; not `graphify update .`, see AGENTS.md).'
+  sed 's#^- Run `graphify update \.` after code changes.*#'"${advice}"'#' \
+    "$report" > "$report.tmp" && mv "$report.tmp" "$report"
+fi
+
 for f in graphify-out/graph.json graphify-out/GRAPH_REPORT.md; do
   [[ -s "$f" ]] || { echo "::error::graphify did not write $f"; exit 1; }
 done
