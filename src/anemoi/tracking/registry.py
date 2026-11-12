@@ -202,6 +202,13 @@ class ModelRegistry:
         return self._mlflow is not None
 
     @property
+    def checkpoint_store(self):
+        """The durable store the registry mirrors to, or None -- for
+        callers that write their own records beside it (e.g.
+        `tracking.experiment_tracking.write_stage_runs`)."""
+        return self._checkpoint_store
+
+    @property
     def mlflow_client(self):
         """The underlying (duck-typed) MLflow client, or None -- for
         callers that need to pass it on elsewhere (e.g.

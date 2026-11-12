@@ -46,10 +46,42 @@ def test_builds_a_real_client_when_tracking_uri_is_set(monkeypatch):
     from anemoi.tracking.mlflow_client import mlflow_client_from_env
 
     monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
-    client = mlflow_client_from_env()
+    client = mlflow_client_from_env(probe=False)
 
     assert client is not None
     assert client.tracking_uri == "http://localhost:5000"
+
+
+@pytest.mark.tracking
+def test_an_unreachable_server_is_skipped_fast(monkeypatch):
+    """A server that's down at startup returns None quickly, so a training
+    run never stalls retrying it at every stage (2026-11-12: MLflow's
+    default retries cost ~4 minutes per call against a 502)."""
+    import time
+
+    from anemoi.tracking.mlflow_client import mlflow_client_from_env
+
+    for name in ("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "MLFLOW_HTTP_REQUEST_TIMEOUT"):
+        monkeypatch.delenv(name, raising=False)
+    # A port nothing listens on: connection refused, every retry.
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:9")
+    start = time.monotonic()
+    assert mlflow_client_from_env() is None
+    assert time.monotonic() - start < 30
+
+
+@pytest.mark.tracking
+def test_fail_fast_settings_never_override_explicit_ones(monkeypatch):
+    import os
+
+    from anemoi.tracking.mlflow_client import mlflow_client_from_env
+
+    monkeypatch.setenv("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "5")
+    monkeypatch.delenv("MLFLOW_HTTP_REQUEST_TIMEOUT", raising=False)
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+    mlflow_client_from_env(probe=False)
+    assert os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] == "5"
+    assert os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] == "20"
 
 
 # --- live connection (real network, opt-in via MLFLOW_TRACKING_URI) --------
