@@ -16,6 +16,18 @@
 > You can configure your own MCP servers by adding JSON configuration [here in `<org>/<repo>/settings`](`https://github.com/<ORG>/<REPO>/settings/copilot/coding_agent`). MCP servers can optionally access secrets defined in the repository's copilot environment.
 > [Learn more on cloud agent configuration](https://docs.github.com/en/enterprise-cloud@latest/copilot/how-tos/copilot-on-github/customize-copilot/customize-cloud-agent/extend-cloud-agent-with-mcp)
 
+## graphify (code knowledge graph)
+
+`graphify` is the one MCP server that is configured in the repo for every agent. It serves the committed `graphify-out/graph.json` over stdio (see [`AGENTS.md`](../AGENTS.md)):
+
+| Agent | Config |
+| --- | --- |
+| VS Code + Copilot | [`.vscode/mcp.json`](./mcp.json) (uses `${workspaceFolder}`) |
+| Claude Code (local and claude.ai/code) | [`/.mcp.json`](../.mcp.json) |
+| Copilot cloud agent / Copilot CLI | the `graphify` entry in [`mcp-config.json`](./mcp-config.json), pasted into repo settings; `uv` comes from `copilot-setup-steps.yml` |
+
+All of them need `uv` on `PATH`. Bump the `graphifyy` pin in every config together with `GRAPHIFY_VERSION` in `.github/workflows/graphify.yml`.
+
 ## Example MCP Config
 
 ```jsonl

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "graphify": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "graphifyy[mcp]==0.9.97", "graphify-mcp", "graphify-out/graph.json"]
+    }
+  }
+}

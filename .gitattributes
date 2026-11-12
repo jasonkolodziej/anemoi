@@ -1,2 +1,7 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Built by .github/workflows/graphify.yml: collapse in PR diffs, and don't
+# render graph.json's ~6 MB line diffs.
+graphify-out/** linguist-generated=true
+graphify-out/graph.json -diff

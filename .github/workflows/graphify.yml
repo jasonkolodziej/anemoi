@@ -1,0 +1,66 @@
+# Keeps graphify-out/ (the code knowledge graph agents query, see AGENTS.md)
+# in step with main. Rebuilds on every push to main and commits the result
+# when the graph changed structurally; on PRs that touch the graph tooling it
+# builds as a dry run and uploads the result for inspection.
+# See wiki/Codebase-Map.md ("Knowledge graph") and .github/scripts/build-graph.sh.
+name: Knowledge graph
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "graphify-out/**"
+  pull_request:
+    paths:
+      - ".graphifyignore"
+      - ".github/workflows/graphify.yml"
+      - ".github/scripts/build-graph.sh"
+      - ".github/scripts/commit-graph.sh"
+  workflow_dispatch:
+
+env:
+  # One pin for CI. The agent configs (.mcp.json, .vscode/mcp.json,
+  # .vscode/mcp-config.json, copilot-setup-steps.yml) carry the same version;
+  # bump them together.
+  GRAPHIFY_VERSION: "0.9.97"
+
+# A newer push supersedes an in-flight rebuild: only the latest tree matters.
+concurrency:
+  group: graphify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  graph:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit-graph.sh writes blobs, a tree, a commit and the ref
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        # setup-uv publishes full-version tags only (no floating v10).
+        uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Build the graph
+        id: build
+        run: .github/scripts/build-graph.sh
+
+      - name: Upload the graph (PR dry run)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: graphify-out
+          path: |
+            graphify-out/graph.json
+            graphify-out/GRAPH_REPORT.md
+          retention-days: 7
+
+      - name: Commit the graph
+        if: >-
+          github.event_name != 'pull_request'
+          && github.ref_name == github.event.repository.default_branch
+          && steps.build.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/commit-graph.sh "${{ github.sha }}" "${{ github.ref_name }}"

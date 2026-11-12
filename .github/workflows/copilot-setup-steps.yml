@@ -25,6 +25,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      # The graphify MCP server (code knowledge graph, see AGENTS.md) runs via
+      # uvx; warm its environment so the agent's first tool call is fast.
+      # Version matches GRAPHIFY_VERSION in .github/workflows/graphify.yml.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Install graphify
+        run: uvx --from "graphifyy[mcp]==0.9.97" graphify --help > /dev/null
+
       # ---------------------------------------------------------------
       # Add project-specific setup steps below.
       # Examples: install Node.js, Python, Go, or other runtimes;

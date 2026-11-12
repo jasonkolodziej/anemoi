@@ -1,0 +1,17 @@
+# Paths graphify skips when building graphify-out/ (gitignore syntax).
+# .gitignore is honoured too; this file covers what is tracked but is noise
+# for an agent navigating the codebase.
+
+# Generated Cloudflare runtime typings (~3,800 nodes between the two)
+**/worker-configuration.d.ts
+
+# Vendored third-party agent skills, not Anemoi code
+.agents/skills/
+.github/skills/
+
+# shadcn-svelte primitives copied in by the CLI
+console/src/lib/components/ui/
+
+# Scratch space
+tmp/
+docs/tmp/

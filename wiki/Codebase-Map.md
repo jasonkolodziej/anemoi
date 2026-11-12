@@ -134,12 +134,24 @@ console/                   SvelteKit console on Cloudflare Workers (anemoi.syste
 wiki/                      source of the GitHub wiki, published on merge by .github/workflows/wiki.yml
 .github/
 ├── workflows/             ci · deploy (tests + one-approval production deploy) · wiki ·
-│                          build-training-image · sync-issue-to-project
+│                          graphify (knowledge graph) · build-training-image · sync-issue-to-project
 └── scripts/               deploy-plan.sh (what to test/deploy), publish-wiki.sh,
-                           smoke-test-image.sh (start an image before it ships)
+                           smoke-test-image.sh (start an image before it ships),
+                           build-graph.sh + commit-graph.sh (graphify-out/ rebuild)
+graphify-out/              code knowledge graph for agents, rebuilt by CI (see below)
 ```
 
-Also at the repo root: `configs/` (three YAML files read at runtime, see [Configuration Reference](Configuration-Reference)), `tests/` (68 files, see [Testing](Testing)), `docs/`, `slurm/` (SLURM-equivalent job scripts for data-ingest and real training jobs -- `#SBATCH`-headered, `sbatch`-submittable on a real cluster; `run_local.sh` emulates `sbatch` via `tmux` on the current single-VM setup, see `slurm/README.md`), `README.md`, `PLAN.md`, `PROJECT.md`.
+Also at the repo root: `configs/` (three YAML files read at runtime, see [Configuration Reference](Configuration-Reference)), `tests/` (68 files, see [Testing](Testing)), `docs/`, `slurm/` (SLURM-equivalent job scripts for data-ingest and real training jobs -- `#SBATCH`-headered, `sbatch`-submittable on a real cluster; `run_local.sh` emulates `sbatch` via `tmux` on the current single-VM setup, see `slurm/README.md`), `README.md`, `PLAN.md`, `PROJECT.md`, `AGENTS.md` (notes for coding agents; `CLAUDE.md` imports it).
+
+### Knowledge graph
+
+`graphify-out/graph.json` is a machine-readable version of this page: every module, class, function and Svelte component in the repo, with the calls, imports and uses between them, built by [graphify](https://github.com/Graphify-Labs/graphify) (`graphifyy` on PyPI) from tree-sitter parses. It exists so coding agents can ask "what depends on `CheckpointStore`" or "how does `run_cycle` reach `ModelRegistry`" without reading the tree. `graphify-out/GRAPH_REPORT.md` is its human-readable summary.
+
+- **Built by CI, committed to `main`.** `.github/workflows/graphify.yml` rebuilds it on every push to `main` and commits it when the structure changed (not when only the commit stamp did). The commit goes through the Git Data API, so GitHub signs it and it passes the signed-commits rule on `main`. Nobody else commits to `graphify-out/`.
+- **Code only, no LLM.** `--code-only` extraction needs no API key, and the same tree always yields the same graph. This wiki and other Markdown are not in it. Generated typings, vendored agent skills and shadcn primitives are excluded in `.graphifyignore`.
+- **Served locally, not hosted.** Each agent runs the `graphify` MCP server over stdio against its own checkout's `graph.json` (`.mcp.json` for Claude Code, `.vscode/mcp.json` for VS Code, `.vscode/mcp-config.json` for the Copilot cloud agent). The graph is a development artifact, versioned with the code it describes; it is not served by the API or the console. Usage for agents is in `AGENTS.md`.
+
+At the time of writing it holds about 5,900 nodes and 15,000 edges, and `graph.json` is about 6 MB.
 
 ---
 

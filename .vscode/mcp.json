@@ -1,5 +1,10 @@
 {
   "servers": {
+    "graphify": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "graphifyy[mcp]==0.9.97", "graphify-mcp", "${workspaceFolder}/graphify-out/graph.json"]
+    },
     "github": {
       "type": "http",
       "url": "https://api.githubcopilot.com/mcp/"
