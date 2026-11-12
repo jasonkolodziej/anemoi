@@ -44,6 +44,8 @@ Six independent checks for what is arguably one policy is deliberate. Each guard
 
 ## System at a glance
 
+The overview. For the system as it is serving now -- each model's served version, its basins, the shapes passed between models, and every layer, read from the models themselves -- see [**Develop → Architecture**](https://anemoi.systems/architecture) in the console (signed in).
+
 ```mermaid
 flowchart TD
     A[Working best-track / TC-Vitals] --> F

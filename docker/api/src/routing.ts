@@ -34,6 +34,29 @@ export function cycleRunStormId(method: string, pathname: string): string | null
 	return path?.match(CYCLE_POST_RE)?.[1] ?? null;
 }
 
+/** Reads only a signed-in caller gets -- what the console's Develop pages
+ * (each behind sign-in itself) read and no public page does:
+ *
+ *   /v1/registry/{model}/architecture  each model's internals; also builds
+ *                                      the model on the container
+ *   /v1/retraining/...                 what's due to retrain
+ *   /v1/monitoring/drift[/{model}]     input drift
+ *   /v1/monitoring/calibration         spread/skill per lead
+ *
+ * Not the registry listing, the active pin or /v1/monitoring/skew: the
+ * public storm page reads those. An API key counts as signed in.
+ * Matched on the decoded path, like the cycle gate. */
+const SIGNED_IN_READ_RE =
+	/^\/v1\/(registry\/[^/]+\/architecture|retraining(\/.*)?|monitoring\/drift(\/[^/]+)?|monitoring\/calibration)\/?$/i;
+
+/** Does this request need a resolved user? Any method -- a read gated here
+ * is gated whatever it's sent as. An undecodable path is already refused by
+ * `isInternalPath`. */
+export function requiresSignedInUser(pathname: string): boolean {
+	const path = decodedPath(pathname);
+	return path !== null && SIGNED_IN_READ_RE.test(path);
+}
+
 /** Maintenance routes only this Worker's own cron calls, through the
  * container binding directly -- never reachable from the public route. */
 const INTERNAL_RE = /^\/v1\/internal(\/|$)/i;

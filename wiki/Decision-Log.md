@@ -802,6 +802,18 @@ The API job in `deploy.yml` runs it, since the cycle's product maths is what the
 
 ---
 
+### 60. A live system view, read from the models, behind sign-in with the other Develop pages — *console, api, security*
+
+**Decided:** the console's **Develop → Architecture** page draws the system from the registry and the models themselves; the Mermaid diagram on Home stays as the plain overview. Architecture, Registry, Monitoring and Retraining are signed-in only, grouped under a **Develop** menu.
+
+- **What a model is made of.** `GET /v1/registry/{model}/architecture` builds the served version from its `arch_params` tag (#79) -- the same rebuild serving does -- runs one input of the shape training feeds it (a `SEQUENCE_LENGTH` fix history, the 41×41 storm-centred crop, that crop as an 11×11 lattice for the GNN), and records each module's type, output shape and parameters (`models.architecture`, cached per version). A version from before `arch_params` is described from the builder's defaults and says so.
+- **The page.** A left-to-right graph of the pipeline: each model node is the pinned version, its stage, parameters, 48 h track error and basins (a version without `trained_basins` counts as Atlantic-only, as the registry does, decision 56); edges carry the real tensor shapes. Beams show data flow; selecting a model mutes every edge off its path, from the sources it really reads (GOES and in-situ observations feed no model yet, and are drawn so). The layer view draws each module as a block sized by its output shape, containers opened into their members, identical runs merged as ×N; on large screens it's a popover over the graph sized to its contents, with a scrolling module list under a pinned header.
+- **Access.** Each Develop page has a `-guard.ts` (`$lib/server/require-sign-in`) that sends a signed-out visitor to sign in and back. anemoi-api-real's Worker refuses the reads only those pages make without a user or API key (`requiresSignedInUser`); the reads the public storm page makes stay open. The architecture endpoint also builds models on the container, another reason not to leave it open.
+
+**Enforced by** `tests/test_model_architecture.py` (every model described; a version's `arch_params` used; the GNN fed its real lattice), `docker/api/test/routing.test.ts` (which reads need a user, decoded paths included), `console/e2e/develop-pages.spec.ts` (redirects, the Develop menu, the system and layer views, muted beams; the registry and monitoring tests moved here, as those pages now need sign-in).
+
+---
+
 ## Implementation → rebrand
 
 ### 14. Two product names for one platform — *naming*

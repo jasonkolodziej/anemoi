@@ -20,7 +20,7 @@ import { Container, getContainer } from '@cloudflare/containers';
 import type { DurableObject } from 'cloudflare:workers';
 import { verifyApiKey } from './auth';
 import { recordCycleRun } from './metering';
-import { RUN_SOURCE_HEADER, cycleRunStormId, isInternalPath } from './routing';
+import { RUN_SOURCE_HEADER, cycleRunStormId, isInternalPath, requiresSignedInUser } from './routing';
 import { cycleInstanceId } from './cycleWorkflow';
 import { type ContainerFetch, putCycleResult, readThrough, refreshStormSnapshot } from './readCache';
 
@@ -220,6 +220,10 @@ export default {
 		// still resolved for everyone so a caller that *does* send a key
 		// gets it forwarded downstream, but only a cycle POST requires one.
 		const userId = await resolveUserId(request, env, ctx);
+		// What only the console's Develop pages read: signed-in users only.
+		if (requiresSignedInUser(url.pathname) && !userId) {
+			return new Response('sign in to view this', { status: 401 });
+		}
 		if (cycleStormId) {
 			if (!userId) {
 				return new Response('invalid or missing X-Anemoi-Api-Key', { status: 401 });

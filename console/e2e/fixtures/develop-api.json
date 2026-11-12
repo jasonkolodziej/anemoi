@@ -1,0 +1,4324 @@
+{
+ "/v1/monitoring/calibration": [
+  {
+   "containment_rate": 0.632,
+   "ensemble_size_max": null,
+   "ensemble_size_min": null,
+   "lead_hours": 12,
+   "n_cases": 20,
+   "nominal_rate": 0.6666666666666666,
+   "quantity": "cone",
+   "verdict": "calibrated"
+  },
+  {
+   "containment_rate": 0.841,
+   "ensemble_size_max": null,
+   "ensemble_size_min": null,
+   "lead_hours": 12,
+   "n_cases": 20,
+   "nominal_rate": 0.8,
+   "quantity": "intensity",
+   "verdict": "calibrated"
+  },
+  {
+   "containment_rate": 0.631,
+   "ensemble_size_max": null,
+   "ensemble_size_min": null,
+   "lead_hours": 24,
+   "n_cases": 20,
+   "nominal_rate": 0.6666666666666666,
+   "quantity": "cone",
+   "verdict": "calibrated"
+  },
+  {
+   "containment_rate": 0.785,
+   "ensemble_size_max": null,
+   "ensemble_size_min": null,
+   "lead_hours": 24,
+   "n_cases": 20,
+   "nominal_rate": 0.8,
+   "quantity": "intensity",
+   "verdict": "calibrated"
+  },
+  {
+   "containment_rate": 0.55,
+   "ensemble_size_max": null,
+   "ensemble_size_min": null,
+   "lead_hours": 36,
+   "n_cases": 20,
+   "nominal_rate": 0.6666666666666666,
+   "quantity": "cone",
+   "verdict": "calibrated"
+  },
+  {
+   "containment_rate": 0.784,
+   "ensemble_size_max": null,
+   "ensemble_size_min": null,
+   "lead_hours": 36,
+   "n_cases": 20,
+   "nominal_rate": 0.8,
+   "quantity": "intensity",
+   "verdict": "calibrated"
+  },
+  {
+   "containment_rate": 0.54,
+   "ensemble_size_max": null,
+   "ensemble_size_min": null,
+   "lead_hours": 48,
+   "n_cases": 20,
+   "nominal_rate": 0.6666666666666666,
+   "quantity": "cone",
+   "verdict": "calibrated"
+  },
+  {
+   "containment_rate": 0.798,
+   "ensemble_size_max": null,
+   "ensemble_size_min": null,
+   "lead_hours": 48,
+   "n_cases": 20,
+   "nominal_rate": 0.8,
+   "quantity": "intensity",
+   "verdict": "calibrated"
+  },
+  {
+   "containment_rate": 0.473,
+   "ensemble_size_max": null,
+   "ensemble_size_min": null,
+   "lead_hours": 72,
+   "n_cases": 20,
+   "nominal_rate": 0.6666666666666666,
+   "quantity": "cone",
+   "verdict": "too narrow"
+  },
+  {
+   "containment_rate": 0.745,
+   "ensemble_size_max": null,
+   "ensemble_size_min": null,
+   "lead_hours": 72,
+   "n_cases": 20,
+   "nominal_rate": 0.8,
+   "quantity": "intensity",
+   "verdict": "calibrated"
+  },
+  {
+   "containment_rate": 0.426,
+   "ensemble_size_max": null,
+   "ensemble_size_min": null,
+   "lead_hours": 96,
+   "n_cases": 20,
+   "nominal_rate": 0.6666666666666666,
+   "quantity": "cone",
+   "verdict": "too narrow"
+  },
+  {
+   "containment_rate": 0.797,
+   "ensemble_size_max": null,
+   "ensemble_size_min": null,
+   "lead_hours": 96,
+   "n_cases": 20,
+   "nominal_rate": 0.8,
+   "quantity": "intensity",
+   "verdict": "calibrated"
+  },
+  {
+   "containment_rate": 0.327,
+   "ensemble_size_max": null,
+   "ensemble_size_min": null,
+   "lead_hours": 120,
+   "n_cases": 20,
+   "nominal_rate": 0.6666666666666666,
+   "quantity": "cone",
+   "verdict": "too narrow"
+  },
+  {
+   "containment_rate": 0.796,
+   "ensemble_size_max": null,
+   "ensemble_size_min": null,
+   "lead_hours": 120,
+   "n_cases": 20,
+   "nominal_rate": 0.8,
+   "quantity": "intensity",
+   "verdict": "calibrated"
+  }
+ ],
+ "/v1/monitoring/drift": [
+  {
+   "alert": false,
+   "features": [
+    {
+     "drifted": false,
+     "name": "shear_magnitude_kt",
+     "standardized_shift": 0.062,
+     "variance_ratio": 1.055
+    },
+    {
+     "drifted": false,
+     "name": "shear_direction_deg",
+     "standardized_shift": -0.166,
+     "variance_ratio": 0.989
+    },
+    {
+     "drifted": false,
+     "name": "steering_u_kt",
+     "standardized_shift": 0.095,
+     "variance_ratio": 0.981
+    },
+    {
+     "drifted": false,
+     "name": "steering_v_kt",
+     "standardized_shift": 0.019,
+     "variance_ratio": 1.015
+    },
+    {
+     "drifted": false,
+     "name": "sst_c",
+     "standardized_shift": 0.02,
+     "variance_ratio": 0.639
+    },
+    {
+     "drifted": false,
+     "name": "ohc_kj_cm2",
+     "standardized_shift": 0.187,
+     "variance_ratio": 1.533
+    },
+    {
+     "drifted": false,
+     "name": "rh700_pct",
+     "standardized_shift": -0.019,
+     "variance_ratio": 0.87
+    },
+    {
+     "drifted": false,
+     "name": "vorticity850_1e5s",
+     "standardized_shift": -0.101,
+     "variance_ratio": 1.089
+    },
+    {
+     "drifted": false,
+     "name": "potential_intensity_kt",
+     "standardized_shift": -0.068,
+     "variance_ratio": 0.987
+    },
+    {
+     "drifted": false,
+     "name": "ivt_kg_ms",
+     "standardized_shift": -0.029,
+     "variance_ratio": 0.999
+    },
+    {
+     "drifted": false,
+     "name": "rh700_inner_core_pct",
+     "standardized_shift": -0.047,
+     "variance_ratio": 0.952
+    }
+   ],
+   "flavor": "gdas_finetune",
+   "generated_at": "2026-11-12T00:38:32.028266Z",
+   "model": "lstm",
+   "n_live": 60,
+   "summary": "no feature drift over 60 live samples"
+  },
+  {
+   "alert": false,
+   "features": [
+    {
+     "drifted": false,
+     "name": "shear_magnitude_kt",
+     "standardized_shift": -0.103,
+     "variance_ratio": 1.136
+    },
+    {
+     "drifted": false,
+     "name": "shear_direction_deg",
+     "standardized_shift": 0.105,
+     "variance_ratio": 1.01
+    },
+    {
+     "drifted": false,
+     "name": "steering_u_kt",
+     "standardized_shift": -0.064,
+     "variance_ratio": 0.824
+    },
+    {
+     "drifted": false,
+     "name": "steering_v_kt",
+     "standardized_shift": 0.017,
+     "variance_ratio": 0.677
+    },
+    {
+     "drifted": false,
+     "name": "sst_c",
+     "standardized_shift": -0.076,
+     "variance_ratio": 0.567
+    },
+    {
+     "drifted": false,
+     "name": "ohc_kj_cm2",
+     "standardized_shift": -0.03,
+     "variance_ratio": 1.356
+    },
+    {
+     "drifted": false,
+     "name": "rh700_pct",
+     "standardized_shift": 0.174,
+     "variance_ratio": 1.243
+    },
+    {
+     "drifted": false,
+     "name": "vorticity850_1e5s",
+     "standardized_shift": 0.123,
+     "variance_ratio": 0.841
+    },
+    {
+     "drifted": false,
+     "name": "potential_intensity_kt",
+     "standardized_shift": 0.1,
+     "variance_ratio": 0.865
+    },
+    {
+     "drifted": false,
+     "name": "ivt_kg_ms",
+     "standardized_shift": -0.049,
+     "variance_ratio": 1.05
+    },
+    {
+     "drifted": false,
+     "name": "rh700_inner_core_pct",
+     "standardized_shift": 0.195,
+     "variance_ratio": 0.616
+    }
+   ],
+   "flavor": "gdas_finetune",
+   "generated_at": "2026-11-12T00:38:32.028359Z",
+   "model": "cnn",
+   "n_live": 60,
+   "summary": "no feature drift over 60 live samples"
+  },
+  {
+   "alert": false,
+   "features": [
+    {
+     "drifted": false,
+     "name": "shear_magnitude_kt",
+     "standardized_shift": 0.016,
+     "variance_ratio": 0.937
+    },
+    {
+     "drifted": false,
+     "name": "shear_direction_deg",
+     "standardized_shift": -0.041,
+     "variance_ratio": 1.046
+    },
+    {
+     "drifted": false,
+     "name": "steering_u_kt",
+     "standardized_shift": -0.059,
+     "variance_ratio": 1.32
+    },
+    {
+     "drifted": false,
+     "name": "steering_v_kt",
+     "standardized_shift": 0.006,
+     "variance_ratio": 1.01
+    },
+    {
+     "drifted": false,
+     "name": "sst_c",
+     "standardized_shift": -0.163,
+     "variance_ratio": 0.978
+    },
+    {
+     "drifted": false,
+     "name": "ohc_kj_cm2",
+     "standardized_shift": 0.244,
+     "variance_ratio": 1.019
+    },
+    {
+     "drifted": false,
+     "name": "rh700_pct",
+     "standardized_shift": 0.211,
+     "variance_ratio": 1.051
+    },
+    {
+     "drifted": false,
+     "name": "vorticity850_1e5s",
+     "standardized_shift": 0.141,
+     "variance_ratio": 1.188
+    },
+    {
+     "drifted": false,
+     "name": "potential_intensity_kt",
+     "standardized_shift": 0.13,
+     "variance_ratio": 1.158
+    },
+    {
+     "drifted": false,
+     "name": "ivt_kg_ms",
+     "standardized_shift": 0.153,
+     "variance_ratio": 1.04
+    },
+    {
+     "drifted": false,
+     "name": "rh700_inner_core_pct",
+     "standardized_shift": -0.194,
+     "variance_ratio": 0.955
+    }
+   ],
+   "flavor": "gdas_finetune",
+   "generated_at": "2026-11-12T00:38:32.028435Z",
+   "model": "transformer",
+   "n_live": 60,
+   "summary": "no feature drift over 60 live samples"
+  },
+  {
+   "alert": true,
+   "features": [
+    {
+     "drifted": true,
+     "name": "shear_magnitude_kt",
+     "standardized_shift": 2.56,
+     "variance_ratio": 1.423
+    },
+    {
+     "drifted": true,
+     "name": "shear_direction_deg",
+     "standardized_shift": 2.574,
+     "variance_ratio": 1.266
+    },
+    {
+     "drifted": true,
+     "name": "steering_u_kt",
+     "standardized_shift": 2.196,
+     "variance_ratio": 1.216
+    },
+    {
+     "drifted": true,
+     "name": "steering_v_kt",
+     "standardized_shift": 2.457,
+     "variance_ratio": 1.21
+    },
+    {
+     "drifted": true,
+     "name": "sst_c",
+     "standardized_shift": 2.298,
+     "variance_ratio": 0.956
+    },
+    {
+     "drifted": true,
+     "name": "ohc_kj_cm2",
+     "standardized_shift": 2.63,
+     "variance_ratio": 0.694
+    },
+    {
+     "drifted": true,
+     "name": "rh700_pct",
+     "standardized_shift": 2.431,
+     "variance_ratio": 1.138
+    },
+    {
+     "drifted": true,
+     "name": "vorticity850_1e5s",
+     "standardized_shift": 2.303,
+     "variance_ratio": 1.087
+    },
+    {
+     "drifted": true,
+     "name": "potential_intensity_kt",
+     "standardized_shift": 2.169,
+     "variance_ratio": 0.948
+    },
+    {
+     "drifted": true,
+     "name": "ivt_kg_ms",
+     "standardized_shift": 2.25,
+     "variance_ratio": 0.489
+    },
+    {
+     "drifted": true,
+     "name": "rh700_inner_core_pct",
+     "standardized_shift": 2.551,
+     "variance_ratio": 1.047
+    }
+   ],
+   "flavor": "gdas_finetune",
+   "generated_at": "2026-11-12T00:38:32.028509Z",
+   "model": "gnn",
+   "n_live": 60,
+   "summary": "11 drifted feature(s) over 60 samples; worst ohc_kj_cm2 shift +2.63 sigma"
+  },
+  {
+   "alert": false,
+   "features": [
+    {
+     "drifted": false,
+     "name": "shear_magnitude_kt",
+     "standardized_shift": -0.03,
+     "variance_ratio": 0.595
+    },
+    {
+     "drifted": false,
+     "name": "shear_direction_deg",
+     "standardized_shift": 0.14,
+     "variance_ratio": 0.702
+    },
+    {
+     "drifted": false,
+     "name": "steering_u_kt",
+     "standardized_shift": -0.085,
+     "variance_ratio": 0.719
+    },
+    {
+     "drifted": false,
+     "name": "steering_v_kt",
+     "standardized_shift": 0.083,
+     "variance_ratio": 0.937
+    },
+    {
+     "drifted": false,
+     "name": "sst_c",
+     "standardized_shift": -0.074,
+     "variance_ratio": 0.945
+    },
+    {
+     "drifted": false,
+     "name": "ohc_kj_cm2",
+     "standardized_shift": -0.029,
+     "variance_ratio": 1.099
+    },
+    {
+     "drifted": false,
+     "name": "rh700_pct",
+     "standardized_shift": -0.136,
+     "variance_ratio": 1.082
+    },
+    {
+     "drifted": false,
+     "name": "vorticity850_1e5s",
+     "standardized_shift": -0.053,
+     "variance_ratio": 0.879
+    },
+    {
+     "drifted": false,
+     "name": "potential_intensity_kt",
+     "standardized_shift": -0.017,
+     "variance_ratio": 1.013
+    },
+    {
+     "drifted": false,
+     "name": "ivt_kg_ms",
+     "standardized_shift": 0.312,
+     "variance_ratio": 1.098
+    },
+    {
+     "drifted": false,
+     "name": "rh700_inner_core_pct",
+     "standardized_shift": 0.036,
+     "variance_ratio": 0.859
+    }
+   ],
+   "flavor": "gdas_finetune",
+   "generated_at": "2026-11-12T00:38:32.028583Z",
+   "model": "pinn",
+   "n_live": 60,
+   "summary": "no feature drift over 60 live samples"
+  },
+  {
+   "alert": true,
+   "features": [
+    {
+     "drifted": true,
+     "name": "shear_magnitude_kt",
+     "standardized_shift": 2.669,
+     "variance_ratio": 1.177
+    },
+    {
+     "drifted": true,
+     "name": "shear_direction_deg",
+     "standardized_shift": 2.479,
+     "variance_ratio": 0.78
+    },
+    {
+     "drifted": true,
+     "name": "steering_u_kt",
+     "standardized_shift": 2.207,
+     "variance_ratio": 1.086
+    },
+    {
+     "drifted": true,
+     "name": "steering_v_kt",
+     "standardized_shift": 2.356,
+     "variance_ratio": 0.95
+    },
+    {
+     "drifted": true,
+     "name": "sst_c",
+     "standardized_shift": 2.721,
+     "variance_ratio": 0.911
+    },
+    {
+     "drifted": true,
+     "name": "ohc_kj_cm2",
+     "standardized_shift": 2.26,
+     "variance_ratio": 1.017
+    },
+    {
+     "drifted": true,
+     "name": "rh700_pct",
+     "standardized_shift": 2.39,
+     "variance_ratio": 1.117
+    },
+    {
+     "drifted": true,
+     "name": "vorticity850_1e5s",
+     "standardized_shift": 2.411,
+     "variance_ratio": 1.033
+    },
+    {
+     "drifted": true,
+     "name": "potential_intensity_kt",
+     "standardized_shift": 2.477,
+     "variance_ratio": 0.787
+    },
+    {
+     "drifted": true,
+     "name": "ivt_kg_ms",
+     "standardized_shift": 2.193,
+     "variance_ratio": 0.729
+    },
+    {
+     "drifted": true,
+     "name": "rh700_inner_core_pct",
+     "standardized_shift": 2.349,
+     "variance_ratio": 0.992
+    }
+   ],
+   "flavor": "gdas_finetune",
+   "generated_at": "2026-11-12T00:38:32.028652Z",
+   "model": "diffusion",
+   "n_live": 60,
+   "summary": "11 drifted feature(s) over 60 samples; worst sst_c shift +2.72 sigma"
+  },
+  {
+   "alert": false,
+   "features": [
+    {
+     "drifted": false,
+     "name": "shear_magnitude_kt",
+     "standardized_shift": -0.028,
+     "variance_ratio": 0.84
+    },
+    {
+     "drifted": false,
+     "name": "shear_direction_deg",
+     "standardized_shift": 0.188,
+     "variance_ratio": 1.241
+    },
+    {
+     "drifted": false,
+     "name": "steering_u_kt",
+     "standardized_shift": -0.039,
+     "variance_ratio": 0.856
+    },
+    {
+     "drifted": false,
+     "name": "steering_v_kt",
+     "standardized_shift": -0.129,
+     "variance_ratio": 0.803
+    },
+    {
+     "drifted": false,
+     "name": "sst_c",
+     "standardized_shift": -0.071,
+     "variance_ratio": 1.051
+    },
+    {
+     "drifted": false,
+     "name": "ohc_kj_cm2",
+     "standardized_shift": 0.191,
+     "variance_ratio": 1.374
+    },
+    {
+     "drifted": false,
+     "name": "rh700_pct",
+     "standardized_shift": 0.022,
+     "variance_ratio": 0.895
+    },
+    {
+     "drifted": false,
+     "name": "vorticity850_1e5s",
+     "standardized_shift": 0.151,
+     "variance_ratio": 1.109
+    },
+    {
+     "drifted": false,
+     "name": "potential_intensity_kt",
+     "standardized_shift": -0.132,
+     "variance_ratio": 1.189
+    },
+    {
+     "drifted": false,
+     "name": "ivt_kg_ms",
+     "standardized_shift": 0.08,
+     "variance_ratio": 1.213
+    },
+    {
+     "drifted": false,
+     "name": "rh700_inner_core_pct",
+     "standardized_shift": 0.451,
+     "variance_ratio": 0.982
+    }
+   ],
+   "flavor": "gdas_finetune",
+   "generated_at": "2026-11-12T00:38:32.028719Z",
+   "model": "fusion",
+   "n_live": 60,
+   "summary": "no feature drift over 60 live samples"
+  }
+ ],
+ "/v1/monitoring/skew": {
+  "alert": false,
+  "intensity_bias_kt": 0.11,
+  "lead_hours": 48,
+  "mean_abs_intensity_delta_kt": 2.37,
+  "mean_track_delta_nm": 7.73,
+  "n": 20,
+  "reasons": [],
+  "window_end": "2026-11-12T00:38:32.031148Z",
+  "window_start": "2026-10-29T00:38:32.031148Z"
+ },
+ "/v1/registry": [
+  {
+   "latest": {
+    "checkpoint_uri": null,
+    "created_at": "2026-11-12T00:38:25.824246Z",
+    "input_flavor": "gdas_finetune",
+    "latent_signature": null,
+    "metrics": {
+     "track_error_nm_48h": 59.097382639409474
+    },
+    "name": "lstm",
+    "run_id": "5b8bb7cdccfb",
+    "stage": "production",
+    "tags": {
+     "input_flavor": "gdas_finetune",
+     "nwp_cycle_lag": "6"
+    },
+    "version": 1
+   },
+   "model": "lstm",
+   "production": {
+    "checkpoint_uri": null,
+    "created_at": "2026-11-12T00:38:25.824246Z",
+    "input_flavor": "gdas_finetune",
+    "latent_signature": null,
+    "metrics": {
+     "track_error_nm_48h": 59.097382639409474
+    },
+    "name": "lstm",
+    "run_id": "5b8bb7cdccfb",
+    "stage": "production",
+    "tags": {
+     "input_flavor": "gdas_finetune",
+     "nwp_cycle_lag": "6"
+    },
+    "version": 1
+   },
+   "versions": [
+    {
+     "checkpoint_uri": null,
+     "created_at": "2026-11-12T00:38:25.824246Z",
+     "input_flavor": "gdas_finetune",
+     "latent_signature": null,
+     "metrics": {
+      "track_error_nm_48h": 59.097382639409474
+     },
+     "name": "lstm",
+     "run_id": "5b8bb7cdccfb",
+     "stage": "production",
+     "tags": {
+      "input_flavor": "gdas_finetune",
+      "nwp_cycle_lag": "6"
+     },
+     "version": 1
+    }
+   ]
+  },
+  {
+   "latest": {
+    "checkpoint_uri": null,
+    "created_at": "2026-11-12T00:38:25.824681Z",
+    "input_flavor": "gdas_finetune",
+    "latent_signature": null,
+    "metrics": {
+     "track_error_nm_48h": 51.576912659547176
+    },
+    "name": "cnn",
+    "run_id": "cd490ee6cfe5",
+    "stage": "production",
+    "tags": {
+     "input_flavor": "gdas_finetune",
+     "nwp_cycle_lag": "6"
+    },
+    "version": 1
+   },
+   "model": "cnn",
+   "production": {
+    "checkpoint_uri": null,
+    "created_at": "2026-11-12T00:38:25.824681Z",
+    "input_flavor": "gdas_finetune",
+    "latent_signature": null,
+    "metrics": {
+     "track_error_nm_48h": 51.576912659547176
+    },
+    "name": "cnn",
+    "run_id": "cd490ee6cfe5",
+    "stage": "production",
+    "tags": {
+     "input_flavor": "gdas_finetune",
+     "nwp_cycle_lag": "6"
+    },
+    "version": 1
+   },
+   "versions": [
+    {
+     "checkpoint_uri": null,
+     "created_at": "2026-11-12T00:38:25.824681Z",
+     "input_flavor": "gdas_finetune",
+     "latent_signature": null,
+     "metrics": {
+      "track_error_nm_48h": 51.576912659547176
+     },
+     "name": "cnn",
+     "run_id": "cd490ee6cfe5",
+     "stage": "production",
+     "tags": {
+      "input_flavor": "gdas_finetune",
+      "nwp_cycle_lag": "6"
+     },
+     "version": 1
+    }
+   ]
+  },
+  {
+   "latest": {
+    "checkpoint_uri": null,
+    "created_at": "2026-11-12T00:38:25.824889Z",
+    "input_flavor": "gdas_finetune",
+    "latent_signature": null,
+    "metrics": {
+     "track_error_nm_48h": 43.26621458341026
+    },
+    "name": "transformer",
+    "run_id": "3840de4cbb34",
+    "stage": "production",
+    "tags": {
+     "input_flavor": "gdas_finetune",
+     "nwp_cycle_lag": "6"
+    },
+    "version": 1
+   },
+   "model": "transformer",
+   "production": {
+    "checkpoint_uri": null,
+    "created_at": "2026-11-12T00:38:25.824889Z",
+    "input_flavor": "gdas_finetune",
+    "latent_signature": null,
+    "metrics": {
+     "track_error_nm_48h": 43.26621458341026
+    },
+    "name": "transformer",
+    "run_id": "3840de4cbb34",
+    "stage": "production",
+    "tags": {
+     "input_flavor": "gdas_finetune",
+     "nwp_cycle_lag": "6"
+    },
+    "version": 1
+   },
+   "versions": [
+    {
+     "checkpoint_uri": null,
+     "created_at": "2026-11-12T00:38:25.824889Z",
+     "input_flavor": "gdas_finetune",
+     "latent_signature": null,
+     "metrics": {
+      "track_error_nm_48h": 43.26621458341026
+     },
+     "name": "transformer",
+     "run_id": "3840de4cbb34",
+     "stage": "production",
+     "tags": {
+      "input_flavor": "gdas_finetune",
+      "nwp_cycle_lag": "6"
+     },
+     "version": 1
+    }
+   ]
+  },
+  {
+   "latest": {
+    "checkpoint_uri": null,
+    "created_at": "2026-11-12T00:38:25.825087Z",
+    "input_flavor": "gdas_finetune",
+    "latent_signature": null,
+    "metrics": {
+     "track_error_nm_48h": 50.63613226455993
+    },
+    "name": "gnn",
+    "run_id": "af6aff29bf9e",
+    "stage": "production",
+    "tags": {
+     "input_flavor": "gdas_finetune",
+     "nwp_cycle_lag": "6"
+    },
+    "version": 1
+   },
+   "model": "gnn",
+   "production": {
+    "checkpoint_uri": null,
+    "created_at": "2026-11-12T00:38:25.825087Z",
+    "input_flavor": "gdas_finetune",
+    "latent_signature": null,
+    "metrics": {
+     "track_error_nm_48h": 50.63613226455993
+    },
+    "name": "gnn",
+    "run_id": "af6aff29bf9e",
+    "stage": "production",
+    "tags": {
+     "input_flavor": "gdas_finetune",
+     "nwp_cycle_lag": "6"
+    },
+    "version": 1
+   },
+   "versions": [
+    {
+     "checkpoint_uri": null,
+     "created_at": "2026-11-12T00:38:25.825087Z",
+     "input_flavor": "gdas_finetune",
+     "latent_signature": null,
+     "metrics": {
+      "track_error_nm_48h": 50.63613226455993
+     },
+     "name": "gnn",
+     "run_id": "af6aff29bf9e",
+     "stage": "production",
+     "tags": {
+      "input_flavor": "gdas_finetune",
+      "nwp_cycle_lag": "6"
+     },
+     "version": 1
+    }
+   ]
+  },
+  {
+   "latest": {
+    "checkpoint_uri": null,
+    "created_at": "2026-11-12T00:38:25.825320Z",
+    "input_flavor": "gdas_finetune",
+    "latent_signature": null,
+    "metrics": {
+     "track_error_nm_48h": 40.60450959091911
+    },
+    "name": "pinn",
+    "run_id": "40a348cffc8a",
+    "stage": "production",
+    "tags": {
+     "input_flavor": "gdas_finetune",
+     "nwp_cycle_lag": "6"
+    },
+    "version": 1
+   },
+   "model": "pinn",
+   "production": {
+    "checkpoint_uri": null,
+    "created_at": "2026-11-12T00:38:25.825320Z",
+    "input_flavor": "gdas_finetune",
+    "latent_signature": null,
+    "metrics": {
+     "track_error_nm_48h": 40.60450959091911
+    },
+    "name": "pinn",
+    "run_id": "40a348cffc8a",
+    "stage": "production",
+    "tags": {
+     "input_flavor": "gdas_finetune",
+     "nwp_cycle_lag": "6"
+    },
+    "version": 1
+   },
+   "versions": [
+    {
+     "checkpoint_uri": null,
+     "created_at": "2026-11-12T00:38:25.825320Z",
+     "input_flavor": "gdas_finetune",
+     "latent_signature": null,
+     "metrics": {
+      "track_error_nm_48h": 40.60450959091911
+     },
+     "name": "pinn",
+     "run_id": "40a348cffc8a",
+     "stage": "production",
+     "tags": {
+      "input_flavor": "gdas_finetune",
+      "nwp_cycle_lag": "6"
+     },
+     "version": 1
+    }
+   ]
+  },
+  {
+   "latest": {
+    "checkpoint_uri": null,
+    "created_at": "2026-11-12T00:38:25.825722Z",
+    "input_flavor": "gdas_finetune",
+    "latent_signature": "lstmv1-cnnv1-transformerv1-gnnv1-pinnv1",
+    "metrics": {
+     "crps_48h": 9.616941768594366
+    },
+    "name": "diffusion",
+    "run_id": "958da40ec618",
+    "stage": "production",
+    "tags": {},
+    "version": 1
+   },
+   "model": "diffusion",
+   "production": {
+    "checkpoint_uri": null,
+    "created_at": "2026-11-12T00:38:25.825722Z",
+    "input_flavor": "gdas_finetune",
+    "latent_signature": "lstmv1-cnnv1-transformerv1-gnnv1-pinnv1",
+    "metrics": {
+     "crps_48h": 9.616941768594366
+    },
+    "name": "diffusion",
+    "run_id": "958da40ec618",
+    "stage": "production",
+    "tags": {},
+    "version": 1
+   },
+   "versions": [
+    {
+     "checkpoint_uri": null,
+     "created_at": "2026-11-12T00:38:25.825722Z",
+     "input_flavor": "gdas_finetune",
+     "latent_signature": "lstmv1-cnnv1-transformerv1-gnnv1-pinnv1",
+     "metrics": {
+      "crps_48h": 9.616941768594366
+     },
+     "name": "diffusion",
+     "run_id": "958da40ec618",
+     "stage": "production",
+     "tags": {},
+     "version": 1
+    }
+   ]
+  },
+  {
+   "latest": {
+    "checkpoint_uri": null,
+    "created_at": "2026-11-12T00:38:25.826103Z",
+    "input_flavor": "gdas_finetune",
+    "latent_signature": "lstmv1-cnnv1-transformerv1-gnnv1-pinnv1",
+    "metrics": {
+     "crps_48h": 13.347091125107482
+    },
+    "name": "fusion",
+    "run_id": "dd4b9fec250a",
+    "stage": "production",
+    "tags": {},
+    "version": 1
+   },
+   "model": "fusion",
+   "production": {
+    "checkpoint_uri": null,
+    "created_at": "2026-11-12T00:38:25.826103Z",
+    "input_flavor": "gdas_finetune",
+    "latent_signature": "lstmv1-cnnv1-transformerv1-gnnv1-pinnv1",
+    "metrics": {
+     "crps_48h": 13.347091125107482
+    },
+    "name": "fusion",
+    "run_id": "dd4b9fec250a",
+    "stage": "production",
+    "tags": {},
+    "version": 1
+   },
+   "versions": [
+    {
+     "checkpoint_uri": null,
+     "created_at": "2026-11-12T00:38:25.826103Z",
+     "input_flavor": "gdas_finetune",
+     "latent_signature": "lstmv1-cnnv1-transformerv1-gnnv1-pinnv1",
+     "metrics": {
+      "crps_48h": 13.347091125107482
+     },
+     "name": "fusion",
+     "run_id": "dd4b9fec250a",
+     "stage": "production",
+     "tags": {},
+     "version": 1
+    }
+   ]
+  }
+ ],
+ "/v1/registry/cnn/architecture": {
+  "arch_params": {
+   "base_width": 32,
+   "depth": 4,
+   "in_channels": 5,
+   "latent_dim": 256,
+   "lead_hours": [
+    12,
+    24,
+    36,
+    48,
+    72,
+    96,
+    120
+   ]
+  },
+  "batched": true,
+  "defaults": true,
+  "input_dim": 5,
+  "inputs": [
+   {
+    "name": "gridded fields",
+    "shape": [
+     1,
+     5,
+     41,
+     41
+    ]
+   }
+  ],
+  "latent_dim": 256,
+  "layers": [
+   {
+    "depth": 0,
+    "output_shape": [
+     1,
+     7,
+     3
+    ],
+    "own_params": 0,
+    "path": "",
+    "total_params": 1319797,
+    "type": "StormCNN"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     256,
+     3,
+     3
+    ],
+    "own_params": 0,
+    "path": "blocks",
+    "total_params": 1218400,
+    "type": "Sequential"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     32,
+     21,
+     21
+    ],
+    "own_params": 0,
+    "path": "blocks.0",
+    "total_params": 11040,
+    "type": "ResBlock"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     32,
+     21,
+     21
+    ],
+    "own_params": 1472,
+    "path": "blocks.0.conv1",
+    "total_params": 1472,
+    "type": "Conv2d"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     32,
+     21,
+     21
+    ],
+    "own_params": 64,
+    "path": "blocks.0.norm1",
+    "total_params": 64,
+    "type": "GroupNorm"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     32,
+     21,
+     21
+    ],
+    "own_params": 9248,
+    "path": "blocks.0.conv2",
+    "total_params": 9248,
+    "type": "Conv2d"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     32,
+     21,
+     21
+    ],
+    "own_params": 64,
+    "path": "blocks.0.norm2",
+    "total_params": 64,
+    "type": "GroupNorm"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     32,
+     21,
+     21
+    ],
+    "own_params": 192,
+    "path": "blocks.0.skip",
+    "total_params": 192,
+    "type": "Conv2d"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     32,
+     21,
+     21
+    ],
+    "own_params": 0,
+    "path": "blocks.0.act",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     64,
+     11,
+     11
+    ],
+    "own_params": 0,
+    "path": "blocks.1",
+    "total_params": 57792,
+    "type": "ResBlock"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     64,
+     11,
+     11
+    ],
+    "own_params": 18496,
+    "path": "blocks.1.conv1",
+    "total_params": 18496,
+    "type": "Conv2d"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     64,
+     11,
+     11
+    ],
+    "own_params": 128,
+    "path": "blocks.1.norm1",
+    "total_params": 128,
+    "type": "GroupNorm"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     64,
+     11,
+     11
+    ],
+    "own_params": 36928,
+    "path": "blocks.1.conv2",
+    "total_params": 36928,
+    "type": "Conv2d"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     64,
+     11,
+     11
+    ],
+    "own_params": 128,
+    "path": "blocks.1.norm2",
+    "total_params": 128,
+    "type": "GroupNorm"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     64,
+     11,
+     11
+    ],
+    "own_params": 2112,
+    "path": "blocks.1.skip",
+    "total_params": 2112,
+    "type": "Conv2d"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     64,
+     11,
+     11
+    ],
+    "own_params": 0,
+    "path": "blocks.1.act",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     128,
+     6,
+     6
+    ],
+    "own_params": 0,
+    "path": "blocks.2",
+    "total_params": 230272,
+    "type": "ResBlock"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     128,
+     6,
+     6
+    ],
+    "own_params": 73856,
+    "path": "blocks.2.conv1",
+    "total_params": 73856,
+    "type": "Conv2d"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     128,
+     6,
+     6
+    ],
+    "own_params": 256,
+    "path": "blocks.2.norm1",
+    "total_params": 256,
+    "type": "GroupNorm"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     128,
+     6,
+     6
+    ],
+    "own_params": 147584,
+    "path": "blocks.2.conv2",
+    "total_params": 147584,
+    "type": "Conv2d"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     128,
+     6,
+     6
+    ],
+    "own_params": 256,
+    "path": "blocks.2.norm2",
+    "total_params": 256,
+    "type": "GroupNorm"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     128,
+     6,
+     6
+    ],
+    "own_params": 8320,
+    "path": "blocks.2.skip",
+    "total_params": 8320,
+    "type": "Conv2d"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     128,
+     6,
+     6
+    ],
+    "own_params": 0,
+    "path": "blocks.2.act",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     256,
+     3,
+     3
+    ],
+    "own_params": 0,
+    "path": "blocks.3",
+    "total_params": 919296,
+    "type": "ResBlock"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256,
+     3,
+     3
+    ],
+    "own_params": 295168,
+    "path": "blocks.3.conv1",
+    "total_params": 295168,
+    "type": "Conv2d"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256,
+     3,
+     3
+    ],
+    "own_params": 512,
+    "path": "blocks.3.norm1",
+    "total_params": 512,
+    "type": "GroupNorm"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256,
+     3,
+     3
+    ],
+    "own_params": 590080,
+    "path": "blocks.3.conv2",
+    "total_params": 590080,
+    "type": "Conv2d"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256,
+     3,
+     3
+    ],
+    "own_params": 512,
+    "path": "blocks.3.norm2",
+    "total_params": 512,
+    "type": "GroupNorm"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256,
+     3,
+     3
+    ],
+    "own_params": 33024,
+    "path": "blocks.3.skip",
+    "total_params": 33024,
+    "type": "Conv2d"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256,
+     3,
+     3
+    ],
+    "own_params": 0,
+    "path": "blocks.3.act",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     256,
+     1,
+     1
+    ],
+    "own_params": 0,
+    "path": "pool",
+    "total_params": 0,
+    "type": "AdaptiveAvgPool2d"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "project",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     21
+    ],
+    "own_params": 0,
+    "path": "head",
+    "total_params": 35605,
+    "type": "Sequential"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 32896,
+    "path": "head.0",
+    "total_params": 32896,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 0,
+    "path": "head.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     21
+    ],
+    "own_params": 2709,
+    "path": "head.2",
+    "total_params": 2709,
+    "type": "Linear"
+   }
+  ],
+  "lead_hours": [
+   12,
+   24,
+   36,
+   48,
+   72,
+   96,
+   120
+  ],
+  "model": "cnn",
+  "output_dim": 21,
+  "outputs": [
+   {
+    "name": "output",
+    "shape": [
+     1,
+     7,
+     3
+    ]
+   }
+  ],
+  "stage": "production",
+  "total_params": 1319797,
+  "trainable_params": 1319797,
+  "version": 1
+ },
+ "/v1/registry/diffusion/architecture": {
+  "arch_params": {
+   "dropout": 0.0,
+   "extra_conditioning_dim": 0,
+   "hidden_dim": 256,
+   "latent_dim": 256,
+   "lead_hours": [
+    12,
+    24,
+    36,
+    48,
+    72,
+    96,
+    120
+   ],
+   "n_layers": 6,
+   "n_timesteps": 200
+  },
+  "batched": true,
+  "defaults": true,
+  "input_dim": 256,
+  "inputs": [
+   {
+    "name": "noisy trajectory",
+    "shape": [
+     1,
+     7,
+     3
+    ]
+   },
+   {
+    "name": "diffusion step",
+    "shape": [
+     1
+    ]
+   },
+   {
+    "name": "conditioning",
+    "shape": [
+     1,
+     256
+    ]
+   }
+  ],
+  "latent_dim": 256,
+  "layers": [
+   {
+    "depth": 0,
+    "output_shape": [
+     1,
+     7,
+     3
+    ],
+    "own_params": 0,
+    "path": "",
+    "total_params": 1001493,
+    "type": "TrajectoryDenoiser"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "time_embed",
+    "total_params": 66304,
+    "type": "Sequential"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 512,
+    "path": "time_embed.0",
+    "total_params": 512,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "time_embed.1",
+    "total_params": 0,
+    "type": "SiLU"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "time_embed.2",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "cond_embed",
+    "total_params": 131584,
+    "type": "Sequential"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "cond_embed.0",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "cond_embed.1",
+    "total_params": 0,
+    "type": "SiLU"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "cond_embed.2",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 5632,
+    "path": "input_proj",
+    "total_params": 5632,
+    "type": "Linear"
+   },
+   {
+    "depth": 1,
+    "output_shape": null,
+    "own_params": 0,
+    "path": "blocks",
+    "total_params": 792576,
+    "type": "ModuleList"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.0",
+    "total_params": 132096,
+    "type": "Sequential"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 512,
+    "path": "blocks.0.0",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "blocks.0.1",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.0.2",
+    "total_params": 0,
+    "type": "SiLU"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.0.3",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "blocks.0.4",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.1",
+    "total_params": 132096,
+    "type": "Sequential"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 512,
+    "path": "blocks.1.0",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "blocks.1.1",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.1.2",
+    "total_params": 0,
+    "type": "SiLU"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.1.3",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "blocks.1.4",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.2",
+    "total_params": 132096,
+    "type": "Sequential"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 512,
+    "path": "blocks.2.0",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "blocks.2.1",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.2.2",
+    "total_params": 0,
+    "type": "SiLU"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.2.3",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "blocks.2.4",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.3",
+    "total_params": 132096,
+    "type": "Sequential"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 512,
+    "path": "blocks.3.0",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "blocks.3.1",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.3.2",
+    "total_params": 0,
+    "type": "SiLU"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.3.3",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "blocks.3.4",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.4",
+    "total_params": 132096,
+    "type": "Sequential"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 512,
+    "path": "blocks.4.0",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "blocks.4.1",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.4.2",
+    "total_params": 0,
+    "type": "SiLU"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.4.3",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "blocks.4.4",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.5",
+    "total_params": 132096,
+    "type": "Sequential"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 512,
+    "path": "blocks.5.0",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "blocks.5.1",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.5.2",
+    "total_params": 0,
+    "type": "SiLU"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 0,
+    "path": "blocks.5.3",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 65792,
+    "path": "blocks.5.4",
+    "total_params": 65792,
+    "type": "Linear"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     21
+    ],
+    "own_params": 5397,
+    "path": "out",
+    "total_params": 5397,
+    "type": "Linear"
+   }
+  ],
+  "lead_hours": [
+   12,
+   24,
+   36,
+   48,
+   72,
+   96,
+   120
+  ],
+  "model": "diffusion",
+  "output_dim": 21,
+  "outputs": [
+   {
+    "name": "output",
+    "shape": [
+     1,
+     7,
+     3
+    ]
+   }
+  ],
+  "stage": "production",
+  "total_params": 1001493,
+  "trainable_params": 1001493,
+  "version": 1
+ },
+ "/v1/registry/fusion/architecture": {
+  "arch_params": {
+   "context_dim": 16,
+   "hidden_dim": 64,
+   "lead_hours": [
+    12,
+    24,
+    36,
+    48,
+    72,
+    96,
+    120
+   ],
+   "n_models": 5,
+   "weight_floor": 0.02
+  },
+  "batched": true,
+  "defaults": true,
+  "input_dim": 16,
+  "inputs": [
+   {
+    "name": "member forecasts",
+    "shape": [
+     1,
+     5,
+     7,
+     3
+    ]
+   },
+   {
+    "name": "context",
+    "shape": [
+     1,
+     16
+    ]
+   }
+  ],
+  "latent_dim": 64,
+  "layers": [
+   {
+    "depth": 0,
+    "output_shape": [
+     1,
+     7,
+     3
+    ],
+    "own_params": 0,
+    "path": "",
+    "total_params": 3363,
+    "type": "ConsensusFusion"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     35
+    ],
+    "own_params": 0,
+    "path": "context",
+    "total_params": 3363,
+    "type": "Sequential"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     64
+    ],
+    "own_params": 1088,
+    "path": "context.0",
+    "total_params": 1088,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     64
+    ],
+    "own_params": 0,
+    "path": "context.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     35
+    ],
+    "own_params": 2275,
+    "path": "context.2",
+    "total_params": 2275,
+    "type": "Linear"
+   }
+  ],
+  "lead_hours": [
+   12,
+   24,
+   36,
+   48,
+   72,
+   96,
+   120
+  ],
+  "model": "fusion",
+  "output_dim": 21,
+  "outputs": [
+   {
+    "name": "output",
+    "shape": [
+     1,
+     7,
+     3
+    ]
+   }
+  ],
+  "stage": "production",
+  "total_params": 3363,
+  "trainable_params": 3363,
+  "version": 1
+ },
+ "/v1/registry/gnn/architecture": {
+  "arch_params": {
+   "edge_features": 3,
+   "hidden_dim": 128,
+   "lead_hours": [
+    12,
+    24,
+    36,
+    48,
+    72,
+    96,
+    120
+   ],
+   "n_layers": 6,
+   "node_features": 12
+  },
+  "batched": false,
+  "defaults": true,
+  "input_dim": 12,
+  "inputs": [
+   {
+    "name": "node features",
+    "shape": [
+     121,
+     12
+    ]
+   },
+   {
+    "name": "edge index",
+    "shape": [
+     2,
+     440
+    ]
+   },
+   {
+    "name": "edge features",
+    "shape": [
+     440,
+     3
+    ]
+   }
+  ],
+  "latent_dim": 128,
+  "layers": [
+   {
+    "depth": 0,
+    "output_shape": [
+     1,
+     7,
+     3
+    ],
+    "own_params": 0,
+    "path": "",
+    "total_params": 617621,
+    "type": "MeshGNN"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 1664,
+    "path": "embed",
+    "total_params": 1664,
+    "type": "Linear"
+   },
+   {
+    "depth": 1,
+    "output_shape": null,
+    "own_params": 0,
+    "path": "layers",
+    "total_params": 596736,
+    "type": "ModuleList"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.0",
+    "total_params": 99456,
+    "type": "MessagePassing"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.0.message",
+    "total_params": 49792,
+    "type": "Sequential"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 33280,
+    "path": "layers.0.message.0",
+    "total_params": 33280,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.0.message.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 16512,
+    "path": "layers.0.message.2",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.0.update",
+    "total_params": 49408,
+    "type": "Sequential"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 32896,
+    "path": "layers.0.update.0",
+    "total_params": 32896,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.0.update.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 16512,
+    "path": "layers.0.update.2",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 256,
+    "path": "layers.0.norm",
+    "total_params": 256,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.1",
+    "total_params": 99456,
+    "type": "MessagePassing"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.1.message",
+    "total_params": 49792,
+    "type": "Sequential"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 33280,
+    "path": "layers.1.message.0",
+    "total_params": 33280,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.1.message.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 16512,
+    "path": "layers.1.message.2",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.1.update",
+    "total_params": 49408,
+    "type": "Sequential"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 32896,
+    "path": "layers.1.update.0",
+    "total_params": 32896,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.1.update.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 16512,
+    "path": "layers.1.update.2",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 256,
+    "path": "layers.1.norm",
+    "total_params": 256,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.2",
+    "total_params": 99456,
+    "type": "MessagePassing"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.2.message",
+    "total_params": 49792,
+    "type": "Sequential"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 33280,
+    "path": "layers.2.message.0",
+    "total_params": 33280,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.2.message.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 16512,
+    "path": "layers.2.message.2",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.2.update",
+    "total_params": 49408,
+    "type": "Sequential"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 32896,
+    "path": "layers.2.update.0",
+    "total_params": 32896,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.2.update.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 16512,
+    "path": "layers.2.update.2",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 256,
+    "path": "layers.2.norm",
+    "total_params": 256,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.3",
+    "total_params": 99456,
+    "type": "MessagePassing"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.3.message",
+    "total_params": 49792,
+    "type": "Sequential"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 33280,
+    "path": "layers.3.message.0",
+    "total_params": 33280,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.3.message.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 16512,
+    "path": "layers.3.message.2",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.3.update",
+    "total_params": 49408,
+    "type": "Sequential"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 32896,
+    "path": "layers.3.update.0",
+    "total_params": 32896,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.3.update.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 16512,
+    "path": "layers.3.update.2",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 256,
+    "path": "layers.3.norm",
+    "total_params": 256,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.4",
+    "total_params": 99456,
+    "type": "MessagePassing"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.4.message",
+    "total_params": 49792,
+    "type": "Sequential"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 33280,
+    "path": "layers.4.message.0",
+    "total_params": 33280,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.4.message.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 16512,
+    "path": "layers.4.message.2",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.4.update",
+    "total_params": 49408,
+    "type": "Sequential"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 32896,
+    "path": "layers.4.update.0",
+    "total_params": 32896,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.4.update.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 16512,
+    "path": "layers.4.update.2",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 256,
+    "path": "layers.4.norm",
+    "total_params": 256,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.5",
+    "total_params": 99456,
+    "type": "MessagePassing"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.5.message",
+    "total_params": 49792,
+    "type": "Sequential"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 33280,
+    "path": "layers.5.message.0",
+    "total_params": 33280,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.5.message.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     440,
+     128
+    ],
+    "own_params": 16512,
+    "path": "layers.5.message.2",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.5.update",
+    "total_params": 49408,
+    "type": "Sequential"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 32896,
+    "path": "layers.5.update.0",
+    "total_params": 32896,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 0,
+    "path": "layers.5.update.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 16512,
+    "path": "layers.5.update.2",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     121,
+     128
+    ],
+    "own_params": 256,
+    "path": "layers.5.norm",
+    "total_params": 256,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     21
+    ],
+    "own_params": 0,
+    "path": "head",
+    "total_params": 19221,
+    "type": "Sequential"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     128
+    ],
+    "own_params": 16512,
+    "path": "head.0",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     128
+    ],
+    "own_params": 0,
+    "path": "head.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     21
+    ],
+    "own_params": 2709,
+    "path": "head.2",
+    "total_params": 2709,
+    "type": "Linear"
+   }
+  ],
+  "lead_hours": [
+   12,
+   24,
+   36,
+   48,
+   72,
+   96,
+   120
+  ],
+  "model": "gnn",
+  "output_dim": 21,
+  "outputs": [
+   {
+    "name": "output",
+    "shape": [
+     1,
+     7,
+     3
+    ]
+   }
+  ],
+  "stage": "production",
+  "total_params": 617621,
+  "trainable_params": 617621,
+  "version": 1
+ },
+ "/v1/registry/lstm/architecture": {
+  "arch_params": {
+   "cell": "lstm",
+   "dropout": 0.1,
+   "hidden_dim": 128,
+   "input_dim": 14,
+   "lead_hours": [
+    12,
+    24,
+    36,
+    48,
+    72,
+    96,
+    120
+   ],
+   "num_layers": 2
+  },
+  "batched": true,
+  "defaults": true,
+  "input_dim": 14,
+  "inputs": [
+   {
+    "name": "track history",
+    "shape": [
+     1,
+     4,
+     14
+    ]
+   }
+  ],
+  "latent_dim": 128,
+  "layers": [
+   {
+    "depth": 0,
+    "output_shape": [
+     1,
+     7,
+     3
+    ],
+    "own_params": 0,
+    "path": "",
+    "total_params": 225301,
+    "type": "TrackRNN"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     4,
+     128
+    ],
+    "own_params": 205824,
+    "path": "rnn",
+    "total_params": 205824,
+    "type": "LSTM"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 256,
+    "path": "norm",
+    "total_params": 256,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     21
+    ],
+    "own_params": 0,
+    "path": "head",
+    "total_params": 19221,
+    "type": "Sequential"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 16512,
+    "path": "head.0",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 0,
+    "path": "head.1",
+    "total_params": 0,
+    "type": "GELU"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 0,
+    "path": "head.2",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     21
+    ],
+    "own_params": 2709,
+    "path": "head.3",
+    "total_params": 2709,
+    "type": "Linear"
+   }
+  ],
+  "lead_hours": [
+   12,
+   24,
+   36,
+   48,
+   72,
+   96,
+   120
+  ],
+  "model": "lstm",
+  "output_dim": 21,
+  "outputs": [
+   {
+    "name": "output",
+    "shape": [
+     1,
+     7,
+     3
+    ]
+   }
+  ],
+  "stage": "production",
+  "total_params": 225301,
+  "trainable_params": 225301,
+  "version": 1
+ },
+ "/v1/registry/pinn/architecture": {
+  "arch_params": {
+   "hidden_dim": 128,
+   "input_dim": 14,
+   "lead_hours": [
+    12,
+    24,
+    36,
+    48,
+    72,
+    96,
+    120
+   ],
+   "n_layers": 4
+  },
+  "batched": true,
+  "defaults": true,
+  "input_dim": 14,
+  "inputs": [
+   {
+    "name": "environment",
+    "shape": [
+     1,
+     14
+    ]
+   },
+   {
+    "name": "candidate forecast",
+    "shape": [
+     1,
+     7,
+     3
+    ]
+   }
+  ],
+  "latent_dim": 128,
+  "layers": [
+   {
+    "depth": 0,
+    "output_shape": [
+     1,
+     7,
+     3
+    ],
+    "own_params": 0,
+    "path": "",
+    "total_params": 56853,
+    "type": "PhysicsCorrector"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 0,
+    "path": "trunk",
+    "total_params": 54144,
+    "type": "Sequential"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 4608,
+    "path": "trunk.0",
+    "total_params": 4608,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 0,
+    "path": "trunk.1",
+    "total_params": 0,
+    "type": "Tanh"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 16512,
+    "path": "trunk.2",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 0,
+    "path": "trunk.3",
+    "total_params": 0,
+    "type": "Tanh"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 16512,
+    "path": "trunk.4",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 0,
+    "path": "trunk.5",
+    "total_params": 0,
+    "type": "Tanh"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 16512,
+    "path": "trunk.6",
+    "total_params": 16512,
+    "type": "Linear"
+   },
+   {
+    "depth": 2,
+    "output_shape": [
+     1,
+     128
+    ],
+    "own_params": 0,
+    "path": "trunk.7",
+    "total_params": 0,
+    "type": "Tanh"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     21
+    ],
+    "own_params": 2709,
+    "path": "correction",
+    "total_params": 2709,
+    "type": "Linear"
+   }
+  ],
+  "lead_hours": [
+   12,
+   24,
+   36,
+   48,
+   72,
+   96,
+   120
+  ],
+  "model": "pinn",
+  "output_dim": 21,
+  "outputs": [
+   {
+    "name": "output",
+    "shape": [
+     1,
+     7,
+     3
+    ]
+   }
+  ],
+  "stage": "production",
+  "total_params": 56853,
+  "trainable_params": 56853,
+  "version": 1
+ },
+ "/v1/registry/pins/active": {
+  "label": "demo-pin-0001",
+  "latent_signature": "lstmv1-cnnv1-transformerv1-gnnv1-pinnv1",
+  "members": {
+   "cnn": 1,
+   "diffusion": 1,
+   "fusion": 1,
+   "gnn": 1,
+   "lstm": 1,
+   "pinn": 1,
+   "transformer": 1
+  }
+ },
+ "/v1/registry/transformer/architecture": {
+  "arch_params": {
+   "d_model": 256,
+   "dropout": 0.1,
+   "grid_size": [
+    40,
+    40
+   ],
+   "lead_hours": [
+    12,
+    24,
+    36,
+    48,
+    72,
+    96,
+    120
+   ],
+   "n_heads": 8,
+   "n_layers": 6,
+   "n_variables": 8,
+   "patch_size": 4
+  },
+  "batched": true,
+  "defaults": true,
+  "input_dim": 8,
+  "inputs": [
+   {
+    "name": "gridded fields",
+    "shape": [
+     1,
+     8,
+     40,
+     40
+    ]
+   }
+  ],
+  "latent_dim": 256,
+  "layers": [
+   {
+    "depth": 0,
+    "output_shape": [
+     1,
+     7,
+     3
+    ],
+    "own_params": 26112,
+    "path": "",
+    "total_params": 4804633,
+    "type": "FieldTransformer"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     256,
+     10,
+     10
+    ],
+    "own_params": 33024,
+    "path": "patch",
+    "total_params": 33024,
+    "type": "Conv2d"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder",
+    "total_params": 4738560,
+    "type": "TransformerEncoder"
+   },
+   {
+    "depth": 2,
+    "output_shape": null,
+    "own_params": 0,
+    "path": "encoder.layers",
+    "total_params": 4738560,
+    "type": "ModuleList"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.0",
+    "total_params": 789760,
+    "type": "TransformerEncoderLayer"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 197376,
+    "path": "encoder.layers.0.self_attn",
+    "total_params": 263168,
+    "type": "MultiheadAttention"
+   },
+   {
+    "depth": 5,
+    "output_shape": null,
+    "own_params": 65792,
+    "path": "encoder.layers.0.self_attn.out_proj",
+    "total_params": 65792,
+    "type": "NonDynamicallyQuantizableLinear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     1024
+    ],
+    "own_params": 263168,
+    "path": "encoder.layers.0.linear1",
+    "total_params": 263168,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     1024
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.0.dropout",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 262400,
+    "path": "encoder.layers.0.linear2",
+    "total_params": 262400,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 512,
+    "path": "encoder.layers.0.norm1",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 512,
+    "path": "encoder.layers.0.norm2",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.0.dropout1",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.0.dropout2",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.1",
+    "total_params": 789760,
+    "type": "TransformerEncoderLayer"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 197376,
+    "path": "encoder.layers.1.self_attn",
+    "total_params": 263168,
+    "type": "MultiheadAttention"
+   },
+   {
+    "depth": 5,
+    "output_shape": null,
+    "own_params": 65792,
+    "path": "encoder.layers.1.self_attn.out_proj",
+    "total_params": 65792,
+    "type": "NonDynamicallyQuantizableLinear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     1024
+    ],
+    "own_params": 263168,
+    "path": "encoder.layers.1.linear1",
+    "total_params": 263168,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     1024
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.1.dropout",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 262400,
+    "path": "encoder.layers.1.linear2",
+    "total_params": 262400,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 512,
+    "path": "encoder.layers.1.norm1",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 512,
+    "path": "encoder.layers.1.norm2",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.1.dropout1",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.1.dropout2",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.2",
+    "total_params": 789760,
+    "type": "TransformerEncoderLayer"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 197376,
+    "path": "encoder.layers.2.self_attn",
+    "total_params": 263168,
+    "type": "MultiheadAttention"
+   },
+   {
+    "depth": 5,
+    "output_shape": null,
+    "own_params": 65792,
+    "path": "encoder.layers.2.self_attn.out_proj",
+    "total_params": 65792,
+    "type": "NonDynamicallyQuantizableLinear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     1024
+    ],
+    "own_params": 263168,
+    "path": "encoder.layers.2.linear1",
+    "total_params": 263168,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     1024
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.2.dropout",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 262400,
+    "path": "encoder.layers.2.linear2",
+    "total_params": 262400,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 512,
+    "path": "encoder.layers.2.norm1",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 512,
+    "path": "encoder.layers.2.norm2",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.2.dropout1",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.2.dropout2",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.3",
+    "total_params": 789760,
+    "type": "TransformerEncoderLayer"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 197376,
+    "path": "encoder.layers.3.self_attn",
+    "total_params": 263168,
+    "type": "MultiheadAttention"
+   },
+   {
+    "depth": 5,
+    "output_shape": null,
+    "own_params": 65792,
+    "path": "encoder.layers.3.self_attn.out_proj",
+    "total_params": 65792,
+    "type": "NonDynamicallyQuantizableLinear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     1024
+    ],
+    "own_params": 263168,
+    "path": "encoder.layers.3.linear1",
+    "total_params": 263168,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     1024
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.3.dropout",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 262400,
+    "path": "encoder.layers.3.linear2",
+    "total_params": 262400,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 512,
+    "path": "encoder.layers.3.norm1",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 512,
+    "path": "encoder.layers.3.norm2",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.3.dropout1",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.3.dropout2",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.4",
+    "total_params": 789760,
+    "type": "TransformerEncoderLayer"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 197376,
+    "path": "encoder.layers.4.self_attn",
+    "total_params": 263168,
+    "type": "MultiheadAttention"
+   },
+   {
+    "depth": 5,
+    "output_shape": null,
+    "own_params": 65792,
+    "path": "encoder.layers.4.self_attn.out_proj",
+    "total_params": 65792,
+    "type": "NonDynamicallyQuantizableLinear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     1024
+    ],
+    "own_params": 263168,
+    "path": "encoder.layers.4.linear1",
+    "total_params": 263168,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     1024
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.4.dropout",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 262400,
+    "path": "encoder.layers.4.linear2",
+    "total_params": 262400,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 512,
+    "path": "encoder.layers.4.norm1",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 512,
+    "path": "encoder.layers.4.norm2",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.4.dropout1",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.4.dropout2",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 3,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.5",
+    "total_params": 789760,
+    "type": "TransformerEncoderLayer"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 197376,
+    "path": "encoder.layers.5.self_attn",
+    "total_params": 263168,
+    "type": "MultiheadAttention"
+   },
+   {
+    "depth": 5,
+    "output_shape": null,
+    "own_params": 65792,
+    "path": "encoder.layers.5.self_attn.out_proj",
+    "total_params": 65792,
+    "type": "NonDynamicallyQuantizableLinear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     1024
+    ],
+    "own_params": 263168,
+    "path": "encoder.layers.5.linear1",
+    "total_params": 263168,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     1024
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.5.dropout",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 262400,
+    "path": "encoder.layers.5.linear2",
+    "total_params": 262400,
+    "type": "Linear"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 512,
+    "path": "encoder.layers.5.norm1",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 512,
+    "path": "encoder.layers.5.norm2",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.5.dropout1",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 4,
+    "output_shape": [
+     1,
+     101,
+     256
+    ],
+    "own_params": 0,
+    "path": "encoder.layers.5.dropout2",
+    "total_params": 0,
+    "type": "Dropout"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     256
+    ],
+    "own_params": 512,
+    "path": "norm",
+    "total_params": 512,
+    "type": "LayerNorm"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     21
+    ],
+    "own_params": 5397,
+    "path": "head",
+    "total_params": 5397,
+    "type": "Linear"
+   },
+   {
+    "depth": 1,
+    "output_shape": [
+     1,
+     4
+    ],
+    "own_params": 1028,
+    "path": "regime",
+    "total_params": 1028,
+    "type": "Linear"
+   }
+  ],
+  "lead_hours": [
+   12,
+   24,
+   36,
+   48,
+   72,
+   96,
+   120
+  ],
+  "model": "transformer",
+  "output_dim": 21,
+  "outputs": [
+   {
+    "name": "output",
+    "shape": [
+     1,
+     7,
+     3
+    ]
+   },
+   {
+    "name": "output 1",
+    "shape": [
+     1,
+     4
+    ]
+   }
+  ],
+  "stage": "production",
+  "total_params": 4804633,
+  "trainable_params": 4804633,
+  "version": 1
+ },
+ "/v1/retraining/triggers": [
+  {
+   "cascaded": false,
+   "mode": "sequential",
+   "model": "gnn",
+   "note": "",
+   "reason": "drift",
+   "trigger_tag": "drift_detected"
+  },
+  {
+   "cascaded": false,
+   "mode": "sequential",
+   "model": "diffusion",
+   "note": "",
+   "reason": "drift",
+   "trigger_tag": "drift_detected"
+  },
+  {
+   "cascaded": true,
+   "mode": "parallel_group3",
+   "model": "fusion",
+   "note": "latents invalidated by an upstream Group 1 retrain (\u00a75.7)",
+   "reason": "cascade",
+   "trigger_tag": "drift_detected"
+  }
+ ]
+}

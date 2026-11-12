@@ -229,6 +229,42 @@ export interface RegistryEntry {
 	versions: ModelVersionOut[];
 }
 
+export interface TensorOut {
+	name: string;
+	shape: number[];
+}
+
+export interface LayerOut {
+	/** Dotted module path from the model's root; "" is the model itself. */
+	path: string;
+	type: string;
+	depth: number;
+	output_shape: number[] | null;
+	own_params: number;
+	total_params: number;
+}
+
+/** `GET /v1/registry/{model}/architecture` -- signed-in users only. */
+export interface ArchitectureOut {
+	model: string;
+	version: number | null;
+	stage: string | null;
+	arch_params: Record<string, unknown>;
+	/** True when described from the builder's defaults, not a version's arch_params. */
+	defaults: boolean;
+	/** False for the GNN, whose leading dimension is graph nodes. */
+	batched: boolean;
+	input_dim: number;
+	latent_dim: number;
+	lead_hours: number[];
+	output_dim: number;
+	inputs: TensorOut[];
+	outputs: TensorOut[];
+	layers: LayerOut[];
+	total_params: number;
+	trainable_params: number;
+}
+
 export interface ActivePin {
 	label: string;
 	latent_signature: string;

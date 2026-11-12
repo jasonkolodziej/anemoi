@@ -77,7 +77,16 @@
 		{#each items as entry (entry.type === "dropdown" ? entry.label : entry.href)}
 			{#if entry.type === "dropdown"}
 				<NavigationMenu.Item>
-					<NavigationMenu.Trigger>{entry.label}</NavigationMenu.Trigger>
+					<NavigationMenu.Trigger
+						class={cn(
+							"text-sm font-medium",
+							entry.items.some((item) => isActive?.(item.href))
+								? "bg-surface-raised text-text"
+								: "text-text-muted hover:text-text",
+						)}
+					>
+						{entry.label}
+					</NavigationMenu.Trigger>
 					<NavigationMenu.Content>
 						<ul class={cn("w-80", entry.columns === 2 && "w-125 grid grid-cols-2 gap-2")}>
 							{#each entry.items as item (item.href)}
