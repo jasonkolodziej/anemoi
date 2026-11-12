@@ -403,7 +403,7 @@ def cmd_train(args: argparse.Namespace) -> int:
     tags = build_run_tags(args.model, run.curriculum.stages[-1], latest_season=latest_season)
     mlflow_run_id = log_curriculum_stages(
         registry.mlflow_client, args.model, run, val_metrics, latest_season=latest_season,
-        checkpoint_store=registry.checkpoint_store,
+        checkpoint_store=store,
     )
     tag_dict = tags.to_dict() if tags else {}
     arch_params = arch_params_tag(artifacts)

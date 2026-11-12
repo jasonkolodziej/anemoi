@@ -434,16 +434,19 @@ def stage_run_record(
     }
 
 
-def write_stage_runs(checkpoint_store, model_name: str, records: list[dict]) -> str | None:
+def write_stage_runs(
+    checkpoint_store, model_name: str, records: list[dict], *, key: str | None = None,
+) -> str | None:
     """Upload one curriculum run's stage records to durable storage; returns
     the key, or None if there's no store or the upload failed -- like
-    every tracking write, this must never fail a training run."""
+    every tracking write, this must never fail a training run. ``key``
+    overwrites an earlier upload (adding MLflow run ids to it)."""
     if checkpoint_store is None or not records:
         return None
     import tempfile
     from pathlib import Path
 
-    key = f"{STAGE_RUNS_PREFIX}/{model_name}/{datetime.now(UTC):%Y%m%dT%H%M%S%fZ}.json"
+    key = key or f"{STAGE_RUNS_PREFIX}/{model_name}/{datetime.now(UTC):%Y%m%dT%H%M%S%fZ}.json"
     try:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "stage_runs.json"
@@ -479,27 +482,43 @@ def log_curriculum_stages(
     copy.
     """
     deployable_run_id: str | None = None
-    records: list[dict] = []
-    n = len(run.results)
     # Only the stages that completed (a run can stop early, or hold none).
-    completed = zip(run.curriculum.stages[:n], run.results, strict=True)
-    for i, (stage, result) in enumerate(completed):
-        is_deployable = i == n - 1
-        stage_metrics = val_metrics if is_deployable else None
-        run_id = log_stage_run(
-            mlflow_client, model_name, stage, result,
-            execution_mode=execution_mode, val_metrics=stage_metrics,
-            latest_season=latest_season, trigger=trigger,
-        )
-        if is_deployable:
-            deployable_run_id = run_id
+    # The deployable stage is the curriculum's, not whichever completed
+    # last: a run that stopped after Stage A keeps its loss records, but
+    # gets no final-stage verification metrics and no deployable run id.
+    n = len(run.results)
+    completed = list(zip(run.curriculum.stages[:n], run.results, strict=True))
+    deployable = run.curriculum.deployable_stage.name
+    stage_metrics = [val_metrics if s.name == deployable else None for s, _ in completed]
+
+    # Durable first: the records reach storage before MLflow is contacted,
+    # so an MLflow that hangs mid-run can't hold them back (or lose them if
+    # the job is stopped meanwhile) -- the same order `ModelRegistry`
+    # writes in. The MLflow run ids are added to the same object after.
+    records: list[dict | None] = []
+    for (stage, result), metrics in zip(completed, stage_metrics, strict=True):
         try:
             records.append(stage_run_record(
                 model_name, stage, result, execution_mode=execution_mode,
-                val_metrics=stage_metrics, latest_season=latest_season, trigger=trigger,
-                mlflow_run_id=run_id,
+                val_metrics=metrics, latest_season=latest_season, trigger=trigger,
             ))
         except Exception:  # noqa: BLE001 - tracking must never fail a training run
-            pass
-    write_stage_runs(checkpoint_store, model_name, records)
+            records.append(None)
+    key = write_stage_runs(checkpoint_store, model_name, [r for r in records if r])
+
+    deployable_run_id: str | None = None
+    any_run_id = False
+    for (stage, result), metrics, record in zip(completed, stage_metrics, records, strict=True):
+        run_id = log_stage_run(
+            mlflow_client, model_name, stage, result,
+            execution_mode=execution_mode, val_metrics=metrics,
+            latest_season=latest_season, trigger=trigger,
+        )
+        if stage.name == deployable:
+            deployable_run_id = run_id
+        if run_id and record is not None:
+            record["mlflow_run_id"] = run_id
+            any_run_id = True
+    if key and any_run_id:
+        write_stage_runs(checkpoint_store, model_name, [r for r in records if r], key=key)
     return deployable_run_id
