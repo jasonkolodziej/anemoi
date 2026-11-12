@@ -30,7 +30,7 @@ base_tree=$(gh api "repos/${repo}/git/commits/${base}" --jq .tree.sha)
 entries='[]'
 for f in "${files[@]}"; do
   # Blobs go up as base64 (graph.json is ~6 MB; the blob API takes up to 100 MB).
-  blob=$(base64 -w0 "$f" \
+  blob=$(base64 < "$f" | tr -d '\n' \
     | jq -R '{content: ., encoding: "base64"}' \
     | gh api "repos/${repo}/git/blobs" --input - --jq .sha)
   entries=$(jq -c --arg path "$f" --arg sha "$blob" \
