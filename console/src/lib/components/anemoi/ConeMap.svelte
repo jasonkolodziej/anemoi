@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { unwrapLon } from "$lib/geo";
   /**
    * Track + cone of uncertainty on a real interactive MapLibre map
    * (svelte-maplibre-gl -- https://svelte-maplibre-gl.mierune.dev/docs/
@@ -189,6 +190,21 @@
     };
   });
 
+  // Dateline-safe longitudes: every longitude drawn is shifted by a whole
+  // number of turns to lie within 180 degrees of the storm's current
+  // position, so a Central Pacific track crossing 180 stays continuous
+  // (..., 179, 181, ...) instead of a line drawn the long way round the
+  // world, and the map frames it on the side it's actually on. MapLibre
+  // draws longitudes past +/-180 on the neighbouring world copy.
+  const refLon = $derived(
+    history.length > 0
+      ? history[history.length - 1].lon
+      : (forecastTrack[0]?.lon ?? cone[0]?.lon ?? 0),
+  );
+  function u(lon: number): number {
+    return unwrapLon(lon, refLon);
+  }
+
   // Standard spherical destination-point formula (bearing swept 0..360)
   // -- the same real-world-distance circle Turf.js's `circle()` produces.
   function geoCircle(
@@ -235,7 +251,7 @@
   const coneHull = $derived.by(() => {
     if (cone.length === 0) return null;
     const boundaryPoints = cone.flatMap((seg) =>
-      geoCircle(seg.lat, seg.lon, seg.radius_nm, 32),
+      geoCircle(seg.lat, u(seg.lon), seg.radius_nm, 32),
     );
     const hull = polygonHull(boundaryPoints);
     if (!hull) return null;
@@ -259,7 +275,7 @@
     properties: {},
     geometry: {
       type: "LineString" as const,
-      coordinates: history.map((f) => [f.lon, f.lat]),
+      coordinates: history.map((f) => [u(f.lon), f.lat]),
     },
   });
 
@@ -268,7 +284,7 @@
     properties: {},
     geometry: {
       type: "LineString" as const,
-      coordinates: forecastTrack.map((t) => [t.lon, t.lat]),
+      coordinates: forecastTrack.map((t) => [u(t.lon), t.lat]),
     },
   });
 
@@ -302,7 +318,7 @@
         lead_hours: t.lead_hours,
         wind_kt: t.wind_kt,
       },
-      geometry: { type: "Point" as const, coordinates: [t.lon, t.lat] },
+      geometry: { type: "Point" as const, coordinates: [u(t.lon), t.lat] },
     })),
   });
 
@@ -343,7 +359,7 @@
         properties: {},
         geometry: {
           type: "LineString" as const,
-          coordinates: perModelTracks[slug].map((t) => [t.lon, t.lat]),
+          coordinates: perModelTracks[slug].map((t) => [u(t.lon), t.lat]),
         },
       },
     })),
@@ -352,11 +368,11 @@
   const bounds = $derived.by(
     (): [[number, number], [number, number]] | null => {
       const points = [
-        ...history.map((f) => [f.lon, f.lat] as [number, number]),
-        ...forecastTrack.map((t) => [t.lon, t.lat] as [number, number]),
-        ...cone.map((c) => [c.lon, c.lat] as [number, number]),
+        ...history.map((f) => [u(f.lon), f.lat] as [number, number]),
+        ...forecastTrack.map((t) => [u(t.lon), t.lat] as [number, number]),
+        ...cone.map((c) => [u(c.lon), c.lat] as [number, number]),
         ...(coastlineLat !== null && coastlineLon !== null
-          ? [[coastlineLon, coastlineLat] as [number, number]]
+          ? [[u(coastlineLon), coastlineLat] as [number, number]]
           : []),
       ];
       if (points.length === 0) return null;
@@ -596,7 +612,7 @@
     </GeoJSONSource>
 
     {#if currentFix && visible.currentFix}
-      <Marker lnglat={[currentFix.lon, currentFix.lat]}>
+      <Marker lnglat={[u(currentFix.lon), currentFix.lat]}>
         {#snippet content()}
           <span class="relative flex h-3 w-3">
             <span
@@ -613,7 +629,7 @@
     {/if}
 
     {#if coastlineLat !== null && coastlineLon !== null && visible.landfall}
-      <Marker lnglat={[coastlineLon, coastlineLat]}>
+      <Marker lnglat={[u(coastlineLon), coastlineLat]}>
         {#snippet content()}
           <svg
             width="16"

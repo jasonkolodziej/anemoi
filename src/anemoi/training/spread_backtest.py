@@ -106,9 +106,13 @@ class SpreadBacktestReport:
 
 def served_cone_outcome(
     members_abs: np.ndarray, true_abs: np.ndarray, mask: np.ndarray, lead_hours: tuple[int, ...],
+    storm_ids: tuple[str, ...] = (),
 ) -> ConeOutcome | None:
     """Run the real `build_cone` on each case and score the cone it would
-    actually serve at the longest lead that has verifying observations."""
+    actually serve at the longest lead that has verifying observations,
+    with each case's own basin's climatological radii when ``storm_ids``
+    names its storm."""
+    from ..data.atcf import storm_basin
     from ..geo import haversine_nm
     from ..inference.postprocess import EnsembleMember, build_cone
 
@@ -126,7 +130,8 @@ def served_cone_outcome(
             )
             for mi in range(members_abs.shape[1])
         ]
-        segments, _notes = build_cone(members, lead_hours)
+        basin = storm_basin(storm_ids[ci]) if ci < len(storm_ids) else None
+        segments, _notes = build_cone(members, lead_hours, basin=basin)
         seg = segments[li]
         miss = haversine_nm(seg.center_lat, seg.center_lon, *true_abs[ci, li, :2]) > seg.radius_nm
         hits[seg.basis].append(bool(miss))
@@ -282,7 +287,9 @@ def run_spread_backtest(
         recurving=recurving,
         recommendation=recommendation,
         reasons=reasons,
-        cone=served_cone_outcome(members_abs, true_abs, val.mask, lead_hours),
+        cone=served_cone_outcome(
+            members_abs, true_abs, val.mask, lead_hours, storm_ids=tuple(val.storm_ids),
+        ),
     )
 
 

@@ -297,3 +297,29 @@ def test_climatological_fallback_spread_grows_with_lead_time():
 def test_operational_flavor_guard_rejects_pretrain_features():
     with pytest.raises(CycleError, match="production runs on"):
         assert_operational_flavor(Flavor.ERA5_PRETRAIN)
+
+
+def test_an_eastern_pacific_cycle_falls_back_to_nhcs_pacific_radii():
+    """The fallback ensemble and its cone are drawn from the storm's own
+    basin's radii: tighter in the Eastern Pacific than the Atlantic."""
+    from dataclasses import replace
+
+    def crashing(_det, _n):
+        raise RuntimeError("diffusion unavailable")
+
+    plan = plan_cycle(T, LatencyOracle())
+    al = run_cycle(plan, make_fix(), deterministic_fn, crashing)
+    ep = run_cycle(plan, replace(make_fix(), storm_id="EP092026"), deterministic_fn, crashing)
+    assert ep.products.cone[-1].radius_nm < al.products.cone[-1].radius_nm
+
+
+def test_a_pacific_climatological_ensemble_is_drawn_from_pacific_radii():
+    """Review of #239: callers that pass `climatological_ensemble` as their
+    ensemble (the CLI's demo cycle, the demo API) must give it the storm's
+    basin, or an EP storm's members are spread on Atlantic radii."""
+    det = deterministic_fn(plan_cycle(T, LatencyOracle()), make_fix())
+    al = climatological_ensemble(det, n_members=400, seed=3, basin="AL")
+    ep = climatological_ensemble(det, n_members=400, seed=3, basin="EP")
+    from anemoi.inference.postprocess import cone_radius_from_spread
+
+    assert cone_radius_from_spread(ep, 120) < cone_radius_from_spread(al, 120)

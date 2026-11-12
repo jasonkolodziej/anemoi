@@ -66,6 +66,13 @@ ensemble:
     72: 95
     96: 134
     120: 200
+  # The same, per basin where NHC publishes its own: one column for the
+  # Eastern and Central North Pacific (2026 season, 2021-2025 errors, same
+  # page). A basin not listed here (WP, IO, SH: not trained yet) uses the
+  # Atlantic radii above. Re-baseline with them every season.
+  climatological_cone_nm_by_basin:
+    EP: {12: 25, 24: 37, 36: 48, 48: 56, 72: 78, 96: 106, 120: 138}
+    CP: {12: 25, 24: 37, 36: 48, 48: 56, 72: 78, 96: 106, 120: 138}
 
 products:
   lead_hours: [12, 24, 36, 48, 72, 96, 120]  # fixed: the trained models' output leads

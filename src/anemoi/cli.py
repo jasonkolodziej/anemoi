@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from . import __version__
+from .data.atcf import storm_basin
 from .data.availability import LatencyOracle
 from .data.besttrack import TrackQuality
 from .data.sources import REGISTRY, Role
@@ -109,7 +110,9 @@ def cmd_cycle(args: argparse.Namespace) -> int:
         plan,
         fix,
         deterministic,
-        lambda det, n: climatological_ensemble(det, n_members=n, seed=1),
+        lambda det, n: climatological_ensemble(
+            det, n_members=n, seed=1, basin=storm_basin(fix.storm_id),
+        ),
         requested_members=args.members,
     )
     print(json.dumps(output.payload(), indent=2))
@@ -1346,7 +1349,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser(
         "cache-localize",
-        help="copy a gridded cache to local disk once, so training doesn't read the bucket per epoch",
+        help="copy a gridded cache to local disk once (training reads it every epoch)",
     )
     p.add_argument("--src", required=True, help="cache directory to copy (e.g. /cache/era5_cache)")
     p.add_argument("--dst", required=True, help="local directory to copy it to (e.g. /tmp/era5)")

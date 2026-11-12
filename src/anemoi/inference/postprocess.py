@@ -57,6 +57,31 @@ if set(CLIMATOLOGICAL_CONE_NM) != set(LEAD_HOURS):
         f"product lead {list(LEAD_HOURS)}, got {sorted(CLIMATOLOGICAL_CONE_NM)}"
     )
 
+#: Per-basin radii where NHC publishes its own (``ensemble.
+#: climatological_cone_nm_by_basin``): the Eastern and Central North Pacific
+#: share one column, tighter than the Atlantic's at long leads (138 vs 200 nm
+#: at 120 h in 2026). Any other basin uses `CLIMATOLOGICAL_CONE_NM`.
+_BY_BASIN = "ensemble.climatological_cone_nm_by_basin"
+CLIMATOLOGICAL_CONE_NM_BY_BASIN: dict[str, dict[int, float]] = {
+    str(basin): {
+        int(lead): float(radius)
+        for lead, radius in config.get("inference", f"{_BY_BASIN}.{basin}", dict).items()
+    }
+    for basin in config.get("inference", _BY_BASIN, dict)
+}
+for _basin, _table in CLIMATOLOGICAL_CONE_NM_BY_BASIN.items():
+    if set(_table) != set(LEAD_HOURS):
+        raise config.ConfigError(
+            f"inference.yaml: ensemble.climatological_cone_nm_by_basin.{_basin} needs exactly "
+            f"one radius per product lead {list(LEAD_HOURS)}, got {sorted(_table)}"
+        )
+
+
+def climatological_cone_nm(basin: str | None = None) -> dict[int, float]:
+    """The climatological cone radii for ``basin`` (an ATCF code such as
+    ``"EP"``): its own table if NHC publishes one, else the Atlantic's."""
+    return CLIMATOLOGICAL_CONE_NM_BY_BASIN.get(basin or "", CLIMATOLOGICAL_CONE_NM)
+
 #: Rapid intensification: >=30 kt increase in 24 h.
 #:
 #: Kaplan and DeMaria (2003, doi:10.1175/1520-0434(2003)018<1093:LCORIT>2.0.CO;2)
@@ -166,6 +191,7 @@ def build_cone(
     *,
     min_members: int = MIN_MEMBERS_FOR_ENSEMBLE_CONE,
     underdispersion_fraction: float = UNDERDISPERSION_FRACTION,
+    basin: str | None = None,
 ) -> tuple[tuple[ConeSegment, ...], tuple[str, ...]]:
     """Build the cone, falling back to climatology when spread is untrustworthy.
 
@@ -176,7 +202,11 @@ def build_cone(
     dramatically tighter than climatology five days out is displaying the
     underdispersion signature of a diffusion model over-anchored to its
     deterministic conditioning, and a cone drawn from it would understate risk.
+
+    ``basin`` picks the climatological radii (`climatological_cone_nm`):
+    both the fallback cone and the underdispersion check use that basin's.
     """
+    climo = climatological_cone_nm(basin)
     if not members:
         raise ValueError("cannot build a cone from an empty ensemble")
     leads = lead_times or members[0].lead_hours
@@ -192,7 +222,7 @@ def build_cone(
     if use_ensemble:
         long_lead = leads[-1]
         ensemble_radius = cone_radius_from_spread(members, long_lead)
-        climo_radius = CLIMATOLOGICAL_CONE_NM.get(long_lead, _interpolate_climo(long_lead))
+        climo_radius = climo.get(long_lead, _interpolate_climo(long_lead, climo))
         if ensemble_radius < underdispersion_fraction * climo_radius:
             use_ensemble = False
             notes.append(
@@ -208,15 +238,16 @@ def build_cone(
             radius = cone_radius_from_spread(members, lead)
             basis = "ensemble"
         else:
-            radius = CLIMATOLOGICAL_CONE_NM.get(lead, _interpolate_climo(lead))
+            radius = climo.get(lead, _interpolate_climo(lead, climo))
             basis = "climatology"
         segments.append(ConeSegment(lead, clat, clon, radius, basis))
     return tuple(segments), tuple(notes)
 
 
-def _interpolate_climo(lead: int) -> float:
-    leads = np.array(sorted(CLIMATOLOGICAL_CONE_NM))
-    radii = np.array([CLIMATOLOGICAL_CONE_NM[int(k)] for k in leads], dtype=float)
+def _interpolate_climo(lead: int, table: dict[int, float] | None = None) -> float:
+    table = table if table is not None else CLIMATOLOGICAL_CONE_NM
+    leads = np.array(sorted(table))
+    radii = np.array([table[int(k)] for k in leads], dtype=float)
     return float(np.interp(lead, leads, radii))
 
 
@@ -327,9 +358,11 @@ def build_products(
     coastline: tuple[float, float] | None = None,
     ri_alert_threshold: float = RI_ALERT_PROBABILITY,
     degraded: bool = False,
+    basin: str | None = None,
 ) -> ForecastProducts:
-    """Assemble the §6.1 product suite from an ensemble."""
-    cone, notes = build_cone(members)
+    """Assemble the §6.1 product suite from an ensemble; ``basin`` picks the
+    cone's climatological radii (`climatological_cone_nm`)."""
+    cone, notes = build_cone(members, basin=basin)
     ri_prob = rapid_intensification_probability(members)
     # The count back out of the fraction: `rapid_intensification_probability`
     # returns count/len, and the interval needs the integer it came from.

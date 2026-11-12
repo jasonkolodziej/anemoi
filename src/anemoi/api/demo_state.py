@@ -21,16 +21,27 @@ from pathlib import Path
 
 import numpy as np
 
+from ..data.atcf import storm_basin
 from ..data.availability import LatencyOracle
 from ..data.besttrack import Fix, Track, TrackQuality
 from ..data.sources import Flavor
 from ..data.synthetic import generate_season
 from ..inference.cycle import CycleOutput, DeterministicForecast, climatological_ensemble, run_cycle
 from ..inference.scheduler import plan_cycle
-from ..monitoring.calibration_audit import CONE_NOMINAL_RATE, INTENSITY_NOMINAL_RATE, LeadProductCalibration
+from ..monitoring.calibration_audit import (
+    CONE_NOMINAL_RATE,
+    INTENSITY_NOMINAL_RATE,
+    LeadProductCalibration,
+)
 from ..monitoring.drift import DriftReport, ReferenceDistribution, detect_feature_drift
 from ..monitoring.skew import SkewReport
-from ..tracking.registry import DERIVED_MODELS, GROUP1_MODELS, ModelRegistry, Stage, latent_signature
+from ..tracking.registry import (
+    DERIVED_MODELS,
+    GROUP1_MODELS,
+    ModelRegistry,
+    Stage,
+    latent_signature,
+)
 from ..training.triggers import SeasonState, evaluate_all
 from .cycle_policy import RunRequest
 
@@ -161,7 +172,9 @@ class DemoState:
             plan,
             fix,
             deterministic,
-            lambda det, n: climatological_ensemble(det, n_members=n, seed=hash(cycle) & 0xFFFF),
+            lambda det, n: climatological_ensemble(
+                det, n_members=n, seed=hash(cycle) & 0xFFFF, basin=storm_basin(fix.storm_id),
+            ),
             coastline=coastline,
             requested_members=members,
         )

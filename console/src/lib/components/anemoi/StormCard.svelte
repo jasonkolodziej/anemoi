@@ -60,9 +60,9 @@
         <Badge
           variant="outline"
           class="border-status-degraded/40 text-status-degraded"
-          title="No trained model has seen a {storm.basin}-basin storm -- Atlantic-only training data"
+          title="Not every served model has shown skill in the {storm.basin} basin yet (beaten persistence there), so this forecast is out of distribution"
         >
-          {storm.basin} basin -- untrained
+          {storm.basin} basin -- not verified
         </Badge>
       {/if}
       {#if storm.last_cycle}
