@@ -175,6 +175,11 @@ gridded caches grow with the storm count. The streaming dataloader
 - Basin filter on the storm list, a dateline-safe map, per-basin cone, and
   the badge reading `verified_basins`.
 
+**After phase 1's run: new input sources.** Once phase 1 is trained and
+evaluated per basin, it's the baseline for adding real inputs one at a time:
+OISST first, then GOES, then GEFS and microwave if the evidence calls for
+them. Plan in `docs/input_sources_plan.md`.
+
 ## Risks and open questions
 
 - **Atlantic dilution.** More Pacific data could cost Atlantic skill. This is
