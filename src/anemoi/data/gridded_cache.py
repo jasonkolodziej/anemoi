@@ -148,7 +148,45 @@ def save_cached_fields(path: Path, fields: GriddedFields, task: FetchTask) -> No
     path.write_bytes(buffer.getbuffer())
 
 
+#: Set to "1" to keep every decoded cache file in memory for the life of
+#: the process (training sets it from the Cloud Run entrypoint). Training
+#: decodes each file once per epoch per window -- ~97k decodes an epoch at
+#: Stage A, which left the GPU at ~9% on the multi-basin run; decoded,
+#: the whole ERA5 cache is ~5 GB. The main process decodes every training
+#: file in its statistics pass before the DataLoader forks its workers, so
+#: the workers share these arrays copy-on-write instead of decoding again.
+FIELDS_MEMO_ENV = "ANEMOI_FIELDS_MEMO"
+
+_fields_memo: dict[tuple[str, int, int], GriddedFields] = {}
+
+
+def _memo_enabled() -> bool:
+    import os
+
+    return os.environ.get(FIELDS_MEMO_ENV) == "1"
+
+
 def load_cached_fields(path: Path | str) -> GriddedFields:
+    """Read one cached sample. With ``ANEMOI_FIELDS_MEMO=1`` each path is
+    decoded once and the same `GriddedFields` returned after; its arrays
+    are read-only, so a caller that tried to change one in place would fail
+    loudly rather than change every later read of that sample."""
+    if not _memo_enabled():
+        return _decode_cached_fields(path)
+    # The file's identity, not just its name: a rewritten file is decoded
+    # again (one stat per read, against a decode).
+    st = Path(path).stat()
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    fields = _fields_memo.get(key)
+    if fields is None:
+        fields = _decode_cached_fields(path)
+        for name in _ARRAY_FIELDS:
+            getattr(fields, name).flags.writeable = False
+        _fields_memo[key] = fields
+    return fields
+
+
+def _decode_cached_fields(path: Path | str) -> GriddedFields:
     with np.load(path, allow_pickle=False) as data:
         return GriddedFields(
             valid_time=datetime.fromisoformat(str(data["valid_time"])),
