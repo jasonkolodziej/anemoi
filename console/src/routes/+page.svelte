@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listStorms, getSchedule, health } from "$lib/api/endpoints";
-  import { ApiError } from "$lib/api/client";
+  import { errorDetail, notifyError } from "$lib/notify";
+  import { toast } from "svelte-sonner";
   import type { StormSummary, CyclePlanOut } from "$lib/api/types";
   import StormCard from "$lib/components/anemoi/StormCard.svelte";
   import CycleTimeline from "$lib/components/anemoi/CycleTimeline.svelte";
@@ -10,6 +11,7 @@
   import { setWaiterLoading } from "$lib/stores/waiter";
   import { recall, remember } from "$lib/lastKnown";
 
+  const OUTAGE = "Could not reach Anemoi-API";
   let storms = $state<StormSummary[] | null>(null);
   let plans = $state<CyclePlanOut[] | null>(null);
   let error = $state<string | null>(null);
@@ -53,10 +55,14 @@
       storms = s.value;
       if (sched.status === "fulfilled") plans = sched.value.plans;
       if (h.status === "fulfilled") stateMode = h.value.state_mode;
-      error = null; // a later successful poll must clear an earlier outage banner
+      error = null; // a later successful poll clears an earlier outage
+      toast.dismiss(OUTAGE);
       remember("home", { date: today, storms: s.value, plans, stateMode });
     } catch (e) {
-      error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
+      error = errorDetail(e);
+      // One toast however many polls fail (its id is the title); the last
+      // storm list loaded stays on the page underneath it.
+      notifyError(OUTAGE, e, () => load());
     } finally {
       if (!background) setWaiterLoading(false);
     }
@@ -99,13 +105,8 @@
     {/if}
   </header>
 
-  {#if error}
-    <div
-      class="rounded-md border border-eurus/30 bg-eurus/5 px-4 py-3 text-sm text-eurus"
-    >
-      Could not reach Anemoi-API: {error}. Is
-      <code class="font-data">python -m anemoi.api</code> running?
-    </div>
+  {#if error && storms === null}
+    <p class="text-sm text-text-faint">The storm list isn't available right now.</p>
   {:else if storms === null}
     <p class="text-sm text-text-faint">Loading storms…</p>
   {:else if storms.length === 0}

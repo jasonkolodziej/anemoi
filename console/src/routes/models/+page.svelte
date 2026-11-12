@@ -1,20 +1,23 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { getModels } from '$lib/api/endpoints';
-	import { ApiError } from '$lib/api/client';
+	import { errorDetail } from '$lib/notify';
+	import { toast } from 'svelte-sonner';
 	import { GODS as STATIC_GODS, FUSION_COLOR } from '$lib/branding';
 	import type { ModelCatalog } from '$lib/api/types';
 	import { Card, CardContent } from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
 
 	let catalog = $state<ModelCatalog | null>(null);
-	let error = $state<string | null>(null);
 
 	onMount(async () => {
 		try {
 			catalog = await getModels();
 		} catch (e) {
-			error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
+			toast.warning('Could not reach Anemoi-API', {
+				id: 'models-fallback',
+				description: `${errorDetail(e)} — showing the built-in branding.`
+			});
 		}
 	});
 
@@ -28,12 +31,6 @@
 			Six architectures, personified. The god name is the identifier everywhere except the module itself.
 		</p>
 	</header>
-
-	{#if error}
-		<div class="mb-6 rounded-md border border-eurus/30 bg-eurus/5 px-4 py-3 text-sm text-eurus">
-			Could not reach Anemoi-API ({error}) — showing the static branding fallback.
-		</div>
-	{/if}
 
 	<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
 		{#each gods as god (god.slug)}

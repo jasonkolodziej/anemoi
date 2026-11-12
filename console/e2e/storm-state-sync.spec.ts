@@ -164,7 +164,9 @@ const hour = (page: Page) => page.locator("#cycle-hour-select");
 const dateButton = (page: Page) => page.getByTestId("cycle-date-trigger");
 const runButton = (page: Page) =>
   page.getByRole("button", { name: /^Run cycle$|^Running…$/ });
-const banner = (page: Page) => page.getByTestId("page-error");
+// The page's error is a toast now (sonner), shown while it lasts.
+const banner = (page: Page) =>
+  page.locator('[data-sonner-toast][data-type="error"]');
 const olderCallout = (page: Page) => page.getByText(/Viewing an older cycle/);
 const chip = (page: Page, label: string) =>
   page

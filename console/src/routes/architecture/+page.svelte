@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { getActivePin, getArchitecture, listRegistry } from '$lib/api/endpoints';
-	import { ApiError } from '$lib/api/client';
+	import { errorDetail, notifyError } from '$lib/notify';
 	import type { ActivePin, ArchitectureOut, RegistryEntry } from '$lib/api/types';
 	import SystemGraph from '$lib/components/anemoi/system/SystemGraph.svelte';
 	import ArchitectureView from '$lib/components/anemoi/system/ArchitectureView.svelte';
@@ -15,7 +15,6 @@
 	let pin = $state<ActivePin | null>(null);
 	let architectures = $state<Record<string, ArchitectureOut | undefined>>({});
 	let failed = $state<Record<string, string>>({});
-	let error = $state<string | null>(null);
 	let loading = $state(true);
 	let selected = $state<string | null>(null);
 	let anchor = $state<SVGGElement | null>(null);
@@ -51,15 +50,13 @@
 			: null
 	);
 
-	function message(e: unknown): string {
-		return e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
-	}
-
-	onMount(async () => {
+	async function load() {
+		failed = {};
+		loading = true;
 		try {
 			[registry, pin] = await Promise.all([listRegistry(), getActivePin()]);
 		} catch (e) {
-			error = message(e);
+			notifyError('Could not read the registry', e, load);
 		}
 		// Each is built on the API from the version's own parameters; one
 		// failing (or a version that can't be built) doesn't hide the rest.
@@ -68,12 +65,23 @@
 				try {
 					architectures[m] = await getArchitecture(m);
 				} catch (e) {
-					failed[m] = message(e);
+					failed[m] = errorDetail(e);
 				}
 			})
 		);
 		loading = false;
-	});
+		// One toast for every model that couldn't be described, not one each.
+		const names = Object.keys(failed);
+		if (names.length) {
+			notifyError(
+				`Could not describe ${names.length === 1 ? names[0] : `${names.length} models`}`,
+				new Error(names.map((n) => `${n}: ${failed[n]}`).join('; ')),
+				load
+			);
+		}
+	}
+
+	onMount(load);
 
 	const total = $derived(
 		Object.values(architectures).reduce((sum, a) => sum + (a?.total_params ?? 0), 0)
@@ -95,12 +103,6 @@
 			</p>
 		{/if}
 	</header>
-
-	{#if error}
-		<div class="mb-6 rounded-md border border-eurus/30 bg-eurus/5 px-4 py-3 text-sm text-eurus">
-			Could not read the registry ({error}).
-		</div>
-	{/if}
 
 	<div bind:this={graphEl} class="mb-6 rounded-lg border border-border bg-bg p-3">
 		<SystemGraph {registry} {pin} {architectures} bind:selected bind:anchor />
@@ -131,8 +133,8 @@
 					{#if selected && current}
 						<ArchitectureView arch={current} onclose={closePopover} />
 					{:else if selected && failed[selected]}
-						<div class="rounded-md border border-eurus/30 bg-surface px-4 py-3 text-sm text-eurus">
-							Could not describe {selected} ({failed[selected]}).
+						<div class="rounded-md border border-border bg-surface px-4 py-3 text-sm text-text-faint">
+							{selected} couldn\'t be described right now.
 						</div>
 					{:else if selected}
 						<div class="rounded-md border border-border bg-surface px-4 py-3 text-sm text-text-faint">
@@ -145,9 +147,9 @@
 	{:else if selected && current}
 		<ArchitectureView arch={current} />
 	{:else if selected && failed[selected]}
-		<div class="rounded-md border border-eurus/30 bg-eurus/5 px-4 py-3 text-sm text-eurus">
-			Could not describe {selected} ({failed[selected]}).
-		</div>
+		<p class="text-sm text-text-faint">
+			{selected} couldn\'t be described right now.
+		</p>
 	{:else if loading}
 		<p class="text-sm text-text-faint">Building the served models…</p>
 	{/if}

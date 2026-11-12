@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from "$app/navigation";
+	import { toast } from "svelte-sonner";
 	import { authClient } from "$lib/auth-client";
 	import { Button } from "$lib/components/ui/button";
 	import {
@@ -39,6 +40,15 @@
 	let loadingPasskeys = $state(true);
 	let addingPasskey = $state(false);
 	let passkeyErrorMsg = $state("");
+
+	// Each card's action errors as a toast: set when an action fails, reset
+	// to "" when the next one starts, so the same message twice still shows.
+	$effect(() => {
+		if (errorMsg) toast.error("API keys", { id: "profile-api-keys", description: errorMsg });
+	});
+	$effect(() => {
+		if (passkeyErrorMsg) toast.error("Passkeys", { id: "profile-passkeys", description: passkeyErrorMsg });
+	});
 
 	// Call anemoi-api-real with this key to run forecast cycles and read
 	// storm data -- see docs/api.md ("Authentication and versioning").
@@ -202,10 +212,6 @@
 			</CardDescription>
 		</CardHeader>
 		<CardContent class="flex flex-col gap-4">
-			{#if errorMsg}
-				<p class="text-destructive text-sm">{errorMsg}</p>
-			{/if}
-
 			{#if revealedKey}
 				<div class="bg-muted space-y-2 rounded-md border p-3">
 					<p class="text-sm font-medium">Copy this key now -- it won't be shown again.</p>
@@ -264,10 +270,6 @@
 			</CardDescription>
 		</CardHeader>
 		<CardContent class="flex flex-col gap-4">
-			{#if passkeyErrorMsg}
-				<p class="text-destructive text-sm">{passkeyErrorMsg}</p>
-			{/if}
-
 			{#if loadingPasskeys}
 				<p class="text-muted-foreground text-sm">Loading…</p>
 			{:else if passkeys.length === 0}

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { getSources } from '$lib/api/endpoints';
-	import { ApiError } from '$lib/api/client';
+	import { errorDetail, notifyError } from '$lib/notify';
 	import type { SourceOut } from '$lib/api/types';
 	import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '$lib/components/ui/table';
 	import { Badge } from '$lib/components/ui/badge';
@@ -9,13 +9,17 @@
 	let sources = $state<SourceOut[] | null>(null);
 	let error = $state<string | null>(null);
 
-	onMount(async () => {
+	async function load() {
+		error = null;
 		try {
 			sources = await getSources();
 		} catch (e) {
-			error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
+			error = errorDetail(e);
+			notifyError('Could not load the data sources', e, load);
 		}
-	});
+	}
+
+	onMount(load);
 
 	function fmtMinutes(m: number): string {
 		return m >= 60 ? `${(m / 60).toFixed(1)}h` : `${m.toFixed(0)}m`;
@@ -31,7 +35,7 @@
 	</header>
 
 	{#if error}
-		<div class="rounded-md border border-eurus/30 bg-eurus/5 px-4 py-3 text-sm text-eurus">{error}</div>
+		<p class="text-sm text-text-faint">The data sources aren't available right now.</p>
 	{:else if sources === null}
 		<p class="text-sm text-text-faint">Loading…</p>
 	{:else}

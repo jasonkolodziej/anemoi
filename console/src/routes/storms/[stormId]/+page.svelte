@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount, untrack } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
+  import { toast } from "svelte-sonner";
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import type { PageData } from "./$types";
@@ -106,6 +107,19 @@
     // A banner left by the last attempt is about a cycle no longer asked for.
     error = null;
   }
+
+  // The page's error, as one toast that lasts as long as the error does:
+  // shown when it's set, dismissed when it clears (another storm or cycle,
+  // a later success) or the page goes away.
+  const PAGE_ERROR = "storm-page-error";
+  $effect(() => {
+    if (error) {
+      toast.error(error, { id: PAGE_ERROR, duration: Number.POSITIVE_INFINITY, closeButton: true });
+    } else {
+      toast.dismiss(PAGE_ERROR);
+    }
+  });
+  onDestroy(() => toast.dismiss(PAGE_ERROR));
 
   function describe(e: unknown): string {
     return e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
@@ -347,15 +361,6 @@
   <a href="/" class="text-xs text-text-muted hover:text-text"
     >&larr; Active storms</a
   >
-
-  {#if error}
-    <div
-      class="mt-4 rounded-md border border-eurus/30 bg-eurus/5 px-4 py-3 text-sm text-eurus"
-      data-testid="page-error"
-    >
-      {error}
-    </div>
-  {/if}
 
   {#if storm}
     <header class="mt-2 mb-6 flex flex-wrap items-end justify-between gap-4">

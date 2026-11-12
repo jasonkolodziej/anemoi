@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { getDriftAll, getSkew, getCalibration } from "$lib/api/endpoints";
-  import { ApiError } from "$lib/api/client";
+  import { errorDetail, notifyError } from "$lib/notify";
   import type {
     DriftReportOut,
     SkewReportOut,
@@ -24,7 +24,8 @@
   let calibration = $state<LeadCalibrationOut[] | null>(null);
   let error = $state<string | null>(null);
 
-  onMount(async () => {
+  async function load() {
+    error = null;
     try {
       [drift, skew, calibration] = await Promise.all([
         getDriftAll(),
@@ -32,9 +33,12 @@
         getCalibration(),
       ]);
     } catch (e) {
-      error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
+      error = errorDetail(e);
+      notifyError("Could not load monitoring", e, load);
     }
-  });
+  }
+
+  onMount(load);
 
   // Real per-feature drift is already computed server-side
   // (`FeatureDriftOut.standardized_shift`) -- it was only ever rendered
@@ -120,11 +124,7 @@
   </header>
 
   {#if error}
-    <div
-      class="rounded-md border border-eurus/30 bg-eurus/5 px-4 py-3 text-sm text-eurus"
-    >
-      {error}
-    </div>
+    <p class="text-sm text-text-faint">Monitoring isn't available right now.</p>
   {:else}
     {#if skew}
       <Card class="mb-6">

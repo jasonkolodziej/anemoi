@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { listRegistry, getActivePin } from '$lib/api/endpoints';
-	import { ApiError } from '$lib/api/client';
+	import { errorDetail, notifyError } from '$lib/notify';
 	import type { RegistryEntry, ActivePin } from '$lib/api/types';
 	import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '$lib/components/ui/table';
 	import { Badge } from '$lib/components/ui/badge';
@@ -13,13 +13,17 @@
 	let pin = $state<ActivePin | null>(null);
 	let error = $state<string | null>(null);
 
-	onMount(async () => {
+	async function load() {
+		error = null;
 		try {
 			[entries, pin] = await Promise.all([listRegistry(), getActivePin()]);
 		} catch (e) {
-			error = e instanceof ApiError ? `${e.status}: ${e.message}` : String(e);
+			error = errorDetail(e);
+			notifyError('Could not load the registry', e, load);
 		}
-	});
+	}
+
+	onMount(load);
 </script>
 
 <div class="mx-auto max-w-5xl px-6 py-8">
@@ -29,7 +33,7 @@
 	</header>
 
 	{#if error}
-		<div class="rounded-md border border-eurus/30 bg-eurus/5 px-4 py-3 text-sm text-eurus">{error}</div>
+		<p class="text-sm text-text-faint">The registry isn't available right now.</p>
 	{:else}
 		{#if pin}
 			<Card class="mb-6">

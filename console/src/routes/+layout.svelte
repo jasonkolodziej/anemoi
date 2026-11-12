@@ -7,6 +7,7 @@
   import SiteHeader from "$lib/components/site/site-header.svelte";
   import SiteFooter from "$lib/components/site/site-footer.svelte";
   import CookieBanner from "$lib/components/site/cookie-banner.svelte";
+  import { Toaster } from "$lib/components/ui/sonner/index.js";
   import CloudflareAnalytics from "$lib/components/site/cloudflare-analytics.svelte";
   import { health } from "$lib/api/endpoints";
   import Waiter from "$lib/components/waiter/waiter.svelte";
@@ -58,46 +59,64 @@
       type: "dropdown",
       label: "Develop",
       items: [
-        { href: "/architecture", title: "Architecture", description: "The live system and each served model's layers." },
-        { href: "/registry", title: "Registry", description: "Versions, stages, and the active model-set pin." },
-        { href: "/monitoring", title: "Monitoring", description: "Drift, train/serve skew, and calibration." },
-        { href: "/retraining", title: "Retraining", description: "What's due to retrain, and why." },
+        {
+          href: "/architecture",
+          title: "Architecture",
+          description: "The live system and each served model's layers.",
+        },
+        {
+          href: "/registry",
+          title: "Registry",
+          description: "Versions, stages, and the active model-set pin.",
+        },
+        {
+          href: "/monitoring",
+          title: "Monitoring",
+          description: "Drift, train/serve skew, and calibration.",
+        },
+        {
+          href: "/retraining",
+          title: "Retraining",
+          description: "What's due to retrain, and why.",
+        },
       ],
     },
     { href: "/docs", label: "Docs" },
   ];
 </script>
 
+<Toaster />
+
 <Tooltip.Provider delayDuration={150}>
-<div class="flex min-h-screen flex-col md:h-screen">
-  <!-- `md:h-screen` + `shrink-0` on SiteHeader (site/site-header.svelte)
+  <div class="flex min-h-screen flex-col md:h-screen">
+    <!-- `md:h-screen` + `shrink-0` on SiteHeader (site/site-header.svelte)
        + `flex-1 overflow-y-auto` on main (no manual height math) is what
        makes main the scroll container on desktop instead of <html>.
        SiteHeader lives outside the Waiter below -- unlike the old layout,
        which wrapped aside+header+main together -- so the loading overlay
        can never block the nav or the sign-in button again (#waiter
        full-page bug). -->
-  <SiteHeader {nav} {anemoiVersion} />
+    <SiteHeader {nav} {anemoiVersion} />
 
-  <main class="min-w-0 flex-1 md:overflow-y-auto">
-    <Waiter
-      class="h-full"
-      carriageWidth="0.5em"
-      iconComponent={{
-        component: HurricaneIcon,
-        props: {
-          spinning: "teeter-spin",
-          class: "pb-4",
-        },
-      }}
-    >
-      {@render children?.()}
-    </Waiter>
-  </main>
-  <SiteFooter />
-</div>
-<!-- Outside the layout's flex column and above its overlays: shown until
+    <main class="min-w-0 flex-1 md:overflow-y-auto">
+      <Waiter
+        class="h-full"
+        carriageWidth="0.5em"
+        iconComponent={{
+          component: HurricaneIcon,
+          props: {
+            spinning: "teeter-spin",
+            class: "pb-4",
+          },
+        }}
+      >
+        {@render children?.()}
+      </Waiter>
+    </main>
+    <SiteFooter />
+  </div>
+  <!-- Outside the layout's flex column and above its overlays: shown until
      the visitor chooses what may be stored or loaded. -->
-<CookieBanner />
-<CloudflareAnalytics />
+  <CookieBanner />
+  <CloudflareAnalytics />
 </Tooltip.Provider>
