@@ -224,6 +224,55 @@ def test_stage_runs_are_written_to_durable_storage_without_mlflow():
     assert b["tags"]  # the validated RunTags, same as MLflow's run tags
 
 
+def test_a_partial_run_gets_no_final_stage_metrics_or_deployable_id():
+    """A run that stopped after Stage A keeps its loss record, but Stage B's
+    verification metrics aren't pinned on A, and it has no deployable run."""
+    from anemoi.training.curriculum import Curriculum, CurriculumRun
+
+    run = CurriculumRun(curriculum=Curriculum.standard("lstm"))
+    run.record(StageResult(
+        stage_name="A", flavor=Flavor.ERA5_PRETRAIN, epochs_completed=60,
+        final_train_loss=1.0, final_val_loss=1.1, checkpoint_uri="s3://fake/A.pt",
+    ))
+    store = _RecordingStore()
+    val_metrics = MetricSet(
+        split="val", flavor=Flavor.GDAS_FINETUNE, values={"track_error_48h_nm": 40.0},
+    )
+
+    assert et.log_curriculum_stages(
+        None, "lstm", run, val_metrics, checkpoint_store=store,
+    ) is None
+    [body] = store.uploads.values()
+    [a] = body["stages"]
+    assert a["metrics"] == {"train_loss": 1.0, "val_loss": 1.1}
+
+
+def test_records_reach_storage_before_mlflow_is_contacted():
+    """Durable first: if MLflow hangs mid-run, the records are already
+    stored; run ids are added to the same object afterwards."""
+    order: list[str] = []
+
+    class OrderStore(_RecordingStore):
+        def upload(self, local_path, key):
+            order.append("store")
+            return super().upload(local_path, key)
+
+    class OrderClient:
+        def get_experiment_by_name(self, name):
+            order.append("mlflow")
+            raise RuntimeError("MLflow is down")
+
+    store = OrderStore()
+    val_metrics = MetricSet(
+        split="val", flavor=Flavor.GDAS_FINETUNE, values={"track_error_48h_nm": 40.0},
+    )
+    et.log_curriculum_stages(
+        OrderClient(), "lstm", _two_stage_run(), val_metrics, checkpoint_store=store,
+    )
+    assert order[0] == "store"
+    assert len(store.uploads) == 1  # no run ids, so no second write
+
+
 def test_a_failing_store_never_fails_training():
     class BrokenStore:
         def upload(self, local_path, key):

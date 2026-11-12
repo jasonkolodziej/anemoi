@@ -33,9 +33,15 @@ class LocalizeReport:
     elapsed_s: float
 
 
+def _raise(error: OSError) -> None:
+    raise error
+
+
 def _files(src: Path) -> list[Path]:
+    # os.walk skips a directory it can't list unless told otherwise; on the
+    # bucket mount that would be a storm silently missing from training.
     out: list[Path] = []
-    for root, _dirs, names in os.walk(src):
+    for root, _dirs, names in os.walk(src, onerror=_raise):
         out.extend(Path(root) / n for n in names)
     return out
 

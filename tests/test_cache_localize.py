@@ -56,3 +56,22 @@ def test_cli_reports_what_it_copied(tmp_path, capsys):
     _cache(src)
     assert main(["cache-localize", "--src", str(src), "--dst", str(tmp_path / "dst")]) == 0
     assert "4 copied" in capsys.readouterr().out
+
+
+def test_a_directory_that_cant_be_listed_fails_the_copy(tmp_path, monkeypatch):
+    """A storm directory the bucket mount fails to list must fail the copy
+    (so the entrypoint trains from /cache), not drop that storm silently."""
+    import os
+
+    src = tmp_path / "src"
+    _cache(src)
+    real_scandir = os.scandir
+
+    def flaky_scandir(path="."):
+        if str(path).endswith("EP071991"):
+            raise PermissionError(13, "listing failed", str(path))
+        return real_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", flaky_scandir)
+    with pytest.raises(PermissionError):
+        localize_cache(src, tmp_path / "dst")
