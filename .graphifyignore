@@ -15,3 +15,9 @@ console/src/lib/components/ui/
 # Scratch space
 tmp/
 docs/tmp/
+
+# Secrets. Already gitignored (graphify honours .gitignore) and not code, so
+# never extracted; listed so a `--no-gitignore` run can't pick them up either.
+.env
+.env.*
+.dev.vars
