@@ -195,9 +195,10 @@ def resolve_cycle_inputs(
     return CycleInputs(target_time=t, as_of=as_of, nwp=nwp, statuses=tuple(statuses))
 
 
-#: Ocean-heat-content files (NOAA OSPO CoastWatch na14/np14) post ~11:30 the
-#: day after their valid date -- about 36h of latency -- so a live cycle can
-#: only read the OHC valid at D-2. The SST half of ``sst_ohc`` (OISST v2.1) is
+#: Ocean-heat-content files (NOAA OSPO CoastWatch na/np, na14/np14) post a
+#: median 35.5h and at most ~48h after 00Z of the day they are named for
+#: (CoastWatch listings, 2021-2026), so a live cycle can only read the file
+#: named D-2. The SST half of ``sst_ohc`` (OISST v2.1) is
 #: a day earlier at D-1, which is what the combined source uses today because
 #: OHC is not wired as a model input yet (docs/skill_gap_plan.md Phase 2b).
 #: When OHC lands, it carries its own D-2 valid time.

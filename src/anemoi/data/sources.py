@@ -214,10 +214,13 @@ REGISTRY: dict[str, DataSource] = {
                 "current -- na14/2026/ had day 316 (Nov 12) posted Nov 13, "
                 "no gaps since Jul 17. The earlier '~8 months stale, stops "
                 "2026-01-26' finding was a different endpoint (AOML's HDB "
-                "ERDDAP UOHC_2026/TCHP), not this one. OHC still waits on "
-                "the 2021-2022 training archive (docs/skill_gap_plan.md "
-                "Phase 0/2b); files post ~36h late, so a live cycle reads "
-                "D-2."
+                "ERDDAP UOHC_2026/TCHP), not this one. The archive covers "
+                "every Stage B season: the older na/np chain runs from "
+                "2020 day 121 to 2024 day 18 and agrees with na14/np14 to "
+                "RMS 0.002 kJ/cm2. Files post up to ~48h late, so a live "
+                "cycle reads D-2. The adapter is the open work "
+                "(docs/skill_gap_plan.md Phase 2b): NetCDF-3 and HDF5, "
+                "v1r1's one-day name shift from 2025 day 85, blank files."
             ),
         ),
         DataSource(
