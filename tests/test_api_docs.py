@@ -118,3 +118,17 @@ def test_sources_used_by_is_documented_in_the_openapi_schema(client):
     assert used_by["items"] == {"type": "string"}
     for value in (*sources.MODEL_INPUTS, sources.LABELS, sources.VERIFICATION):
         assert f"`{value}`" in used_by["description"], value
+
+
+def test_sources_role_is_the_role_enum_in_the_openapi_schema(client):
+    """`role` is permission and `used_by` is use; a schema reader needs both
+    the closed set of roles and that distinction, without the wiki."""
+    from anemoi.data.sources import Role
+
+    schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    role = schemas["SourceOut"]["properties"]["role"]
+    assert role["$ref"] == "#/components/schemas/Role"
+    assert schemas["Role"]["enum"] == [r.value for r in Role]
+    for r in Role:
+        assert f"`{r.value}`" in role["description"], r
+    assert "`used_by`" in role["description"]

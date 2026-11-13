@@ -42,7 +42,7 @@ def source_out(src: DataSource) -> s.SourceOut:
     return s.SourceOut(
         key=src.key,
         provider=src.provider,
-        role=src.role.value,
+        role=src.role,
         is_operational=src.is_operational,
         typical_latency_minutes=src.typical_latency.total_seconds() / 60.0,
         max_latency_minutes=src.max_latency.total_seconds() / 60.0,
