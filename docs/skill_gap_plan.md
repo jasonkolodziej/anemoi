@@ -53,13 +53,18 @@ These answer the questions every later phase depends on, and each takes hours, n
   - API (`b672fca`, reviewed in `7fe6207`–`5986802`): `/v1/sources` returns `used_by` per source from one mapping in `data/sources.py`, and `role` as the `Role` enum. `tests/test_sources.py` holds the mapping to the code: an adapter imported outside its own file must be in `used_by`, and each model's entry must match its training runner's and live builder's signature.
   - Console (`64714de`–`5189e29`): the Sources page shows Role and Used by, and the system graph draws every registered source from `used_by` in three states (feeds a model, labels or verification only, not used yet). The console keeps no copy of the mapping; the e2e specs feed both pages a `used_by` rewired from today's, so a hard-coded table fails them. A missing `used_by` shows as "use not reported". The graph scrolls inside its card on a phone and below about 1146 px.
   - Found on the way, left open (Decision Log 67): the cycle planner flags `missing:sst_ohc` and marks a cycle degraded though nothing reads `sst_ohc`; training crops are centred on the HURDAT2 final fix but live crops on the working fix; `curriculum.yaml`'s Stage B `input_sources` lists `goes` and `sst_ohc`.
-- [ ] **Pull phase 1's spread-skill and rank histograms per lead.** This settles the GEFS question with data you already have.
+- [x] **Pull phase 1's spread-skill and rank histograms per lead.** This settles the GEFS question with data you already have.
   - Not a lookup: it needs one run. Nothing measures the v12 ensemble's spread. Diffusion training scores only the ensemble mean, so the registry, R2 and the live calibration endpoint hold point errors and cone containment, not spread-skill or rank histograms. Every per-lead table in the repo is for diffusion v6 or v7 (20 members, 637 Atlantic windows from 2023).
   - The run, on the CPU training job (about 10 minutes for the September runs):
     `gcloud run jobs execute anemoi-train-schedule --region us-central1 --task-timeout 3600s --args=spread-backtest,--hurdat2,/app/data/hurdat2-atl.txt,--gdas-cache-dir,/cache/gdas_cache_f006,--registry-root,/tmp/registry,--members,50,--out,/cache/spread-backtest-diffusion-v12-m50.json`
     then copy the JSON into `docs/backtests/`. `--out` under `/cache` and the timeout are untested additions to the documented command.
   - Read `dropout` in diffusion v12's `arch_params` tag first. `--diffusion-dropout` defaults to 0.0 and the documented GPU job doesn't set `DIFFUSION_DROPOUT`. Dropout 0.1 is what closed the long-lead under-dispersion in September (v7 0.45 to 0.73 at 72 to 120 h, v8 0.86 to 1.04). v12's training set is about three times that one, so dropout 0.0 need not reproduce v7's result.
   - Until the run exists the GEFS gate is undecided, so GEFS doesn't start. The last healthy model measured (v8, 50 members, 2026-09-29) read `not_warranted`. If v12's long-lead track ratios are below 0.8, try a derived-only retrain with dropout 0.1 before GEFS; GEFS is the live option only if under-dispersion survives that and sits in the recurving cases.
+  - **Done (2026-11-13, local agent): `docs/backtests/2026-11-13-spread-backtest-diffusion-v12-m50.json`.** Diffusion v12, 50 members, 607 validation windows, against lstm v12, cnn v8, transformer v8, gnn v7, pinn v7. Verdict: `extra_conditioning_dim: warranted`, the opposite of v8's `not_warranted`.
+    - Track, overall (spread/RMSE): 72 h 0.84 along / 0.86 cross, 96 h **0.76** / 0.83, 120 h 0.87 / 0.83. Recurving (n = 43–44): 72 h 1.10 / **0.77**, 96 h 0.80 / 0.81, 120 h 0.97 / **0.73**. Three long-lead track ratios are under the 0.8 gate, two of them cross-track on recurving storms: the case GEFS conditioning is meant for.
+    - Intensity is under-dispersed from 48 h at every lead (wind 0.73 to 0.63 overall), which GEFS track conditioning doesn't address.
+    - The served 120 h cone uses the ensemble on all 172 cases and misses the truth 45% of the time against the ~33% a calibrated 2/3 circle should.
+    - Not read: v12's `dropout` (the registry tag sits behind credentials this run didn't use). By this item's own rule the next step is a derived-only retrain with dropout 0.1, measured with this command, before GEFS; if v12 already has 0.1, GEFS is the live option. No retrain was run here.
   - The backtest has no per-basin split, and validation is now the 2024 season pooled across AL, EP and CP, so one basin can hide another. `calibrate()` already takes a `case_filter`; a per-basin breakdown is a small code change.
 
 ## Phase 1: Track experiment and baseline
@@ -180,7 +185,7 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
    - Check that the job reports the registered and recomputed metrics as consistent, and that `n_without_forecast` = 0.
    - Score it with `anemoi baseline-backtest ... --model-forecasts <file>`, using the decision rule in Decision Log 66: fusion − AVNI, Atlantic 48 h, samples B and C, storm-block bootstrap.
    - Commit the JSON under `docs/backtests/` and record the result in Phase 1, step 1 and the progress log.
-2. **Spread-skill for diffusion v12** (Phase 0).
+2. ~~**Spread-skill for diffusion v12** (Phase 0).~~ **Run** (2026-11-13, `anemoi-train-schedule-wf2d2`); results under Phase 0. v12's `dropout` is still unread.
    - First read `dropout` in v12's `arch_params` tag.
    - Run the 50-member `spread-backtest` command in Phase 0.
    - Copy the JSON into `docs/backtests/` and record the long-lead track ratios against the 0.8 gate.
@@ -219,6 +224,11 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-13.** Spread-skill for diffusion v12 measured (Phase 0): 50
+  members, 607 windows. Under-dispersed at long lead (overall along-track
+  96 h 0.76; recurving cross-track 72 h 0.77, 120 h 0.73) and in intensity
+  from 48 h; the 120 h served cone misses 45%. Verdict `warranted`; the
+  dropout-0.1 retrain comes before GEFS. JSON in `docs/backtests/`.
 - **2026-11-13.** Local agent: `real_ohc`'s last two review items closed
   (Handoff, item 4). The degraded flag is relative to a trailing 30-day
   `sshaE` baseline, calibrated on 1,081 real files; the SHIPS test finds its
