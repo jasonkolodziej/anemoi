@@ -55,6 +55,7 @@ file named for the day before the case: at open-ocean Atlantic cases of
 
 from __future__ import annotations
 
+import http.client
 import io
 import math
 import urllib.request
@@ -208,25 +209,47 @@ def target_creation_day(t: datetime) -> date:
 # --------------------------------------------------------------------------- #
 
 
+def _declared_length(headers: Any) -> int | None:
+    """The body length a reply's headers promise, or ``None`` when they
+    don't (no or a malformed Content-Length, or chunked encoding, which
+    overrides it)."""
+    if "chunked" in (headers.get("Transfer-Encoding") or "").lower():
+        return None
+    try:
+        length = int(headers.get("Content-Length") or "")
+    except ValueError:
+        return None
+    return length if length >= 0 else None
+
+
 def http_get(
     url: str, *, user_agent: str | None = DEFAULT_USER_AGENT, timeout: float = _TIMEOUT_S,
 ) -> bytes:
     """GET ``url``'s bytes. Raises :class:`OhcNotPublished` for a 404 and
-    :class:`OhcFetchError` for any other failure. ``user_agent=None`` sends
-    urllib's own default instead."""
+    :class:`OhcFetchError` for any other failure, a cut-off reply included:
+    CPython's bounded ``read`` returns a body shorter than its
+    Content-Length without raising, and a short one would otherwise decode
+    as a rejected file and send :func:`select_file` to older data.
+    ``user_agent=None`` sends urllib's own default instead."""
     headers = {"User-Agent": user_agent} if user_agent else {}
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            declared = _declared_length(resp.headers)
+            if declared is not None and declared > MAX_DOWNLOAD_BYTES:
+                raise OhcFetchError(f"{url}: {declared} bytes, more than {MAX_DOWNLOAD_BYTES}")
             body = resp.read(MAX_DOWNLOAD_BYTES + 1)
     except HTTPError as exc:
         if exc.code == 404:
             raise OhcNotPublished(url) from exc
         raise OhcFetchError(f"GET {url} failed: HTTP {exc.code}") from exc
-    except (URLError, TimeoutError, OSError) as exc:
-        raise OhcFetchError(f"GET {url} failed: {exc}") from exc
+    except (URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
+        # HTTPException: IncompleteRead (a cut-off chunked body), BadStatusLine.
+        raise OhcFetchError(f"GET {url} failed: {exc!r}") from exc
     if len(body) > MAX_DOWNLOAD_BYTES:
         raise OhcFetchError(f"{url}: more than {MAX_DOWNLOAD_BYTES} bytes")
+    if declared is not None and len(body) != declared:
+        raise OhcFetchError(f"GET {url} failed: cut off at {len(body)} of {declared} bytes")
     return body
 
 

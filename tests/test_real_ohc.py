@@ -523,7 +523,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     """Answers on the first path segment and ignores the rest, so a
     CoastWatch URL can be pointed here with its own path kept: a status
     code, ``ua`` (echoes the User-Agent), ``file`` (the served file with its
-    Content-Length) or ``unsized`` (the file, ended by closing)."""
+    Content-Length), ``unsized`` (the file, ended by closing), ``short``
+    (promises the file's length, sends half and closes), ``chunked-short``
+    (the same in chunked encoding) or ``garbage`` (no HTTP status line)."""
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         pass
@@ -533,6 +535,23 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         body: bytes = self.server.body  # type: ignore[attr-defined]
         if mode.isdigit():
             self.send_error(int(mode))
+            return
+        if mode == "garbage":
+            self.wfile.write(b"NOT AN HTTP REPLY\r\n\r\n")
+            return
+        if mode == "short":
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body[: len(body) // 2])
+            return
+        if mode == "chunked-short":
+            self.protocol_version = "HTTP/1.1"
+            self.close_connection = True
+            self.send_response(200)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            self.wfile.write(b"%x\r\n" % len(body) + body[: len(body) // 2])
             return
         if mode == "ua":
             body = self.headers.get("User-Agent", "").encode()
@@ -579,6 +598,28 @@ def test_only_a_404_is_not_published(local):
         with pytest.raises(OhcFetchError, match=f"HTTP {code}") as err:
             real_ohc.http_get(f"{local}/{code}/x.nc")
         assert type(err.value) is OhcFetchError
+
+
+def test_a_cut_off_reply_is_a_fetch_failure(local, files):
+    """CPython's bounded read returns a body shorter than its Content-Length
+    without raising, and a broken chunked body raises http.client's
+    IncompleteRead, which isn't an OSError."""
+    with pytest.raises(OhcFetchError, match=f"{len(files['na3']) // 2} of {len(files['na3'])}"):
+        real_ohc.http_get(f"{local}/short/x.nc")
+    for mode in ("short", "chunked-short", "garbage"):
+        with pytest.raises(OhcFetchError) as err:
+            real_ohc.http_get(f"{local}/{mode}/x.nc")
+        assert type(err.value) is OhcFetchError, mode
+
+
+def test_a_cut_off_transfer_raises_rather_than_reading_an_older_file(local):
+    """A short body would decode as a rejected file and be stepped over,
+    so a network fault would quietly read older data."""
+    t = datetime(2021, 9, 1, tzinfo=UTC)
+    for mode in ("short", "chunked-short"):
+        with pytest.raises(OhcFetchError) as err:
+            real_ohc.select_file("na", t, fetch=_via(local, mode))
+        assert type(err.value) is OhcFetchError, mode
 
 
 def test_http_get_caps_the_download(local, files, monkeypatch):
