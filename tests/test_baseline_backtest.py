@@ -203,8 +203,8 @@ def test_the_latents_extraction_runs_the_models_on_joint_stage_windows_own_windo
     archive, monkeypatch, tmp_path,
 ):
     """What ties the baseline's cases to training's: `extract_joint_latents`
-    hands the models exactly the windows `joint_stage_windows` names, in
-    its order, with its working fixes."""
+    (and its validation half) hand the models exactly the windows
+    `joint_stage_windows` names, in its order, with its working fixes."""
     tracks, _ = archive
     seen: list[list] = []
 
@@ -222,6 +222,14 @@ def test_the_latents_extraction_runs_the_models_on_joint_stage_windows_own_windo
     assert [_window_key(w) for w in seen[0]] == [_window_key(w) for w in train]
     assert [_window_key(w) for w in seen[1]] == [_window_key(w) for w in val]
 
+    only_val = real_latents.extract_validation_latents(
+        tracks, artifacts, tmp_path, seed=7, n_augment=2,
+    )
+    assert only_val == 3 and len(seen) == 3
+    assert [_window_key(w) for w in seen[2]] == [_window_key(w) for w in val]
+
+    with pytest.raises(ValueError, match="missing trained Group 1"):
+        real_latents.extract_validation_latents(tracks, {"lstm": object()}, tmp_path)
 
 
 def test_cases_start_at_each_storms_fifth_fix_and_verify_against_the_best_track(

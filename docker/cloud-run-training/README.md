@@ -448,7 +448,7 @@ gcloud run jobs execute anemoi-train-schedule --region us-central1 \
 
 Real runs 2026-09-23 (`DIFFUSION_DROPOUT=0.1`/`0.05`, `DIFFUSION_WEIGHT_DECAY=1e-4`, each ~9-13 minutes end to end including image pull): see "Common env knobs" below for the results and GitHub #166 for the full backtest output.
 
-Fusion's forecast for every validation window, for the homogeneous baseline (wiki [Verification Metrics](../../wiki/Verification-Metrics.md), "Homogeneous baseline"). Inference only: it loads fusion and the five Group 1 versions its latent signature names from the registry and runs them; it trains, registers and promotes nothing. CPU is enough, as for `spread-backtest`, and the image needs the commit that added the command (CI rebuilds it on `main`):
+Fusion's forecast for every validation window, for the homogeneous baseline (wiki [Verification Metrics](../../wiki/Verification-Metrics.md), "Homogeneous baseline"). Inference only: it loads fusion and the five Group 1 versions its latent signature names from the registry and runs them on the validation windows alone (the 2,733 training windows are enumerated for the noise draw but not run); it trains, registers and promotes nothing. CPU is enough, as for `spread-backtest`, and the image needs the commit that added the command (CI rebuilds it on `main`):
 
 ```bash
 gcloud run jobs execute anemoi-train-schedule --region us-central1 \

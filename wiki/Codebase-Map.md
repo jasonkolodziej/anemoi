@@ -190,7 +190,7 @@ At the time of writing it holds about 5,900 nodes and 15,000 edges, and `graph.j
 | `MeshTopology`, `build_mesh_topology()`, `batch_graph()`, `run_gnn_curriculum()` | `training.real_run_gnn` | GNN analog -- cached grid treated as a lattice mesh, block-diagonal batched across samples |
 | `PinnStageSamples`, `build_pinn_samples()`, `run_pinn_curriculum()` | `training.real_run_pinn` | PINN analog -- corrects a candidate track from an internally-trained LSTM using a real environment vector + `physics_residuals` |
 | `RunArtifacts` | `training.real_run` | Trained model + exact standardisation stats, returned by every Group 1 `run_*_curriculum()` for real latent extraction to consume (#22) |
-| `JointLatentSamples`, `JointLatentBundle`, `extract_joint_latents()`, `CONTEXT_FEATURE_NAMES` | `training.real_latents` | Real per-window latents/predictions/context from the five trained Group 1 models, train/val split |
+| `JointLatentSamples`, `JointLatentBundle`, `extract_joint_latents()`, `extract_validation_latents()`, `CONTEXT_FEATURE_NAMES` | `training.real_latents` | Real per-window latents/predictions/context from the five trained Group 1 models, train/val split; the validation half alone for jobs that only score it |
 | `joint_stage_windows()` | `training.real_latents` | The train and validation windows (and their noise draw) fusion and diffusion are built on, without torch |
 | `Adeck`, `AdeckPoint`, `parse_adeck()` | `data.atcf` | One storm's a-deck: each technique's forecast by (technique, initial time, tau) |
 | `Member`, `HomogeneousRow`, `score_homogeneous()` | `metrics.homogeneous` | Homogeneous comparison per basin, lead and quantity |

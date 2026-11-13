@@ -414,10 +414,7 @@ def extract_joint_latents(
     torch/MPS ``nn.LSTM`` platform bug ("Placeholder storage has not been
     allocated on MPS device") that CUDA (the real training VM) doesn't have.
     """
-    missing = [m for m in GROUP1_ORDER if m not in trained_artifacts]
-    if missing:
-        raise ValueError(f"missing trained Group 1 model(s): {missing}")
-
+    _require_group1(trained_artifacts)
     train_windows, val_windows = joint_stage_windows(tracks, seed=seed, n_augment=n_augment)
     train_samples = _extract_for_tracks(
         train_windows, trained_artifacts, gdas_cache_dir, device=device,
@@ -426,3 +423,29 @@ def extract_joint_latents(
         val_windows, trained_artifacts, gdas_cache_dir, device=device,
     )
     return JointLatentBundle(train=train_samples, val=val_samples)
+
+
+def extract_validation_latents(
+    tracks: list[Track],
+    trained_artifacts: dict[str, RunArtifacts],
+    gdas_cache_dir: Path | str,
+    *,
+    seed: int = 20260806,
+    n_augment: int = 1,
+    device=None,
+) -> JointLatentSamples:
+    """`extract_joint_latents`' ``val`` alone, for a job that only scores
+    the validation windows: the same windows and working fixes, without
+    loading fields for and running the five models on every training
+    window. The training windows are still enumerated, because the
+    generator draws their working tracks before the validation storms'.
+    """
+    _require_group1(trained_artifacts)
+    _train, val_windows = joint_stage_windows(tracks, seed=seed, n_augment=n_augment)
+    return _extract_for_tracks(val_windows, trained_artifacts, gdas_cache_dir, device=device)
+
+
+def _require_group1(trained_artifacts: dict[str, RunArtifacts]) -> None:
+    missing = [m for m in GROUP1_ORDER if m not in trained_artifacts]
+    if missing:
+        raise ValueError(f"missing trained Group 1 model(s): {missing}")

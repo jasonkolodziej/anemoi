@@ -1559,7 +1559,7 @@ def collect_validation_forecasts(
 
     from ..tracking.registry import GROUP1_MODELS, RegistryError
     from .real_inference import load_run_artifacts, load_trained_model
-    from .real_latents import extract_joint_latents
+    from .real_latents import extract_validation_latents
 
     try:
         fusion = (
@@ -1576,9 +1576,9 @@ def collect_validation_forecasts(
     served = all(c is not None and c.version == versions[m] for m, c in champions.items())
 
     artifacts = {m: load_run_artifacts(m, v, checkpoint_store) for m, v in group1.items()}
-    val = extract_joint_latents(
+    val = extract_validation_latents(
         tracks, artifacts, gdas_cache_dir, seed=seed, n_augment=n_augment, device=device,
-    ).val
+    )
     if len(val) == 0:
         raise BaselineBacktestError("no validation window had a cached gridded field")
     model, _spec = load_trained_model("fusion", fusion, checkpoint_store)
