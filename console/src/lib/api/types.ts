@@ -31,6 +31,16 @@ export interface SourceOut {
 	fmt: string;
 	retention: string;
 	notes: string;
+	/** Who uses the source today, in a fixed order: the models that read it
+	 * as an input (`lstm`, `cnn`, `transformer`, `gnn`, `pinn`), then
+	 * `labels`, then `verification` (kept for verifying forecasts, never a
+	 * model input). `[]`: registered, and nothing uses it yet. `role` is
+	 * what a source may be used for; this is what uses it.
+	 *
+	 * Optional because the API and the console deploy separately: an API
+	 * from before the field leaves it out, and that is "unknown", not
+	 * "unused". */
+	used_by?: string[];
 }
 
 export interface StageOut {

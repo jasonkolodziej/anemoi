@@ -25,6 +25,24 @@ async function serveDemoApi(page: Page) {
 	});
 }
 
+/** Answers one path differently from the fixture for the rest of the test
+ * (a route registered later is tried first). */
+async function serveInstead(page: Page, path: string, response: { status?: number; json: unknown }) {
+	await page.route(`**/api${path}`, (route) => route.fulfill(response));
+}
+
+type SourceRow = { key: string; used_by?: string[] };
+const SOURCES = API['/v1/sources'] as SourceRow[];
+/** /v1/sources as an API from before `used_by` sends it. The console and
+ * the API deploy separately, so the console can meet one. */
+const SOURCES_BEFORE_USED_BY = SOURCES.map(({ used_by: _, ...row }) => row);
+
+const PHONE = { width: 390, height: 844 };
+
+/** How far the page itself can be scrolled sideways: 0 when it fits. */
+const sidewaysOverflow = (page: Page) =>
+	page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+
 const DEVELOP = ['/architecture', '/registry', '/monitoring', '/retraining', '/sources'];
 
 for (const path of DEVELOP) {
@@ -163,6 +181,60 @@ test.describe('signed in', () => {
 		await expect(page.getByRole('heading', { name: /source/i }).first()).toBeVisible();
 		await expect(page.getByRole('row').nth(1)).toBeVisible();
 		expect(pageErrors).toEqual([]);
+	});
+
+	/** The cell under `heading` in the row for source `key`. */
+	async function sourceCell(page: Page, key: string, heading: string) {
+		await expect(page.getByRole('row').nth(1)).toBeVisible();
+		const headings = (await page.getByRole('columnheader').allTextContents()).map((h) => h.trim());
+		expect(headings).toContain(heading);
+		const row = page.getByRole('row').filter({ has: page.getByRole('cell', { name: key, exact: true }) });
+		return row.getByRole('cell').nth(headings.indexOf(heading));
+	}
+
+	test('sources says what uses each source, next to its role', async ({ page }) => {
+		await page.goto('/sources');
+		// A model input, labels, verification only, and nothing yet.
+		await expect(await sourceCell(page, 'besttrack_working', 'Used by')).toHaveText('LSTM · PINN');
+		await expect(await sourceCell(page, 'gdas_gfs', 'Used by')).toHaveText('CNN · Transformer · GNN · PINN');
+		await expect(await sourceCell(page, 'besttrack_final', 'Used by')).toHaveText('labels · verification');
+		await expect(await sourceCell(page, 'dropsonde', 'Used by')).toHaveText('verification only');
+		await expect(await sourceCell(page, 'ndbc', 'Used by')).toHaveText('verification only');
+		await expect(await sourceCell(page, 'goes', 'Used by')).toHaveText('not used yet');
+		// Role is still there and says something else: GOES may be read in
+		// a cycle, and nothing reads it.
+		await expect(await sourceCell(page, 'goes', 'Role')).toHaveText('operational');
+		// No column is pushed off the right edge of the table.
+		const hidden = await page
+			.getByRole('table')
+			.evaluate((el) => el.parentElement!.scrollWidth - el.parentElement!.clientWidth);
+		expect(hidden).toBe(0);
+	});
+
+	test('sources shows a dash, not "not used yet", when the API predates used_by', async ({ page }) => {
+		await serveInstead(page, '/v1/sources', { json: SOURCES_BEFORE_USED_BY });
+		await page.goto('/sources');
+		for (const key of ['besttrack_working', 'dropsonde', 'goes']) {
+			const cell = await sourceCell(page, key, 'Used by');
+			await expect(cell).toContainText('—');
+			await expect(cell).not.toContainText('not used yet');
+		}
+		await expect(page.getByText('not used yet')).toHaveCount(0);
+	});
+
+	test('sources on a phone: each source with its role and use, nothing to scroll sideways for', async ({
+		page,
+	}) => {
+		await page.setViewportSize(PHONE);
+		await page.goto('/sources');
+		const item = (key: string) =>
+			page.getByRole('listitem').filter({ has: page.getByRole('heading', { name: key, exact: true }) });
+		await expect(item('besttrack_working')).toContainText('LSTM · PINN');
+		await expect(item('besttrack_working')).toContainText('operational');
+		await expect(item('dropsonde')).toContainText('verification only');
+		await expect(item('goes')).toContainText('not used yet');
+		await expect(page.getByRole('table')).toHaveCount(0);
+		expect(await sidewaysOverflow(page)).toBe(0);
 	});
 
 	test('retraining loads its triggers', async ({ page }) => {

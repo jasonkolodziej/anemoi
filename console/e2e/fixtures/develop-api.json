@@ -4331,7 +4331,11 @@
    "provider": "NHC / NOAA (HURDAT2)",
    "retention": "permanent",
    "role": "labels_only",
-   "typical_latency_minutes": 259200.0
+   "typical_latency_minutes": 259200.0,
+   "used_by": [
+    "labels",
+    "verification"
+   ]
   },
   {
    "fmt": "ATCF text",
@@ -4342,7 +4346,11 @@
    "provider": "NHC ATCF (a-/b-deck, TC-Vitals)",
    "retention": "not kept upstream as issued: the working b-deck is overwritten with the final best track after the season, and TC-Vitals/CurrentStorms have no documented retention -- archived verbatim to durable storage after every cycle (data.atcf_archive, #213)",
    "role": "operational",
-   "typical_latency_minutes": 45.0
+   "typical_latency_minutes": 45.0,
+   "used_by": [
+    "lstm",
+    "pinn"
+   ]
   },
   {
    "fmt": "BUFR / NetCDF",
@@ -4353,7 +4361,10 @@
    "provider": "NOAA / AFRC (implemented, data.real_dropsonde)",
    "retention": "permanent",
    "role": "operational",
-   "typical_latency_minutes": 60.0
+   "typical_latency_minutes": 60.0,
+   "used_by": [
+    "verification"
+   ]
   },
   {
    "fmt": "GRIB2",
@@ -4364,7 +4375,8 @@
    "provider": "GEFS (implemented, data.real_ensemble) / ECMWF EPS (not implemented)",
    "retention": "2017-01-01-present in noaa-gefs-pds (verified via direct S3 listing, 2026-09-22) -- not the unverified 'rolling 1yr' this entry previously claimed",
    "role": "operational",
-   "typical_latency_minutes": 240.0
+   "typical_latency_minutes": 240.0,
+   "used_by": []
   },
   {
    "fmt": "GRIB2",
@@ -4375,7 +4387,13 @@
    "provider": "NOAA NOMADS (live cycle feed); AWS Open Data (bulk archival mirror)",
    "retention": "2021-01-01-present in noaa-gfs-bdp-pds (verified via direct S3 listing, 2026-09-16); no documented retention policy for this bucket either way -- see data.gridded_cache's archive-sync path, which backfills this into permanent storage rather than depending on NOAA's bucket as the system of record",
    "role": "operational",
-   "typical_latency_minutes": 210.0
+   "typical_latency_minutes": 210.0,
+   "used_by": [
+    "cnn",
+    "transformer",
+    "gnn",
+    "pinn"
+   ]
   },
   {
    "fmt": "NetCDF (real per-product fetch: ABI-L2-CMIPF for IR/WV/VIS, ABI-L2-SSTF for SST, ABI-L2-RRQPEF for rain rate)",
@@ -4386,7 +4404,8 @@
    "provider": "NOAA AWS (GOES-18/19) -- implemented, data.real_goes",
    "retention": "rolling 1yr raw; permanent storm-relative crops",
    "role": "operational",
-   "typical_latency_minutes": 5.0
+   "typical_latency_minutes": 5.0,
+   "used_by": []
   },
   {
    "fmt": "gzip'd raw uint8 bytemap (not HDF5 -- corrected 2026-09-22 against the real, fetched format; see data.real_microwave)",
@@ -4397,7 +4416,8 @@
    "provider": "RSS (SSMIS, F16/F17/F18)",
    "retention": "rolling 2yr + permanent storm crops",
    "role": "operational",
-   "typical_latency_minutes": 60.0
+   "typical_latency_minutes": 60.0,
+   "used_by": []
   },
   {
    "fmt": "whitespace-separated text (not JSON/NetCDF -- corrected 2026-09-22 against the real realtime2 product; see data.real_ndbc)",
@@ -4408,7 +4428,10 @@
    "provider": "NDBC buoy / C-MAN",
    "retention": "rolling 45 days in the real-time product this reads (data.real_ndbc); NDBC's separate historical archive holds more, not fetched here -- corrected from the registry's earlier unverified 'rolling 3yr'",
    "role": "operational",
-   "typical_latency_minutes": 15.0
+   "typical_latency_minutes": 15.0,
+   "used_by": [
+    "verification"
+   ]
   },
   {
    "fmt": "NetCDF",
@@ -4419,7 +4442,8 @@
    "provider": "NOAA NCEI OISST v2.1 (SST, implemented) + NOAA OSPO ERDDAP (OHC, not implemented)",
    "retention": "rolling 5yr",
    "role": "operational",
-   "typical_latency_minutes": 1440.0
+   "typical_latency_minutes": 1440.0,
+   "used_by": []
   },
   {
    "fmt": "Zarr",
@@ -4430,7 +4454,13 @@
    "provider": "Google ARCO-ERA5 (Zarr, anonymous GCS); Copernicus CDS (origin, GRIB/NetCDF)",
    "retention": "rolling 10yr + permanent storm-relative extracts",
    "role": "pretrain_only",
-   "typical_latency_minutes": 7200.0
+   "typical_latency_minutes": 7200.0,
+   "used_by": [
+    "cnn",
+    "transformer",
+    "gnn",
+    "pinn"
+   ]
   }
  ]
 }
