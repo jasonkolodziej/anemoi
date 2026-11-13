@@ -230,7 +230,8 @@ def test_fill_becomes_nan_and_zero_is_kept(files):
 
 
 def test_a_blank_file_is_rejected(tmp):
-    """na14 2025 day 199: every variable 0.0, coordinates included."""
+    """na14 2025 days 197-201 and 2026 day 007: every variable 0.0,
+    coordinates included."""
     zeros = np.zeros(241), np.zeros(401)
     blank = _write(tmp, "na", ohc=np.zeros((241, 401)), lat=zeros[0], lon=zeros[1], sshae=None)
     with pytest.raises(OhcRejected, match="not the NA grid"):
@@ -495,6 +496,33 @@ def test_a_rejected_file_is_stepped_over(files, tmp):
     assert choice.age_days == 3
     assert choice.step_backs[0].reason.startswith("rejected:")
     assert "not the NA grid" in choice.step_backs[0].reason
+
+
+def test_a_blank_run_longer_than_the_window_leaves_na_unavailable(files, tmp):
+    """na14 2025 days 197-201 (named 07-16..07-20, made 07-17..07-21) are
+    all blank, two more than the step-back window: the 07-21 cycle reads
+    day 196 at age 5, and the 07-22 and 07-23 cycles have no NA file. NP's
+    files are fine and are placed. (HURDAT2 has no Atlantic fix between
+    2025-07-08 and 2025-08-01.)"""
+    archive = _full_archive(files, date(2025, 7, 1), date(2025, 7, 31))
+    zeros = np.zeros((241, 401))
+    blank = _write(tmp, "na", fmt="hdf5", ohc=zeros, lat=np.zeros(241), lon=np.zeros(401))
+    for day in range(16, 21):
+        archive.put("na", date(2025, 7, day), blank)
+
+    choice = real_ohc.select_file("na", datetime(2025, 7, 21, tzinfo=UTC), fetch=archive)
+    assert (choice.file.name_day, choice.age_days) == (date(2025, 7, 15), 5)
+    for day in (22, 23):
+        field = real_ohc.ohc_global(datetime(2025, 7, day, tzinfo=UTC), fetch=archive)
+        np_meta, na_meta = field.metadata()["basins"]
+        assert na_meta["available"] is False
+        assert len(na_meta["step_backs"]) == real_ohc.MAX_STEP_BACK_DAYS + 1
+        assert all("not the NA grid" in s["reason"] for s in na_meta["step_backs"])
+        assert (np_meta["available"], np_meta["age_days"]) == (True, 2)
+        assert math.isnan(real_ohc.ohc_at(25.0, -60.0, field))  # east of NP
+        assert math.isfinite(real_ohc.ohc_at(20.0, 150.0, field))
+    choice = real_ohc.select_file("na", datetime(2025, 7, 24, tzinfo=UTC), fetch=archive)
+    assert (choice.file.name_day, choice.age_days) == (date(2025, 7, 21), 2)
 
 
 def test_stepping_back_stops_after_the_stated_maximum(files):
