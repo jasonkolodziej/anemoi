@@ -24,6 +24,7 @@ from anemoi.data.nhc_verification import OfficialErrors
 from anemoi.data.sources import Flavor
 from anemoi.metrics.basin import per_basin_scores
 from anemoi.metrics.homogeneous import INTENSITY, TRACK
+from anemoi.training import real_latents
 from anemoi.training.baseline_backtest import (
     DEFAULT_TECHNIQUES,
     PERSISTENCE,
@@ -189,6 +190,38 @@ def test_a_longer_training_pass_keeps_the_cases_and_changes_the_working_fixes(ar
     key = [(w.storm_id, w.current.valid_time) for w in val1]
     assert key == [(w.storm_id, w.current.valid_time) for w in val3]
     assert [w.current.lat for w in val1] != [w.current.lat for w in val3]
+
+
+def _window_key(window) -> tuple:
+    return (
+        window.storm_id, window.current, window.window,
+        window.y.tobytes(), window.mask.tobytes(),
+    )
+
+
+def test_the_latents_extraction_runs_the_models_on_joint_stage_windows_own_windows(
+    archive, monkeypatch, tmp_path,
+):
+    """What ties the baseline's cases to training's: `extract_joint_latents`
+    hands the models exactly the windows `joint_stage_windows` names, in
+    its order, with its working fixes."""
+    tracks, _ = archive
+    seen: list[list] = []
+
+    def record(windows, trained_artifacts, gdas_cache_dir, device=None):
+        seen.append(list(windows))
+        return len(seen)
+
+    monkeypatch.setattr(real_latents, "_extract_for_tracks", record)
+    artifacts = {name: object() for name in GROUP1_ORDER}
+    train, val = joint_stage_windows(tracks, seed=7, n_augment=2)
+    assert train and val
+
+    bundle = real_latents.extract_joint_latents(tracks, artifacts, tmp_path, seed=7, n_augment=2)
+    assert (bundle.train, bundle.val) == (1, 2)
+    assert [_window_key(w) for w in seen[0]] == [_window_key(w) for w in train]
+    assert [_window_key(w) for w in seen[1]] == [_window_key(w) for w in val]
+
 
 
 def test_cases_start_at_each_storms_fifth_fix_and_verify_against_the_best_track(
