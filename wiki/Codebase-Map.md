@@ -55,6 +55,7 @@ src/anemoi/
 │   ├── real_dropsonde.py NOAA/AFRC dropsonde profiles (#147)
 │   ├── real_ndbc.py      NDBC buoy / C-MAN observations (#147)
 │   ├── real_sst.py       NCEI OISST v2.1 sea surface temperature (#147)
+│   ├── real_ohc.py       NOAA OSPO CoastWatch ocean heat content, NA+NP placed on the 721x1440 grid (fetch + decode only)
 │   └── real_ensemble.py  NOAA GEFS ensemble perturbation members (#147)
 ├── models/
 │   ├── base.py           lazy require_torch(), ModelSpec, DEFAULT_LEADS
