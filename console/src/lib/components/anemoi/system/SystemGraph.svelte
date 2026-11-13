@@ -274,13 +274,15 @@
 </script>
 
 <!-- The mark that tells the three states apart without colour: a solid
-     dot, a tick, an open dashed ring. Drawn around (0, 0). -->
+     dot, an open square, an open dashed ring. Not a tick: under the graph
+     a tick means a basin is verified, and on "never a model input" it
+     reads as approval. Drawn around (0, 0). -->
 {#snippet mark(use: Node['use'])}
 	<g aria-hidden="true">
 		{#if use === 'input'}
 			<circle r="5.5" class="fill-action" />
 		{:else if use === 'reference'}
-			<path d="M -6 0.5 L -2 4.5 L 6 -4.5" fill="none" class="stroke-text-muted" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+			<rect x="-4.5" y="-4.5" width="9" height="9" rx="1.5" fill="none" class="stroke-text-muted" stroke-width="1.8" />
 		{:else if use === 'unused'}
 			<circle r="5.5" fill="none" class="stroke-text-muted" stroke-width="1.6" stroke-dasharray="2.4 2.6" />
 		{/if}
