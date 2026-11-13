@@ -1168,10 +1168,11 @@ def cmd_adeck_fetch(args: argparse.Namespace) -> int:
         official_errors=not args.no_official_errors,
     )
     print(json.dumps(report.as_dict(), indent=2))
+    n_files = sum(len(v) for v in report.as_dict().values())
     print(
-        f"adeck-fetch: {len(storms)} {args.split} storm(s): {len(report.fetched)} fetched, "
-        f"{len(report.cached)} already there, {len(report.not_published)} not published, "
-        f"{len(report.failed)} failed"
+        f"adeck-fetch: {len(storms)} {args.split} storm(s), {n_files} file(s): "
+        f"{len(report.fetched)} fetched, {len(report.cached)} already there, "
+        f"{len(report.not_published)} not published, {len(report.failed)} failed"
     )
     return 1 if report.failed else 0
 

@@ -1080,4 +1080,4 @@ def test_adeck_fetch_reads_the_split_and_keeps_cached_files(tmp_path, monkeypatc
         "adeck-fetch", "--hurdat2", str(hurdat2), "--cache-dir", str(adecks),
         "--no-official-errors",
     ]) == 0
-    assert "1 val storm(s): 0 fetched, 1 already there" in capsys.readouterr().out
+    assert "1 val storm(s), 1 file(s): 0 fetched, 1 already there" in capsys.readouterr().out
