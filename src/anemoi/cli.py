@@ -1212,7 +1212,7 @@ def cmd_baseline_backtest(args: argparse.Namespace) -> int:
         if forecasts is not None:
             file_seed = forecasts.header.get("seed")
             file_augment = forecasts.header.get("n_augment")
-            if (seed, n_augment) not in ((None, None), (file_seed, file_augment)):
+            if seed not in (None, file_seed) or n_augment not in (None, file_augment):
                 raise BaselineBacktestError(
                     f"{args.model_forecasts} was written with seed {file_seed} and n_augment "
                     f"{file_augment}; drop --seed/--n-augment or pass the same"

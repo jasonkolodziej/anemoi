@@ -1066,6 +1066,31 @@ def test_baseline_backtest_refuses_a_seed_other_than_the_forecast_files(tmp_path
         "--model-forecasts", str(forecasts), "--seed", "2",
     ]) == 1
     assert "written with seed 1" in capsys.readouterr().out
+    assert cli.main([
+        "baseline-backtest", "--hurdat2", str(hurdat2), "--adeck-dir", str(adecks),
+        "--model-forecasts", str(forecasts), "--n-augment", "3",
+    ]) == 1
+    assert "written with seed 1" in capsys.readouterr().out
+
+
+def test_baseline_backtest_accepts_the_forecast_files_own_seed_given_alone(tmp_path, capsys):
+    import json
+
+    hurdat2, adecks = _baseline_inputs(tmp_path)
+    forecasts = tmp_path / "forecasts.json"
+    forecasts.write_text(json.dumps({
+        "kind": "validation_forecasts", "seed": 20260806, "n_augment": 1,
+        "lead_hours": [12, 24, 36, 48, 72, 96, 120], "models": [], "cases": [],
+    }))
+    for flag, value in (("--seed", "20260806"), ("--n-augment", "1")):
+        code = cli.main([
+            "baseline-backtest", "--hurdat2", str(hurdat2), "--adeck-dir", str(adecks),
+            "--techniques", "OFCL", "AVNI", "--model-forecasts", str(forecasts),
+            "--models", "", flag, value,
+        ])
+        printed = capsys.readouterr().out
+        assert code == 0, printed
+        assert "written with seed" not in printed
 
 
 def test_adeck_fetch_reads_the_split_and_keeps_cached_files(tmp_path, monkeypatch, capsys):
