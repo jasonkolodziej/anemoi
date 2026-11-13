@@ -413,7 +413,9 @@
 						{/if}
 					</g>
 				{:else if n.use === 'pending'}
-					<g data-sources-pending>
+					<!-- Dims with the rest of a path it isn't on, as its edge does:
+					     nothing says which model reads what is behind it. -->
+					<g data-sources-pending class="transition-opacity duration-300" opacity={dim ? 0.45 : 1}>
 						<rect
 							x={x} y={y} width={n.w} height={n.h} rx="8"
 							class="fill-bg stroke-border-strong" stroke-width="1.2" stroke-dasharray="5 5"

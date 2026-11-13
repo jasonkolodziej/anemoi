@@ -262,6 +262,12 @@ test.describe('signed in', () => {
 		await expect(page.getByRole('button', { name: /\(lstm\)/ })).toBeVisible();
 		await expect(graph.locator('.beam')).toHaveCount(11);
 		await expect(page.getByRole('list', { name: 'How a data source is drawn' })).toHaveCount(0);
+		// Nothing says which model reads what is behind the stand-in, so a
+		// model's path leaves it out, the node with its edge.
+		await page.getByRole('button', { name: /\(lstm\)/ }).hover();
+		await expect(graph.locator('[data-sources-pending]')).toHaveAttribute('opacity', '0.45');
+		await expect(graph.locator('[data-edge="src:>prep"]')).toHaveAttribute('opacity', '0.35');
+		await page.mouse.move(0, 0);
 
 		// Retry, with the API back.
 		await page.unroute('**/api/v1/sources');
