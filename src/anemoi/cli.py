@@ -1227,6 +1227,11 @@ def cmd_baseline_backtest(args: argparse.Namespace) -> int:
             args.adeck_dir, [t.storm_id for t in validation_tracks(tracks)],
             techniques_to_read(techniques),
         )
+        for storm_id in cached.missing:
+            print(
+                f"baseline-backtest: {storm_id}: no a-deck in {args.adeck_dir} "
+                "(run `anemoi adeck-fetch`)"
+            )
         for storm_id, error in cached.unreadable.items():
             print(f"baseline-backtest: {storm_id}: unreadable a-deck: {error}")
         if not cached.adecks:

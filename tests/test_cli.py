@@ -1042,6 +1042,25 @@ def test_baseline_backtest_scores_cached_adecks_and_writes_the_report(tmp_path, 
     assert row["scores"]["OFCL"]["mean_error"] == pytest.approx(6.0, abs=0.1)
 
 
+def test_baseline_backtest_names_a_validation_storm_without_an_adeck(tmp_path, capsys):
+    import json
+
+    hurdat2, adecks = _baseline_inputs(tmp_path)
+    with hurdat2.open("a") as fh:
+        fh.write(_hurdat2_storm("AL022024", datetime(2024, 9, 1, tzinfo=UTC), 14))
+    out = tmp_path / "baseline.json"
+    assert cli.main([
+        "baseline-backtest", "--hurdat2", str(hurdat2), "--adeck-dir", str(adecks),
+        "--techniques", "OFCL", "AVNI", "--out", str(out),
+    ]) == 0
+    printed = capsys.readouterr().out
+    assert f"AL022024: no a-deck in {adecks}" in printed
+    assert "No a-deck for 1 validation storm(s), so samples B and C leave them out: AL022024" in (
+        printed
+    )
+    assert json.loads(out.read_text())["adecks_missing"] == ["AL022024"]
+
+
 def test_baseline_backtest_without_any_adeck_exits_1(tmp_path, capsys):
     hurdat2, _adecks = _baseline_inputs(tmp_path)
     empty = tmp_path / "empty"

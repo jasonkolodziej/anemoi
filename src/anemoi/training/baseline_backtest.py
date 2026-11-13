@@ -1297,6 +1297,14 @@ def format_report(report: BaselineReport) -> str:
         "",
         "Decision rule: " + DECISION_RULE,
     ]
+    if report.adecks_missing:
+        # A storm without an a-deck drops out of B and C for every member,
+        # so the samples below are smaller than the season's.
+        lines += [
+            "",
+            f"No a-deck for {len(report.adecks_missing)} validation storm(s), so samples B "
+            f"and C leave them out: {', '.join(report.adecks_missing)}",
+        ]
     lead_header = "".join(f"{f'{lead}h':>8}" for lead in report.lead_hours)
     basins = sorted({row.basin for row in report.results})
     for basin in basins:
