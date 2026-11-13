@@ -299,16 +299,19 @@ MODEL_INPUTS: dict[str, tuple[str, ...]] = {
 #: Sources whose values are the supervision targets.
 LABEL_SOURCES: tuple[str, ...] = ("besttrack_final",)
 
-#: Sources kept for verifying forecasts and never fed to a model.
+#: Sources kept for verifying forecasts and not listed as any model's input.
 #:
 #: Only ``besttrack_final`` is read by verification code today: validation
 #: metrics, the promotion gates and the spread backtest all score forecasts
-#: against it. For ``dropsonde`` and ``ndbc`` this is a designation
-#: (docs/input_sources_plan.md, "Not model inputs"): they will not become model
-#: inputs and are meant for checking intensity near landfall, but no
-#: verification code reads them yet. Their adapters fetch and decode, and
-#: nothing imports them; tests/test_sources.py fails the day something does.
+#: against it. The rest are :data:`VERIFICATION_NOT_READ_YET`.
 VERIFICATION_SOURCES: tuple[str, ...] = ("besttrack_final", "dropsonde", "ndbc")
+
+#: The verification sources that are a designation and nothing more
+#: (docs/input_sources_plan.md, "Not model inputs"): they will not become
+#: model inputs and are meant for checking intensity near landfall, but no
+#: verification code reads them yet. Their adapters fetch and decode, and
+#: tests/test_sources.py fails once a module names either adapter.
+VERIFICATION_NOT_READ_YET: tuple[str, ...] = ("dropsonde", "ndbc")
 
 #: The :func:`used_by` entries that are not model names.
 LABELS = "labels"
@@ -329,7 +332,7 @@ def used_by(key: str) -> tuple[str, ...]:
     monitor (``monitoring.calibration_audit``) scores a served cone against
     the storm's later working fixes, and ``besttrack_working`` is listed by
     its models only. Nor is every ``"verification"`` read yet: see
-    :data:`VERIFICATION_SOURCES`.
+    :data:`VERIFICATION_NOT_READ_YET`.
     """
     get(key)  # an unknown key is a typo, not a source nothing uses
     users = [model for model, inputs in MODEL_INPUTS.items() if key in inputs]

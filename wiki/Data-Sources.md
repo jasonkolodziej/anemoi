@@ -68,7 +68,15 @@ The order is fixed: models in catalogue order (`lstm`, `cnn`, `transformer`, `gn
 - **The gridded three read no track value.** Their crop is centred on the working fix, but only the crop's fields are in what CNN, transformer and GNN read.
 - **Diffusion and fusion are not listed.** They read the Group 1 models' latents and forecasts, not a source of their own. Fusion also takes a context vector computed from the working track (`real_latents.CONTEXT_FEATURE_NAMES`).
 
-**Enforced by** `tests/test_sources.py`: every name in the mapping is a registry key or a Group 1 model, a model input is never a `LABELS_ONLY` source, every required cycle input has a model consumer, and no module imports the adapter of a source nothing reads yet (the four unused ones, plus `dropsonde` and `ndbc`). That last test fails when an adapter is wired in, until `used_by` says so.
+**Enforced by** `tests/test_sources.py`. Against the registry: every name in the mapping is a registry key or a Group 1 model, in registry order; a model input is never `LABELS_ONLY`; every model reads a source it can be served from; every required cycle input has a model consumer. Against the code, by reading the package's source:
+
+- every fetch adapter (`data/real_*.py`) has to be classified with the registry source it fetches;
+- an adapter of a source `used_by` calls unread (empty, or `dropsonde` and `ndbc`) fails the test once any other module names it, by import, attribute or string literal, another adapter included; a module that only fetches or caches can be excused by name (`FETCH_ONLY_IMPORTERS`). A source listed as read whose adapters nothing outside the adapters names fails too;
+- an import by a computed name (`import_module(f"...")`) fails outside the two `anemoi.models` loaders, since the scan can't follow it;
+- each model's entry has to match its curriculum runner and live builder: the ERA5 and GDAS cache-dir parameters and the `gridded_cache` import for the field crop, a `track_input` call for the track;
+- each curriculum stage lists what its models read and trains on `LABEL_SOURCES`, and the sources a stage or the optional tier lists that no model reads are named in the test.
+
+It reads names, not data flow: a model that stops using an input but keeps its signature, and the `verification` entries, still rest on review.
 
 ---
 
