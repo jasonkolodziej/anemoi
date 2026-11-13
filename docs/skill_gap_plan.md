@@ -13,7 +13,9 @@ ticked when its work has landed, with what was found written under it. The
 
 The track gap is the priority: fusion v12's 48 h Atlantic track error is 231 nm, against a 70 nm promotion gate and NHC's 51 nm 2026 target. Ocean inputs mainly improve intensity, so they run alongside the track work instead of ahead of it.
 
-Only two of the ten registry sources feed a model today (commit `3838fcc`, 2026-11-12). `Role.OPERATIONAL` means a source is allowed to be read, not that a model reads it.
+Only two of the ten registry sources feed a model today (commit `3838fcc`, 2026-11-12). `Role.OPERATIONAL` means a source is allowed to be read, not that a model reads it. Since `b672fca` the registry
+records the second fact too: `data.sources.used_by`, served as `used_by` by
+`/v1/sources` and printed by `anemoi sources`.
 
 | Source | Adapter | Used by a model today | Plan |
 | --- | --- | --- | --- |
@@ -22,9 +24,9 @@ Only two of the ten registry sources feed a model today (commit `3838fcc`, 2026-
 | `sst_ohc`: SST half | `real_sst` (OISST v2.1) | Nothing | Phase 2a |
 | `sst_ohc`: OHC half | None; 60 kJ/cm² placeholder in every stage | Nothing | Phase 2b, using OSPO's CoastWatch feed |
 | `goes` | `real_goes` | Nothing (matches CNN input shape) | Phase 4 |
-| `ensemble_perturbations` | `real_ensemble` (GEFS) | Spread backtest only | Phase 4, only if spread is too narrow |
+| `ensemble_perturbations` | `real_ensemble` (GEFS) | Nothing. The spread backtest measures the diffusion ensemble's own spread and reads no GEFS | Phase 4, only if spread is too narrow |
 | `microwave` | `real_microwave` | Nothing | Phase 4, as an optional masked input |
-| `dropsonde`, `ndbc` | `real_dropsonde`, `real_ndbc` | Nothing | Verification only |
+| `dropsonde`, `ndbc` | `real_dropsonde`, `real_ndbc` | Nothing. Verification only by designation: no verification code reads them yet | Verification only |
 
 ## Phase 0: Same-day fixes and checks
 
@@ -35,6 +37,8 @@ These answer the questions every later phase depends on, and each takes hours, n
 - [ ] **Correct the stale OHC claim.** Update the `sst_ohc` provider/notes in `data/sources.py`, Decision-Log #30 and wiki Data-Sources. The "stops 2026-01-26" result came from AOML's HDB ERDDAP. OSPO's CoastWatch `na14/2026/` has day 316 (Nov 12) posted Nov 13, with no gaps since Jul 17.
 - [ ] **Set the OHC date rule.** Files post about 11:30 the day after their valid date (about 36 h latency), so a live cycle uses the file from D−2. Put that rule in `data.availability`.
 - [ ] **Ship the Sources page fix** (input_sources_plan step 0). Rename the column to **Role** and add **Used by** from `/v1/sources`.
+  - API half done (`b672fca`): `/v1/sources` returns `used_by` per source, from one mapping in `data/sources.py` that was read from the training and live-cycle code. A test fails once any module imports the adapter of a source still listed as unused.
+  - Console half in progress: the Sources page column, and the system graph drawn from the same field. The column is already headed **Role**; what's left there is the subtitle, which reads the role as a status.
 - [ ] **Pull phase 1's spread-skill and rank histograms per lead.** This settles the GEFS question with data you already have.
 
 ## Phase 1: Track experiment and baseline
@@ -143,5 +147,9 @@ The critical path is Phase 1: its week 2 result decides whether weeks 3–4 go t
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-13.** `used_by` on the source registry and `/v1/sources`
+  (`b672fca`), the API half of the Sources page fix. Reading the code for it
+  corrected two rows of the table above: GEFS is read by nothing, and
+  dropsonde and NDBC are verification-only by designation.
 - **2026-11-13.** Plan added to the repo, written against `main` at `3838fcc`
   (#242). Phase 0 and the Phase 3 desk research started the same day.
