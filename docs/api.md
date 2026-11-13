@@ -69,6 +69,67 @@ An unrecognised flag should render as "degraded, reason opaque" rather than
 being dropped — new flags can ship in `anemoi.inference` without a client
 release as long as consumers treat the prefix match as best-effort.
 
+## Role is permission, `used_by` is use
+
+`GET /v1/sources` returns the data source registry. `role` says what a source
+may be used for: eight of the ten sources are `operational`, which means a
+cycle is allowed to read them, not that a model does. `used_by` says who uses
+each source today, from a fixed vocabulary in a fixed order:
+
+| Value | Meaning |
+|---|---|
+| `lstm`, `cnn`, `transformer`, `gnn`, `pinn` | That Group 1 model reads the source as an input, in training, in a forecast cycle or both. Listed in registry order (`tracking.registry.GROUP1_MODELS`), which is not the order `GET /v1/models` lists them in |
+| `labels` | The source supplies the supervision targets |
+| `verification` | The source is kept for verifying forecasts and is not a model input |
+
+`role` tells training from serving. `era5` lists the four gridded models
+because they pretrain on it in Stage A, and the ERA5T skew audit replays them
+on it after a cycle; no cycle reads a `pretrain_only` source.
+
+An empty list means no model, label or verification code reads the source
+yet. The cycle planner can still track it: `goes`, `sst_ohc` and
+`ensemble_perturbations` are in its optional tier (`data.availability`),
+with `ndbc`, so a cycle that finds one late is flagged `missing:{source}`
+and marked degraded, though no model would have read it. The tier says what
+a cycle waits for, not what reads the source.
+
+`used_by` names these uses, not every reader:
+
+- Fusion reads `besttrack_working` too, as its context vector. The
+  vocabulary is the five Group 1 models.
+- Every model's forecast is placed from the storm's current working fix,
+  and in a cycle the gridded crop is centred on it. In training the crop is
+  centred on the HURDAT2 final fix, because the field caches are fetched at
+  HURDAT2 positions and keyed by storm and time only.
+- The served-product calibration monitor scores cones against the storm's
+  later `besttrack_working` fixes.
+- A cycle on an archive storm, whose vitals were never kept, takes
+  `besttrack_final` as its track and is flagged `input:final_best_track`.
+  So `verification` means not a model input in an as-issued cycle.
+
+`verification` on `besttrack_final` has readers: validation metrics, the
+promotion gates and the spread backtest score forecasts against it. On
+`dropsonde` and `ndbc` it is only a designation
+(`docs/input_sources_plan.md`, "Not model inputs"): they won't become model
+inputs, and no verification code reads them yet. `anemoi sources` says so
+under its table.
+
+The mapping is next to the registry in `data/sources.py` (`MODEL_INPUTS`,
+`LABEL_SOURCES`, `VERIFICATION_SOURCES`, `VERIFICATION_NOT_READ_YET`). Two
+older lists name sources without saying a model reads them: the planner's
+tiers, and `curriculum.yaml`'s per-stage `input_sources`, which is checked
+for role only (Stage B lists `goes` and `sst_ohc`). `tests/test_sources.py`
+holds the mapping to the code: it fails when a module names the adapter of a
+source `used_by` calls unread, and when a model's entry disagrees with its
+training runner's or live builder's signature. It reads names, not data
+flow, so the `verification` entries still rest on review.
+
+The console's Sources page and system graph read this field instead of
+keeping their own copy, so a model that gains an input changes `used_by` in
+the same change. The console counts only the five model names above as model
+inputs. An entry outside this table, which a newer API could send, is shown
+as sent and never drawn as feeding a model.
+
 ## The one mutating route
 
 `POST /v1/storms/{id}/cycles` is the only endpoint in v1 that writes anything,

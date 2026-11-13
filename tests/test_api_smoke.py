@@ -71,6 +71,29 @@ def test_sources_marks_operational_role(client):
     assert any(s["role"] == "operational" for s in r.json())
 
 
+def test_sources_say_who_uses_each_one(client):
+    """The contract the console's Sources page and system graph are built
+    against: models in registry order (`tracking.registry.GROUP1_MODELS`,
+    not the order of /v1/models), then `labels`, then `verification`; `[]`
+    for a source no model, label or verification code reads yet. A role
+    alone can't say this -- eight of these ten are `operational`, and two of
+    the eight feed a model."""
+    r = client.get("/v1/sources")
+    assert r.status_code == 200
+    assert {s["key"]: s["used_by"] for s in r.json()} == {
+        "besttrack_working": ["lstm", "pinn"],
+        "besttrack_final": ["labels", "verification"],
+        "gdas_gfs": ["cnn", "transformer", "gnn", "pinn"],
+        "era5": ["cnn", "transformer", "gnn", "pinn"],
+        "goes": [],
+        "ndbc": ["verification"],
+        "dropsonde": ["verification"],
+        "microwave": [],
+        "sst_ohc": [],
+        "ensemble_perturbations": [],
+    }
+
+
 def test_schedule_matches_cli_cycle_count(client):
     r = client.get("/v1/schedule", params={"date": "2026-08-06"})
     assert r.status_code == 200

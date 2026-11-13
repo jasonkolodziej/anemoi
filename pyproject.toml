@@ -50,6 +50,10 @@ gridded = [
     # h5py (no compiled system library needed, unlike eccodes), confirmed
     # 2026-09-22.
     "h5netcdf>=1.3", "h5py>=3.10",
+    # NetCDF-3 reader for data.real_ohc: CoastWatch OHC files up to 2025
+    # day 084 are NetCDF-3 classic, which h5netcdf can't open and xarray
+    # reads through scipy. Before this, scipy came in only via `tracking`.
+    "scipy>=1.13",
     # Real geostationary-projection math for data.real_goes -- battle-tested
     # over hand-rolled trig, since a projection bug would silently misplace
     # every crop rather than raise. Prebuilt wheel, no system library needed.

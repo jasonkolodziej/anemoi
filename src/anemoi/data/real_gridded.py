@@ -35,13 +35,14 @@ have ``sea_surface_temperature``, used here. GDAS's atmospheric ``pgrb2``
 file does not carry SST at all (it is a separate NOAA product -- NCEI
 OISST v2.1, real fetch in ``data.real_sst``, verified live 2026-09-22;
 **not** RTG_SST, which NCEP retired in February 2020, an earlier version
-of this line named). Neither source has ocean heat content -- checked
-NOAA OSPO's ERDDAP OHC/TCHP products specifically (real endpoint, real
-schema) before ruling them out: their real data stops at 2026-01-26,
-~8 months stale as of this writing, not a live feed despite looking like
-one. A real ocean reanalysis (GODAS/ORAS5) remains the only known live
-path; its exact real access point wasn't found in the time spent -- see
-wiki Data-Sources.md.
+of this line named). Neither source has ocean heat content. NOAA OSPO's
+CoastWatch OHC files are a live feed on this module's 721x1440 lattice,
+fetched and decoded by ``data.real_ohc``, but nothing fills
+``GriddedFields.ohc`` from them yet: it stays
+:data:`OHC_PLACEHOLDER_KJ_CM2` (docs/skill_gap_plan.md Phase 2b). An
+earlier version of this note called OHC stale (data stopping at
+2026-01-26); that was AOML's HDB ERDDAP ``UOHC_2026``/``TCHP``, a
+different endpoint -- see wiki Data-Sources.md.
 Where a value is a placeholder rather than a real read, it is a named
 constant with a docstring saying so -- see
 :func:`era5_to_gridded_fields` / :func:`gdas_to_gridded_fields`.

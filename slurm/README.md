@@ -68,10 +68,10 @@ matters more for GDAS than ERA5 (NOAA's bucket has no documented retention
 policy, so a local-only cache on a Spot VM is the only copy until it's
 synced off-box).
 
-`gdas_cache.sbatch` also drops any fix dated before GDAS's real archive
-start (2021-01-01, `data.gdas_cache.GDAS_ARCHIVE_START`) before fetching --
-`--split train` covers 1980-2019, decades before real GDAS data exists, so
-without this every such fix would just 404.
+`gdas_cache.sbatch` also drops any fix dated before the first one the GFS
+reader can fetch (2021-03-22 18Z, `data.gdas_cache.GDAS_ARCHIVE_START`)
+before fetching -- `--split train` covers 1980-2019, decades before real
+GDAS data exists, so without this every such fix would just 404.
 
 Add a new ingest job here the same way: a `#SBATCH`-headered script that
 `cd`s to the repo root, resolves its inputs from env vars with sane

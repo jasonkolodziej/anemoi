@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..data.sources import Role
 from ..inference.scheduler import DEFAULT_ENSEMBLE_MEMBERS
 
 
@@ -36,13 +37,43 @@ class ModelCatalog(BaseModel):
 class SourceOut(BaseModel):
     key: str
     provider: str
-    role: str
+    role: Role = Field(
+        description=(
+            "What the source may be used for. `operational`: may be read "
+            "during a forecast cycle, and in Stage B fine-tuning. "
+            "`pretrain_only`: Stage A pretraining only, never read during a "
+            "cycle. `labels_only`: supervision targets and verification, "
+            "never a model input. A role is permission: who reads the source "
+            "is `used_by`."
+        ),
+    )
     is_operational: bool
     typical_latency_minutes: float
     max_latency_minutes: float
     fmt: str
     retention: str
     notes: str = ""
+    used_by: list[str] = Field(
+        description=(
+            "Who uses the source today, in a fixed order: the Group 1 models "
+            "that read it as an input (`lstm`, `cnn`, `transformer`, `gnn`, "
+            "`pinn`), then `labels` (it supplies the supervision targets), then "
+            "`verification` (kept for verifying forecasts, not a model input). "
+            "A model is listed whether it reads the source in training, in a "
+            "forecast cycle or both; `role` tells them apart, and no cycle "
+            "reads a `pretrain_only` source. Empty: no model, label or "
+            "verification code reads the source yet, though the cycle planner "
+            "may still track it and flag a late one `missing:{source}`. These "
+            "are the uses the list names, not every reader: fusion also reads "
+            "`besttrack_working`, every model's forecast is placed from the "
+            "current working fix, the calibration monitor scores served cones "
+            "against later working fixes, and a cycle on an archive storm "
+            "takes `besttrack_final` as its track, flagged "
+            "`input:final_best_track`. On `dropsonde` and `ndbc`, "
+            "`verification` is a designation: no verification code reads them "
+            "yet."
+        ),
+    )
 
 
 class StageOut(BaseModel):

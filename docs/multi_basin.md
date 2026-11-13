@@ -47,9 +47,10 @@ Indian Ocean, then the Southern Hemisphere.
 of 6 basins: 42 registered models. Each basin's fusion and diffusion would be
 pinned to that basin's five through `latent_signature`. Each basin would also
 be trained on its own fraction of an already thin archive. Stage B, the GDAS
-fine-tune, trains on the 2021–2022 seasons: 21 Atlantic storms. The Eastern
-Pacific, Western Pacific and Southern Hemisphere each add as many or more a
-season.
+fine-tune, trains on 2021 to N−2, where N is the newest HURDAT2 season: with
+N = 2025 that is 2021–2023, 58 Atlantic storms. The Eastern Pacific adds
+another 58 over those seasons, and the Western Pacific and Southern Hemisphere
+each add as many or more a season.
 
 **One global model** shares what is the same everywhere: beta drift, steering
 by the environmental flow, recurvature, and the response of intensity to SST,

@@ -195,11 +195,33 @@ def resolve_cycle_inputs(
     return CycleInputs(target_time=t, as_of=as_of, nwp=nwp, statuses=tuple(statuses))
 
 
+#: Ocean-heat-content files (NOAA OSPO CoastWatch na/np, na14/np14) post at
+#: most ~48h after 00Z of the day they are named for (47.93h the latest in
+#: CoastWatch listings, 2021-2026; the median is 11.5h on the old chain,
+#: 9.4h for v1r0 and 35.5h for v1r1, which is made a day after its name
+#: day). The lag is counted on the day a file is made, its creation day: a
+#: cycle at t reads the newest file made on or before
+#: date(t) - OHC_VALID_LAG. Up to 2025 day 084 (old chain and v1r0)
+#: the creation day is the name day, so that is the file named D-2; v1r1
+#: files, from 2025 day 085, are made the day after their name day, so a
+#: cycle reads the one named D-3. Counting creation days keeps every split's
+#: inputs (2021-2023 old chain, 2024 v1r0, 2025+ v1r1) the same age.
+#: data.real_ohc applies the rule, stepping back past a missing or rejected
+#: file. The SST half of ``sst_ohc`` (OISST v2.1) is a day earlier at D-1,
+#: which is what the combined source uses today because OHC is not a model
+#: input yet (docs/skill_gap_plan.md Phase 2b). When OHC lands, it carries
+#: its own valid time.
+OHC_VALID_LAG = timedelta(days=2)
+
+
 def _valid_time_for(source_key: str, t: datetime) -> datetime:
     """Valid time of the observation a cycle at ``t`` would use.
 
     Most observational feeds are current to ``t``. Ensemble perturbations share
-    the NWP lag; SST/OHC is a daily product persisted from the previous day.
+    the NWP lag; ``sst_ohc`` is a daily product persisted from the previous day
+    (SST half, D-1). Its OHC half is read two creation days back (see
+    :data:`OHC_VALID_LAG`), but OHC is not a model input yet, so the combined
+    source resolves on the SST rule.
     """
     if source_key == "ensemble_perturbations":
         return t - timedelta(hours=6)

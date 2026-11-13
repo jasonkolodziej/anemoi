@@ -36,7 +36,9 @@ like each per-model builder already skips it on its own.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +52,7 @@ from ..models.base import DEFAULT_LEADS, require_torch
 from .device import get_device
 from .real_run import (
     RunArtifacts,
+    StageWindow,
     boundaries_for_tracks,
     displacements_to_absolute,
     iter_stage_windows,
@@ -101,6 +104,10 @@ class JointLatentSamples:
     #: `real_run.StageWindow.persistence` for each row, ``(N, n_leads, 3)``
     #: displacements: what each basin's fusion/diffusion score is held to.
     persistence: np.ndarray | None = None
+    #: Each row's initial time (its window's current fix). With ``storm_ids``
+    #: it names the case, so a row can be matched to another forecast of the
+    #: same storm and time (`training.baseline_backtest`). Empty: not kept.
+    valid_times: tuple[datetime, ...] = ()
 
     def __len__(self) -> int:
         return len(self.z)
@@ -162,12 +169,37 @@ def _empty_samples(latent_dims: tuple[int, ...]) -> JointLatentSamples:
     )
 
 
+def joint_stage_windows(
+    tracks: list[Track], *, seed: int = 20260806, n_augment: int = 1,
+) -> tuple[list[StageWindow], list[StageWindow]]:
+    """The train and validation windows `extract_joint_latents` builds its
+    samples from, before any is skipped for a missing cached field.
+
+    This is the whole of what decides which cases fusion and diffusion are
+    validated on and what working fixes they read: the Stage B (operational
+    flavor) split of ``tracks``, and one generator seeded with ``seed`` that
+    draws the training storms' emulated working tracks first (``n_augment``
+    of each), then the validation storms' (one each). The order matters:
+    the same validation storms get different noise after a training pass
+    of a different length. Needs no torch and no gridded cache, so
+    anything that must name the same cases (`training.baseline_backtest`)
+    calls this rather than repeating it.
+    """
+    boundaries = boundaries_for_tracks(Flavor.GDAS_FINETUNE, tracks)
+    assignment = assign_splits(tracks, boundaries)
+    train_tracks = filter_tracks(tracks, assignment, Split.TRAIN)
+    val_tracks = filter_tracks(tracks, assignment, Split.VAL)
+
+    rng = np.random.default_rng(seed)
+    train_windows = list(iter_stage_windows(train_tracks, rng, n_augment))
+    val_windows = list(iter_stage_windows(val_tracks, rng, 1))
+    return train_windows, val_windows
+
+
 def _extract_for_tracks(
-    tracks: list[Track],
+    windows: Iterable[StageWindow],
     trained_artifacts: dict[str, RunArtifacts],
     gdas_cache_dir: Path | str,
-    rng: np.random.Generator,
-    n_augment: int,
     device=None,
 ) -> JointLatentSamples:
     from .real_run_cnn import cnn_input
@@ -197,13 +229,14 @@ def _extract_for_tracks(
     base_lon_rows: list[float] = []
     context_rows: list[np.ndarray] = []
     storm_ids: list[str] = []
+    valid_times: list[datetime] = []
     persistence_rows: list[np.ndarray] = []
 
     topo = None
     shape: tuple[int, int] | None = None
     gh, gw = GRID_SIZE
 
-    for sw in iter_stage_windows(tracks, rng, n_augment):
+    for sw in windows:
         task = FetchTask(
             storm_id=sw.storm_id, valid_time=sw.current.valid_time,
             lat=sw.current.lat, lon=sw.current.lon,
@@ -252,6 +285,7 @@ def _extract_for_tracks(
         base_lon_rows.append(sw.current.lon)
         context_rows.append(_context_features(sw))
         storm_ids.append(sw.storm_id)
+        valid_times.append(sw.current.valid_time)
         persistence_rows.append(sw.persistence)
 
     latent_dims = (
@@ -347,7 +381,7 @@ def _extract_for_tracks(
         z=z, y=y, mask=mask, base_lat=base_lat, base_lon=base_lon,
         predictions=predictions, true_absolute=true_abs, context=context,
         latent_dims=latent_dims, storm_ids=tuple(storm_ids),
-        persistence=np.stack(persistence_rows),
+        persistence=np.stack(persistence_rows), valid_times=tuple(valid_times),
     )
 
 
@@ -380,20 +414,38 @@ def extract_joint_latents(
     torch/MPS ``nn.LSTM`` platform bug ("Placeholder storage has not been
     allocated on MPS device") that CUDA (the real training VM) doesn't have.
     """
+    _require_group1(trained_artifacts)
+    train_windows, val_windows = joint_stage_windows(tracks, seed=seed, n_augment=n_augment)
+    train_samples = _extract_for_tracks(
+        train_windows, trained_artifacts, gdas_cache_dir, device=device,
+    )
+    val_samples = _extract_for_tracks(
+        val_windows, trained_artifacts, gdas_cache_dir, device=device,
+    )
+    return JointLatentBundle(train=train_samples, val=val_samples)
+
+
+def extract_validation_latents(
+    tracks: list[Track],
+    trained_artifacts: dict[str, RunArtifacts],
+    gdas_cache_dir: Path | str,
+    *,
+    seed: int = 20260806,
+    n_augment: int = 1,
+    device=None,
+) -> JointLatentSamples:
+    """`extract_joint_latents`' ``val`` alone, for a job that only scores
+    the validation windows: the same windows and working fixes, without
+    loading fields for and running the five models on every training
+    window. The training windows are still enumerated, because the
+    generator draws their working tracks before the validation storms'.
+    """
+    _require_group1(trained_artifacts)
+    _train, val_windows = joint_stage_windows(tracks, seed=seed, n_augment=n_augment)
+    return _extract_for_tracks(val_windows, trained_artifacts, gdas_cache_dir, device=device)
+
+
+def _require_group1(trained_artifacts: dict[str, RunArtifacts]) -> None:
     missing = [m for m in GROUP1_ORDER if m not in trained_artifacts]
     if missing:
         raise ValueError(f"missing trained Group 1 model(s): {missing}")
-
-    boundaries = boundaries_for_tracks(Flavor.GDAS_FINETUNE, tracks)
-    assignment = assign_splits(tracks, boundaries)
-    train_tracks = filter_tracks(tracks, assignment, Split.TRAIN)
-    val_tracks = filter_tracks(tracks, assignment, Split.VAL)
-
-    rng = np.random.default_rng(seed)
-    train_samples = _extract_for_tracks(
-        train_tracks, trained_artifacts, gdas_cache_dir, rng, n_augment, device=device,
-    )
-    val_samples = _extract_for_tracks(
-        val_tracks, trained_artifacts, gdas_cache_dir, rng, 1, device=device,
-    )
-    return JointLatentBundle(train=train_samples, val=val_samples)

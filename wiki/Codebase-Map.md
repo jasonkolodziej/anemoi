@@ -1,6 +1,6 @@
 # Codebase Map
 
-Reference implementation `anemoi` v2.2.0. Roughly 22,000 lines of Python under `src/` and 16,000 in `tests/` (68 files), plus the TypeScript Worker in `docker/api` and the SvelteKit console in `console/`. `src` layout, package `anemoi`.
+Reference implementation `anemoi` v2.2.0. Roughly 22,000 lines of Python under `src/` and 16,000 in `tests/` (81 files), plus the TypeScript Worker in `docker/api` and the SvelteKit console in `console/`. `src` layout, package `anemoi`.
 
 ```
 src/anemoi/
@@ -12,7 +12,8 @@ src/anemoi/
 ├── branding.py           wind-god registry: god <-> architecture, colours, modules
 ├── cli.py                schedule · sources · cycle · splits · ablation · era5-cache · gdas-cache ·
 │                         train · train-schedule · retrain-check · registry-pull · registry-reconcile ·
-│                         drift-reference-fit · spread-backtest · consistency-distill · skew-audit
+│                         drift-reference-fit · spread-backtest · consistency-distill · skew-audit ·
+│                         adeck-fetch · baseline-backtest · validation-forecasts
 ├── api/                  Anemoi-API (FastAPI; `uv sync --extra api`)
 │   ├── main.py           app factory, CORS, error handlers; builds RealState at startup
 │   ├── deps.py           DemoState vs RealState selection; optional API-key gate
@@ -29,8 +30,10 @@ src/anemoi/
 ├── data/
 │   ├── sources.py        source registry with latency + role; operational guard
 │   ├── besttrack.py      working vs final tracks; Stage B noise emulator
-│   ├── hurdat2.py        real HURDAT2 archive parser -> FINAL-quality Track
-│   ├── atcf.py           real b-deck/TC-Vitals parsers -> WORKING-quality Fix/Track
+│   ├── hurdat2.py        real HURDAT2 archive parser -> FINAL-quality Track; each fix's system status
+│   ├── atcf.py           real b-deck/TC-Vitals parsers -> WORKING-quality Fix/Track; a-deck guidance (verification only)
+│   ├── adeck_source.py   NHC's a-deck archive: fetch into a cache, read it back (verification only)
+│   ├── nhc_verification.py  NHC's per-forecast official errors, to check the a-deck join against
 │   ├── hurdat2_source.py newest Atlantic HURDAT2 from NHC's listing, with a manifest (#216)
 │   ├── noise_calibration.py working-track noise from archived as-issued fixes vs HURDAT2 (#216)
 │   ├── atcf_archive.py   NHC's as-issued TC-Vitals/b-deck/a-deck archived verbatim to R2 (#213)
@@ -46,11 +49,13 @@ src/anemoi/
 │   ├── gridded_cache.py  source-agnostic concurrent fetch + disk cache engine, plus durable R2 archive sync (#22)
 │   ├── era5_cache.py     era5-specific fetch fn over gridded_cache (Stage A)
 │   ├── gdas_cache.py     gdas-specific fetch fn over gridded_cache (Stage B); one NWP lead per cache dir (#215)
+│   ├── cache_localize.py copy a cache tree to local disk once, before training reads it every epoch (#234)
 │   ├── real_goes.py      GOES-18/19 ABI imagery + derived products -> SatelliteCrop (#146)
 │   ├── real_microwave.py RSS SSMIS microwave radiometer data (#147)
 │   ├── real_dropsonde.py NOAA/AFRC dropsonde profiles (#147)
 │   ├── real_ndbc.py      NDBC buoy / C-MAN observations (#147)
 │   ├── real_sst.py       NCEI OISST v2.1 sea surface temperature (#147)
+│   ├── real_ohc.py       NOAA OSPO CoastWatch ocean heat content, NA+NP placed on the 721x1440 grid (fetch + decode only)
 │   └── real_ensemble.py  NOAA GEFS ensemble perturbation members (#147)
 ├── models/
 │   ├── base.py           lazy require_torch(), ModelSpec, DEFAULT_LEADS
@@ -65,6 +70,7 @@ src/anemoi/
 │   ├── triggers.py       retrain triggers + derived-model cascade
 │   ├── device.py         MPS/CUDA/CPU selection for local (non-cloud) runs
 │   ├── streaming.py      per-batch torch DataLoader for large cached datasets (#22)
+│   ├── optim.py          the transformer's AdamW + warmup + cosine + clipping (#238)
 │   ├── capacity_ablation.py  #9 capacity-vs-sample-size ablation harness
 │   ├── noise_sensitivity.py  #12 WorkingTrackNoise sensitivity harness
 │   ├── real_run.py       real Stage A/B curriculum for the LSTM baseline (#22) -- track-only, no gridded cache needed
@@ -81,6 +87,7 @@ src/anemoi/
 │   ├── real_inference_cycle.py    real deterministic_fn for inference.cycle.run_cycle (#78, #85)
 │   ├── real_inference_ensemble.py real ensemble_fn (seeded per cycle) for run_cycle (#78, #85, #188)
 │   ├── spread_backtest.py     Anemoi-Spread calibration backtest (#10)
+│   ├── baseline_backtest.py   NHC/GFS/ECMWF guidance on the registry's validation windows; the per-case forecast file
 │   └── consistency_distillation.py  consistency distillation for Anemoi-Spread (#15)
 ├── tracking/
 │   ├── tags.py               run tags incl. input_flavor, nwp_cycle_lag
@@ -101,6 +108,8 @@ src/anemoi/
 │   └── calibration_audit.py  served cone/intensity containment against later fixes (#184)
 └── metrics/
     ├── track.py          verification, beat rate, Diebold–Mariano
+    ├── basin.py          per-basin scores and sample counts; verified basins
+    ├── homogeneous.py    several forecasts on the cases all of them have, with storm-block intervals
     ├── probabilistic.py  CRPS, Brier, spread-skill, rank histogram
     └── ensemble_calibration.py  per-lead ensemble calibration (#10's measurement core)
 ```
@@ -126,8 +135,9 @@ docker/
 console/                   SvelteKit console on Cloudflare Workers (anemoi.systems)
 ├── src/routes/            storms, storms/[stormId], models, sources, registry, monitoring,
 │                          retraining, docs, auth, profile; api/[...path] proxies to anemoi-api-real
-├── src/lib/               api client, components/anemoi (ConeMap, RIFlagBanner, …),
-│                          lastKnown.ts (last-seen data per page, #207), poll.ts, utils.ts
+├── src/lib/               api client, components/anemoi (ConeMap, RIFlagBanner, system/, …),
+│                          lastKnown.ts (last-seen data per page, #207), poll.ts, utils.ts,
+│                          geo.ts (antimeridian-safe longitudes, #239), notify.ts (toasts)
 ├── scripts/sync-wiki.mjs  renders ../wiki into /docs at build time
 ├── migrations/            D1 schema (auth, API keys, cycle_runs)
 └── e2e/                   Playwright suites
@@ -141,7 +151,7 @@ wiki/                      source of the GitHub wiki, published on merge by .git
 graphify-out/              code knowledge graph for agents, rebuilt by CI (see below)
 ```
 
-Also at the repo root: `configs/` (three YAML files read at runtime, see [Configuration Reference](Configuration-Reference)), `tests/` (68 files, see [Testing](Testing)), `docs/`, `slurm/` (SLURM-equivalent job scripts for data-ingest and real training jobs -- `#SBATCH`-headered, `sbatch`-submittable on a real cluster; `run_local.sh` emulates `sbatch` via `tmux` on the current single-VM setup, see `slurm/README.md`), `README.md`, `PLAN.md`, `PROJECT.md`, `AGENTS.md` (notes for coding agents; `CLAUDE.md` imports it).
+Also at the repo root: `configs/` (three YAML files read at runtime, see [Configuration Reference](Configuration-Reference)), `tests/` (81 files, see [Testing](Testing)), `docs/`, `slurm/` (SLURM-equivalent job scripts for data-ingest and real training jobs -- `#SBATCH`-headered, `sbatch`-submittable on a real cluster; `run_local.sh` emulates `sbatch` via `tmux` on the current single-VM setup, see `slurm/README.md`), `README.md`, `PLAN.md`, `PROJECT.md`, `AGENTS.md` (notes for coding agents; `CLAUDE.md` imports it).
 
 ### Knowledge graph
 
@@ -169,7 +179,7 @@ At the time of writing it holds about 5,900 nodes and 15,000 edges, and `graph.j
 | `GriddedFields`, `FeatureSet` | `data.features` | Flavor-tagged fields and derived scalars |
 | `FetchTask`, `FetchCacheReport`, `run_fetch_cache()`, `SyncReport`, `sync_cache_to_archive()` | `data.gridded_cache` | Source-agnostic concurrent fetch + disk cache engine, plus durable-archive sync (#22) |
 | `run_fetch_cache()` | `data.era5_cache` | ERA5/Stage A fetch fn over `data.gridded_cache` |
-| `run_fetch_cache()`, `GDAS_ARCHIVE_START` | `data.gdas_cache` | GDAS/Stage B fetch fn over `data.gridded_cache`; filters fixes before the real archive's verified 2021-01-01 start |
+| `run_fetch_cache()`, `GDAS_ARCHIVE_START` | `data.gdas_cache` | GDAS/Stage B fetch fn over `data.gridded_cache`; filters fixes before 2021-03-22 18Z, the first valid time whose f006 the reader can fetch |
 | `Normalizer` | `data.features` | Flavor-locked standardisation |
 | `Split`, `SplitAssignment` | `data.splits` | Storm-wise split membership |
 | `storm_relative_sequence()`, `displacement_nm()` | `data.storm_relative` | Storm-relative coordinate transform for track sequences |
@@ -181,7 +191,11 @@ At the time of writing it holds about 5,900 nodes and 15,000 edges, and `graph.j
 | `MeshTopology`, `build_mesh_topology()`, `batch_graph()`, `run_gnn_curriculum()` | `training.real_run_gnn` | GNN analog -- cached grid treated as a lattice mesh, block-diagonal batched across samples |
 | `PinnStageSamples`, `build_pinn_samples()`, `run_pinn_curriculum()` | `training.real_run_pinn` | PINN analog -- corrects a candidate track from an internally-trained LSTM using a real environment vector + `physics_residuals` |
 | `RunArtifacts` | `training.real_run` | Trained model + exact standardisation stats, returned by every Group 1 `run_*_curriculum()` for real latent extraction to consume (#22) |
-| `JointLatentSamples`, `JointLatentBundle`, `extract_joint_latents()`, `CONTEXT_FEATURE_NAMES` | `training.real_latents` | Real per-window latents/predictions/context from the five trained Group 1 models, train/val split |
+| `JointLatentSamples`, `JointLatentBundle`, `extract_joint_latents()`, `extract_validation_latents()`, `CONTEXT_FEATURE_NAMES` | `training.real_latents` | Real per-window latents/predictions/context from the five trained Group 1 models, train/val split; the validation half alone for jobs that only score it |
+| `joint_stage_windows()` | `training.real_latents` | The train and validation windows (and their noise draw) fusion and diffusion are built on, without torch |
+| `Adeck`, `AdeckPoint`, `parse_adeck()` | `data.atcf` | One storm's a-deck: each technique's forecast by (technique, initial time, tau) |
+| `Member`, `HomogeneousRow`, `score_homogeneous()` | `metrics.homogeneous` | Homogeneous comparison per basin, lead and quantity |
+| `ValidationCases`, `TechniqueSpec`, `ValidationForecasts`, `run_baseline_backtest()` | `training.baseline_backtest` | The registry's validation windows, a-deck members on them, the per-case model forecast file |
 | `train_diffusion_stage()`, `run_diffusion_curriculum()` | `training.real_run_diffusion` | Real DDPM epsilon-prediction training for Anemoi-Spread against a `JointLatentBundle` |
 | `train_fusion_stage()`, `run_fusion_curriculum()` | `training.real_run_fusion` | Real masked absolute-space consensus training against a `JointLatentBundle` |
 | `RealOrchestratorRunner` | `training.real_orchestrator` | `Task -> RunOutcome` for `orchestrator.run_schedule`, dispatching to all seven real tasks (five Group 1 + latents + diffusion + fusion); registers + evaluates promotion, with `latent_signature` for the two derived models |
@@ -244,6 +258,8 @@ Every one names the section it enforces, so a stack trace points at the policy.
 | `InferenceCycleError` | `training.real_inference_cycle` | No Group 1 model could contribute; the cycle falls back to the synthetic deterministic path |
 | `InferenceEnsembleError` | `training.real_inference_ensemble` | Anemoi-Spread couldn't run; the cycle falls back to the climatological ensemble |
 | `SpreadBacktestError` | `training.spread_backtest` | Backtest inputs missing or inconsistent |
+| `BaselineBacktestError` | `training.baseline_backtest` | No validation window, a bad technique spec, or a forecast file that is not for these cases (another seed, augmentation count or HURDAT2) |
+| `OfficialErrorsError` | `data.nhc_verification` | A file that is not one of NHC's per-forecast official error files |
 
 ---
 

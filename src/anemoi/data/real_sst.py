@@ -1,6 +1,6 @@
 """Real NCEI OISST v2.1 sea surface temperature (the ``sst_ohc`` source's
-SST half -- see the note near the bottom of this module for why the OHC
-half isn't implemented here).
+SST half; the OHC half is ``data.real_ohc`` -- see the note near the
+bottom of this module).
 
 Format reference: NOAA NCEI's public daily OISST v2.1 archive, plain
 HTTPS, no credentials, no rate limit -- same anonymous-archive tier as
@@ -99,13 +99,10 @@ def sst_at(
     return float(sst_c[lat_idx, lon_idx])
 
 
-#: Ocean heat content is deliberately not implemented here -- see the
-#: module docstring's "OHC half" note. Short version: NOAA OSPO's
-#: ERDDAP OHC/TCHP products looked real (200, real schema, units
-#: matching OHC_PLACEHOLDER_KJ_CM2's own naming exactly) but their real
-#: data stops at 2026-01-26, ~8 months stale as of this writing --
-#: confirmed via a real query, not assumed from documentation. Serving
-#: that as "real, current OHC" would be worse than the honest
-#: placeholder it would replace. GODAS/ORAS5 remains the documented
-#: path; its exact real access point wasn't found in the time spent
-#: on this pass.
+# Ocean heat content, the source's other half, is ``data.real_ohc``: NOAA
+# OSPO's CoastWatch files, fetched and decoded only, so
+# ``GriddedFields.ohc`` is still real_gridded.OHC_PLACEHOLDER_KJ_CM2
+# (docs/skill_gap_plan.md Phase 2b). An earlier version of this note ruled
+# OHC out because the data it found stops at 2026-01-26; that was AOML's
+# HDB ERDDAP ``UOHC_2026``/``TCHP``, a different endpoint, while
+# CoastWatch's files are current.

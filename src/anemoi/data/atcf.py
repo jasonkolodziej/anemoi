@@ -1,4 +1,5 @@
-"""ATCF b-deck and TC-Vitals parsers (working-quality best track).
+"""ATCF b-deck, a-deck and TC-Vitals parsers (working-quality best track,
+and the operational guidance it is verified against).
 
 Scope v2.1 PLAN.md §4 "productionise" table -- working track row. These are
 the real-time products the model actually sees in production, as opposed to
@@ -15,10 +16,17 @@ HURDAT2 FINAL track and measure the emulator's real error, instead of
 relying on the scope's placeholder constants or the literature estimate in
 ``WorkingTrackNoise.from_literature()``.
 
+`parse_adeck` reads the a-deck: every forecast technique's guidance for
+one storm (NHC's official forecast, the GFS tracker, CLIPER...), in the
+b-deck's row layout. It is read for verification only
+(`training.baseline_backtest`), never as a model input: a technique's row
+for cycle ``t`` is written hours after ``t``.
+
 Format references:
 
-* b-deck: NRL ATCF ``abdeck.txt`` (comma-separated; basin/cyclone-number/
-  date-time-group/tech/tau/lat/lon/vmax/mslp/.../stormname).
+* b-deck and a-deck: NRL ATCF ``abdeck.txt`` (comma-separated; basin/
+  cyclone-number/date-time-group/technum/tech/tau/lat/lon/vmax/mslp/.../
+  stormname).
 * TC-Vitals: NCEP "Format of Tropical Cyclone Records (TCVITALS)"
   (fixed-column, whitespace-separated in practice since no field embeds a
   space). The field *order* below is verified against that spec; exact
@@ -29,8 +37,12 @@ Format references:
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from ..geo import wrap_longitude
 from ..time_utils import SYNOPTIC_HOURS
 from .besttrack import Fix, Track, TrackQuality
 
@@ -147,6 +159,151 @@ def parse_bdeck(text: str) -> list[Track]:
         deduped = [f for i, f in enumerate(fixes) if i == 0 or f.valid_time != fixes[i - 1].valid_time]
         tracks.append(Track(storm_id=storm_id, fixes=tuple(deduped)))
     return tracks
+
+
+#: ``AL092024``: two-letter basin, two-digit cyclone number, four-digit season.
+STORM_ID_RE = re.compile(r"[A-Z]{2}\d{6}")
+
+#: Fields an a-deck row needs to carry a forecast point: through VMAX.
+_ADECK_FIELDS = 9
+
+
+@dataclass(frozen=True, slots=True)
+class AdeckPoint:
+    """One technique's forecast for one lead. Not every technique forecasts
+    everything: CLP5, TVCN and XTRP give a track and no wind; IVCN and SHF5
+    give a wind and no position. What a row does not give is None, never
+    the file's zero."""
+
+    lat: float | None
+    lon: float | None
+    max_wind_kt: float | None
+    min_pressure_mb: float | None = None
+
+    @property
+    def has_position(self) -> bool:
+        return self.lat is not None and self.lon is not None
+
+
+@dataclass(frozen=True, slots=True)
+class Adeck:
+    """One storm's a-deck: each technique's forecast points, by
+    ``(technique, initial time, tau in hours)``, with what was left out."""
+
+    storm_id: str
+    points: dict[tuple[str, datetime, int], AdeckPoint]
+    #: Non-blank rows in the file, whatever their technique.
+    n_rows: int
+    #: Rows of a wanted technique that could not be read (too short, a
+    #: malformed field, an off-synoptic initial time).
+    n_skipped: int
+    #: Rows of a wanted technique for another cyclone number.
+    n_other_storm: int
+    #: Rows kept whose BASIN column is not the storm id's (a storm keeps its
+    #: number, and usually its column, when it crosses into another basin).
+    n_basin_mismatch: int
+    #: technique -> repeats of a (initial time, tau) that disagree with the
+    #: row kept. A point normally repeats only for its 34/50/64 kt wind radii.
+    conflicts: dict[str, int]
+
+    def get(self, technique: str, init_time: datetime, tau_hours: int) -> AdeckPoint | None:
+        return self.points.get((technique, init_time, tau_hours))
+
+    def techniques(self) -> tuple[str, ...]:
+        return tuple(sorted({tech for tech, _init, _tau in self.points}))
+
+    def init_times(self, technique: str) -> frozenset[datetime]:
+        """The initial times ``technique`` has any row for."""
+        return frozenset(init for tech, init, _tau in self.points if tech == technique)
+
+
+def _adeck_position(lat_field: str, lon_field: str) -> tuple[float | None, float | None]:
+    if not lat_field or not lon_field:
+        return None, None
+    lat, lon = _parse_latlon(lat_field, lon_field)
+    if lat == 0.0 and lon == 0.0:
+        return None, None  # ``0N, 0W``: the technique gives no position
+    if not -90.0 <= lat <= 90.0:
+        raise AtcfError(f"latitude out of range: {lat_field!r}")
+    return lat, float(wrap_longitude(lon))
+
+
+def _adeck_positive(field: str) -> float | None:
+    """A VMAX or MSLP field: blank or zero means not forecast."""
+    if not field:
+        return None
+    value = float(field)
+    return value if value > 0.0 else None
+
+
+def parse_adeck(text: str, storm_id: str, techniques: Iterable[str] | None = None) -> Adeck:
+    """Parse one storm's a-deck text into its techniques' forecast points.
+
+    ``techniques`` limits what is read (a season's a-deck holds some 270
+    techniques and hundreds of thousands of rows; a row of any other
+    technique is dropped on its technique column alone). Rows are matched
+    to ``storm_id`` by cyclone number, within the storm's own file -- not
+    by the BASIN column, which is counted when it differs.
+
+    A point repeats once per wind-radii threshold; the first row is kept
+    and a repeat that disagrees with it is counted (`Adeck.conflicts`).
+    Longitudes are wrapped into [-180, 180). Rows that cannot be read are
+    counted, not raised on: an a-deck is a working file with rows from
+    dozens of centres. Raises `AtcfError` only when ``storm_id`` is not an
+    ATCF id or the text holds no a-deck row at all.
+    """
+    if not STORM_ID_RE.fullmatch(storm_id):
+        raise AtcfError(f"not an ATCF storm id: {storm_id!r}")
+    basin, number = storm_id[:2], int(storm_id[2:4])
+    wanted = None if techniques is None else frozenset(techniques)
+
+    points: dict[tuple[str, datetime, int], AdeckPoint] = {}
+    conflicts: dict[str, int] = {}
+    n_rows = n_records = n_skipped = n_other_storm = n_basin_mismatch = 0
+    for raw_line in text.splitlines():
+        if not raw_line.strip():
+            continue
+        n_rows += 1
+        head = raw_line.split(",", 5)
+        if len(head) < 5:
+            continue  # no technique column: not a guidance row
+        n_records += 1
+        tech = head[4].strip()
+        if wanted is not None and tech not in wanted:
+            continue
+        parts = [p.strip() for p in raw_line.split(",")]
+        try:
+            if len(parts) < _ADECK_FIELDS:
+                raise AtcfError("too few fields")
+            cyclone, tau = int(parts[1]), int(parts[5])
+            init_time = datetime.strptime(parts[2], "%Y%m%d%H").replace(tzinfo=UTC)
+            if len(parts[2]) != 10 or init_time.hour not in SYNOPTIC_HOURS:
+                raise AtcfError("not a synoptic date-time-group")
+            lat, lon = _adeck_position(parts[6], parts[7])
+            wind = _adeck_positive(parts[8])
+            mslp = _adeck_positive(parts[9]) if len(parts) > 9 else None
+        except ValueError:  # AtcfError is one
+            n_skipped += 1
+            continue
+        if cyclone != number:
+            n_other_storm += 1
+            continue
+        if parts[0].upper() != basin:
+            n_basin_mismatch += 1
+
+        key = (tech, init_time, tau)
+        kept = points.get(key)
+        if kept is None:
+            points[key] = AdeckPoint(lat=lat, lon=lon, max_wind_kt=wind, min_pressure_mb=mslp)
+        elif (kept.lat, kept.lon, kept.max_wind_kt) != (lat, lon, wind):
+            conflicts[tech] = conflicts.get(tech, 0) + 1
+
+    if n_records == 0:
+        raise AtcfError(f"no a-deck record in the text for {storm_id}")
+    return Adeck(
+        storm_id=storm_id, points=points, n_rows=n_rows, n_skipped=n_skipped,
+        n_other_storm=n_other_storm, n_basin_mismatch=n_basin_mismatch, conflicts=conflicts,
+    )
 
 
 def parse_tcvitals(text: str) -> list[Fix]:

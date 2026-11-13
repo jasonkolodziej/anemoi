@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { closeSync, openSync, readdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { closeSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, unlinkSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { BrowserContext, Page } from '@playwright/test';
 
 const EMAIL_DIR = join(import.meta.dirname, '../../.wrangler/tmp/email');
@@ -68,6 +68,10 @@ const STALE_LOCK_MS = 30_000;
  */
 export async function withEmailLock<T>(fn: () => Promise<T>): Promise<T> {
 	const deadline = Date.now() + 60_000;
+	// Under `vite dev` nothing creates .wrangler/tmp until the first email
+	// is written, so on a fresh checkout the first sign-in failed here with
+	// ENOENT instead of taking the lock.
+	mkdirSync(dirname(EMAIL_LOCK), { recursive: true });
 	for (;;) {
 		try {
 			closeSync(openSync(EMAIL_LOCK, 'wx'));

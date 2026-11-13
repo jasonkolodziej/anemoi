@@ -26,6 +26,7 @@ skipped entirely.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -35,6 +36,11 @@ from .besttrack import Fix, Track, TrackQuality
 
 #: HURDAT2's sentinel for a field that was not measured/reported.
 MISSING = -999.0
+
+#: The statuses NHC counts as a tropical or subtropical cyclone: depression,
+#: storm, hurricane, and their subtropical forms. Extratropical (``EX``),
+#: remnant low (``LO``), wave (``WV``) and disturbance (``DB``) are not.
+TROPICAL_STATUSES: frozenset[str] = frozenset({"TD", "TS", "HU", "SD", "SS"})
 
 #: Minimum comma-separated fields on a header / data line before we consider
 #: the line malformed rather than just short on trailing (optional) columns.
@@ -82,11 +88,15 @@ def _parse_header(line: str) -> tuple[str, str | None, int]:
     return storm_id, name, n_entries
 
 
-def _parse_data_line(storm_id: str, line: str) -> Fix | None:
+def _parse_data_row(storm_id: str, line: str) -> tuple[Fix, str] | None:
+    """One data row as ``(fix, status)``, or None for a row that is not a
+    fix (off-synoptic, or wind or pressure missing). ``status`` is the
+    row's system status (``HU``, ``TS``, ``TD``, ``EX``, ``SD``, ``SS``,
+    ``LO``, ``WV``, ``DB``), which `Fix` does not carry."""
     parts = [p.strip() for p in line.strip().rstrip(",").split(",")]
     if len(parts) < _DATA_FIELDS:
         raise Hurdat2Error(f"malformed data line: {line!r}")
-    date_s, time_s = parts[0], parts[1]
+    date_s, time_s, status = parts[0], parts[1], parts[3]
     lat_s, lon_s, wind_s, pres_s = parts[4], parts[5], parts[6], parts[7]
 
     if len(time_s) != 4 or not time_s.isdigit():
@@ -103,7 +113,7 @@ def _parse_data_line(storm_id: str, line: str) -> Fix | None:
     valid_time = datetime.strptime(date_s + time_s, "%Y%m%d%H%M").replace(tzinfo=UTC)
     lat, lon = _parse_latlon(lat_s, lon_s)
 
-    return Fix(
+    fix = Fix(
         storm_id=storm_id,
         valid_time=valid_time,
         lat=lat,
@@ -112,17 +122,14 @@ def _parse_data_line(storm_id: str, line: str) -> Fix | None:
         min_pressure_mb=pressure,
         quality=TrackQuality.FINAL,
     )
+    return fix, status
 
 
-def parse_hurdat2(text: str) -> list[Track]:
-    """Parse a full HURDAT2 file's text into FINAL-quality :class:`Track` objects.
-
-    One :class:`Track` per storm header block, in file order. A storm with no
-    synoptic-hour, fully-reported entries after filtering is skipped rather
-    than raised on -- it carries no fix the rest of the pipeline can use.
-    """
+def _storm_rows(text: str) -> Iterator[tuple[str, str | None, list[tuple[Fix, str]]]]:
+    """``(storm_id, name, [(fix, status), ...])`` for each storm header
+    block, in file order: the one walk over a HURDAT2 file, so the tracks
+    and the statuses can never disagree about which rows are fixes."""
     lines = [ln for ln in text.splitlines() if ln.strip()]
-    tracks: list[Track] = []
     i = 0
     while i < len(lines):
         storm_id, name, n_entries = _parse_header(lines[i])
@@ -133,11 +140,40 @@ def parse_hurdat2(text: str) -> list[Track]:
                 f"storm {storm_id}: header declares {n_entries} entries, "
                 f"only {len(raw_rows)} remain in the file"
             )
+        yield storm_id, name, [
+            r for row in raw_rows if (r := _parse_data_row(storm_id, row)) is not None
+        ]
 
-        fixes = [f for row in raw_rows if (f := _parse_data_line(storm_id, row)) is not None]
-        if fixes:
-            tracks.append(Track(storm_id=storm_id, fixes=tuple(fixes), name=name))
-    return tracks
+
+def parse_hurdat2(text: str) -> list[Track]:
+    """Parse a full HURDAT2 file's text into FINAL-quality :class:`Track` objects.
+
+    One :class:`Track` per storm header block, in file order. A storm with no
+    synoptic-hour, fully-reported entries after filtering is skipped rather
+    than raised on -- it carries no fix the rest of the pipeline can use.
+    """
+    return [
+        Track(storm_id=storm_id, fixes=tuple(fix for fix, _status in rows), name=name)
+        for storm_id, name, rows in _storm_rows(text)
+        if rows
+    ]
+
+
+def parse_hurdat2_statuses(text: str) -> dict[tuple[str, datetime], str]:
+    """The system status of every fix `parse_hurdat2` keeps, by
+    ``(storm_id, valid_time)``.
+
+    NHC verifies a forecast only while the system is a tropical or
+    subtropical cyclone (`TROPICAL_STATUSES`) at both the initial and the
+    verifying time; training windows carry no such rule, so a comparison
+    with NHC's numbers needs the status beside each fix
+    (`training.baseline_backtest`). Built from the same rows as the tracks.
+    """
+    return {
+        (storm_id, fix.valid_time): status
+        for storm_id, _name, rows in _storm_rows(text)
+        for fix, status in rows
+    }
 
 
 def parse_hurdat2_file(path: str | Path) -> list[Track]:

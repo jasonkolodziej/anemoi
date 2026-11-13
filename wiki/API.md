@@ -94,7 +94,17 @@ All paths are prefixed `/v1`.
 |---|---|---|
 | GET | `/health` | Status, API version, anemoi version, whether torch is installed |
 | GET | `/models` | The six wind gods + Fusion — a console's design-token source |
-| GET | `/sources` | The §4.1 data source registry, same rows as `anemoi sources` |
+| GET | `/sources` | The §4.1 data source registry, same rows as `anemoi sources`. Each row carries `role` (what the source may be used for) and `used_by` (who uses it today, below) |
+
+**`used_by`** on a `/sources` row is a list from a fixed vocabulary, in a fixed order:
+
+1. The Group 1 models that read the source as an input, in training, in a forecast cycle or both: `lstm`, `cnn`, `transformer`, `gnn`, `pinn`. This is registry order (`tracking.registry.GROUP1_MODELS`), not the order `/models` lists them in.
+2. `labels`: the source supplies the supervision targets.
+3. `verification`: the source is kept for verifying forecasts and is not a model input.
+
+`[]` means no model, label or verification code reads the source yet; the cycle planner can still flag a late one `missing:{source}` (`goes`, `sst_ohc` and `ensemble_perturbations` are in its optional tier, with `ndbc`). `role` can't say this: eight of the ten sources are `operational`, and two of them feed a model. What `role` does tell apart is training from serving: `era5` lists the four gridded models, and no cycle reads it.
+
+The list names these uses, not every reader: fusion also reads `besttrack_working`, the calibration monitor scores served cones against later working fixes, and a cycle on an archive storm takes `besttrack_final` as its track (flagged `input:final_best_track`). `verification` on `dropsonde` and `ndbc` is a designation: they won't become model inputs, and no verification code reads them yet. The values per source, and where they come from in the code, are on [Data Sources](Data-Sources#who-uses-each-source). The console's Sources page and system graph read this field. They count only the five model names as model inputs: an entry outside this vocabulary, which a newer API could send, is shown as sent and never drawn as feeding a model.
 
 ### Schedule
 

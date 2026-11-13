@@ -283,6 +283,40 @@ def test_current_fields_never_fetches_before_the_real_gdas_archive_starts(tmp_pa
     assert _current_fields(track, old_fix, tmp_path) is None
 
 
+def test_fetch_live_nwp_floor_is_inclusive_and_reads_the_first_atmos_cycle(tmp_path, monkeypatch):
+    """At GDAS_ARCHIVE_START (2021-03-22 18Z) the t-6 f006 comes from the
+    first cycle under gfs_url's atmos/ path (12Z) and is fetched; 6 h
+    earlier it would come from the flat-layout 06Z cycle (a 404 at that
+    path), so nothing is requested there."""
+    from anemoi.data.gdas_cache import GDAS_ARCHIVE_START, GFS_ATMOS_FIRST_CYCLE
+    from anemoi.training.real_inference_live import fetch_live_nwp
+
+    calls: list[tuple] = []
+
+    def fake_fetch_one(valid_time, lat, lon, **kwargs):
+        calls.append((valid_time, kwargs.get("lead_hours")))
+        return make_fields(valid_time, shape=(9, 9))
+
+    monkeypatch.setattr("anemoi.data.gdas_cache.fetch_one", fake_fetch_one)
+    track = make_track("AL012021", n=3)
+
+    def fix_at(valid_time):
+        return Fix(
+            storm_id=track.storm_id, valid_time=valid_time,
+            lat=track.fixes[-1].lat, lon=track.fixes[-1].lon,
+            max_wind_kt=60.0, min_pressure_mb=990.0, quality=TrackQuality.WORKING,
+        )
+
+    before = fix_at(GDAS_ARCHIVE_START - timedelta(hours=6))
+    assert fetch_live_nwp(track, before, tmp_path) == (None, None)
+    assert calls == []
+
+    fields, nwp = fetch_live_nwp(track, fix_at(GDAS_ARCHIVE_START), tmp_path)
+    assert fields is not None
+    assert calls == [(GDAS_ARCHIVE_START, 6)]
+    assert nwp.nwp_cycle == GFS_ATMOS_FIRST_CYCLE and nwp.lag_hours == 6 and not nwp.degraded
+
+
 def test_gdas_likely_unpublished_true_within_real_typical_latency():
     """Real GDAS typical latency is ~3.5h (data.sources) -- a valid_time
     only 1h before `now` is still inside that window."""

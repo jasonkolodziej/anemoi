@@ -111,6 +111,14 @@ See [Branding and Naming](Branding) for the full system. Each architecture is pe
 | **Underdispersion** | Spread–skill below 0.8. The ensemble is over-confident |
 | **Rank histogram** | Talagrand diagram. Flat = calibrated; U-shaped = underdispersed |
 | **Diebold–Mariano** | Test for statistically significant difference in forecast accuracy |
+| **Homogeneous sample** | The cases every compared forecast has. Mean errors compare only on the same cases |
+| **a-deck** | ATCF file holding every forecast technique's guidance for one storm. Verification only: a row for cycle `t` is written hours after `t` |
+| **OFCL / OFCO** | NHC's (or CPHC's) official forecast; OFCO keeps the regular advisory a special one replaced, which is the one NHC verifies |
+| **AVNO / AVNI / AVN2** | GFS tracker: AVNO the raw track of the run started at `t` (*late*: after the advisory), AVNI the previous run shifted to the storm's position at `t` (*early*: available to the cycle), AVN2 the run before that |
+| **EMX / EMXI / EMX2** | The same for ECMWF, whose full runs start at 00 and 12Z: EMXI exists at 06/18Z, EMX2 at 00/12Z |
+| **CLP5 / OCD5** | CLIPER5, the climatology-and-persistence track; OCD5 adds Decay-SHIFOR5 intensity. NHC's skill baseline |
+| **XTRP** | Extrapolation of the current motion from the working fixes: persistence as an operational centre has it |
+| **CARQ** | The a-deck's record of the as-issued initial fix (tau 0) and its recent history (negative taus) |
 
 ## Architectures
 

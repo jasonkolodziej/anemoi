@@ -6,6 +6,7 @@ never re-deriving a field the dataclass already computed.
 from __future__ import annotations
 
 from ..branding import FUSION_COLOR, GODS, STRUCTURAL_COLORS, WindGod
+from ..data import sources
 from ..data.sources import DataSource
 from ..inference.cycle import CycleOutput
 from ..inference.scheduler import CyclePlan
@@ -41,13 +42,14 @@ def source_out(src: DataSource) -> s.SourceOut:
     return s.SourceOut(
         key=src.key,
         provider=src.provider,
-        role=src.role.value,
+        role=src.role,
         is_operational=src.is_operational,
         typical_latency_minutes=src.typical_latency.total_seconds() / 60.0,
         max_latency_minutes=src.max_latency.total_seconds() / 60.0,
         fmt=src.fmt,
         retention=src.retention,
         notes=src.notes,
+        used_by=list(sources.used_by(src.key)),
     )
 
 

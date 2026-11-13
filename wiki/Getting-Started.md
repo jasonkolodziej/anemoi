@@ -52,21 +52,27 @@ cycle 20260806_06Z  start 06:45Z  nwp t-6h
 
 ```bash
 uv run anemoi schedule 2026-08-06 --worst-case   # plan against max feed latencies
-uv run anemoi sources                            # which feeds may be read in production
+uv run anemoi sources                            # which feeds may be read in production, and who reads them
 uv run anemoi cycle 20260806_06Z                 # one demo cycle, JSON payload out
 uv run anemoi splits --start 2015 --end 2026     # storm-wise split summary
 ```
 
-`anemoi sources` marks non-operational sources with `*`:
+`anemoi sources` marks non-operational sources with `*`, and its **used by** column says which models read each source (excerpt):
 
 ```
-* besttrack_final         labels_only    ~4320.0h  NHC / NOAA (HURDAT2)
-  besttrack_working       operational    ~   0.8h  NHC ATCF (a-/b-deck, TC-Vitals)
-  gdas_gfs                operational    ~   3.5h  NOAA NOMADS
-* era5                    pretrain_only  ~ 120.0h  Copernicus CDS
+  source                  role            latency  used by                      provider
+* besttrack_final         labels_only    ~4320.0h  labels, verification         NHC / NOAA (HURDAT2)
+  besttrack_working       operational    ~   0.8h  lstm, pinn                   NHC ATCF (a-/b-deck, TC-Vitals)
+  gdas_gfs                operational    ~   3.5h  cnn, transformer, gnn, pinn  NOAA NOMADS (live cycle feed); ...
+  goes                    operational    ~   0.1h  not used yet                 NOAA AWS (GOES-18/19) -- implemented, data.real_goes
+* era5                    pretrain_only  ~ 120.0h  cnn, transformer, gnn, pinn  Google ARCO-ERA5 ...
 
 * not readable during a forecast cycle (Scope v2.1 §4.6)
+used by: the models that read the source as an input, in training or in a cycle, then labels and verification
+not used yet: no model, label or verification code reads the source
+verification on dropsonde and ndbc is a designation: nothing reads them yet
 ```
+
 
 ## What is real and what is not
 

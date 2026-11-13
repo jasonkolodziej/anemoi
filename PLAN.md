@@ -109,7 +109,7 @@ the affected model only" impossible to do accidentally.
 |---|---|---|
 | Storm archive | Parser done (`data.hurdat2.parse_hurdat2`); exercised against the real 1851-2023 Atlantic archive by the #9 capacity ablation (`anemoi ablation --hurdat2 <path>`), not yet wired as the CLI/API/demo default source | Point the CLI/API/demo at a real HURDAT2 file |
 | Working track | Parsers done (`data.atcf.parse_bdeck`, `parse_tcvitals`); `pair_by_valid_time` + `recalibrate_from_pairs` demonstrated on parsed data | Point at a real archive; recalibrate Stage B's noise defaults from it |
-| Gridded fields | Real readers done (`data.real_gridded`): ERA5 via public Zarr, GDAS/GFS via byte-range GRIB2; synthetic still the pipeline default. `data.era5_cache`/`data.gdas_cache` (shared engine: `data.gridded_cache`) fetch+cache real fields concurrently for Stage A/B; run as `slurm/` job scripts (see `docs/train_infrastructure.md`). GDAS's real archive only goes back to 2021-01-01 (undocumented retention -- see `data.gdas_cache.GDAS_ARCHIVE_START`), so fetch auto-filters fixes before it and `--sync-archive` backfills what's fetched into durable R2 storage rather than depending on NOAA's bucket as the system of record | Point the CLI/API/demo at real reads; wire real SST/OHC sources |
+| Gridded fields | Real readers done (`data.real_gridded`): ERA5 via public Zarr, GDAS/GFS via byte-range GRIB2; synthetic still the pipeline default. `data.era5_cache`/`data.gdas_cache` (shared engine: `data.gridded_cache`) fetch+cache real fields concurrently for Stage A/B; run as `slurm/` job scripts (see `docs/train_infrastructure.md`). GDAS's real archive only goes back to 2021-01-01, and the reader's `atmos/` path to the 2021-03-22 12Z cycle, so the first fetchable valid time is 2021-03-22 18Z (undocumented retention -- see `data.gdas_cache.GDAS_ARCHIVE_START`); fetch auto-filters fixes before it and `--sync-archive` backfills what's fetched into durable R2 storage rather than depending on NOAA's bucket as the system of record | Point the CLI/API/demo at real reads; wire real SST/OHC sources |
 | Satellite | Synthetic crops (`data.satellite`), matching `data.synthetic`'s role for `GriddedFields` | Real GOES-18/19 storm-relative crops from the already-registered `goes` source |
 | Potential intensity | SST/OHC/shear regression (still the pipeline default); real Bister-Emanuel (1998) closed form implemented separately (`emanuel_potential_intensity`), not yet wired in | Real boundary-layer/outflow soundings, then swap the one call site in `compute_environment_features` |
 | Cone radii | Current-season (2026) NHC 2/3-probability radii, documented in `configs/inference.yaml` | Re-baseline each season against nhc.noaa.gov/aboutcone.shtml |
@@ -132,6 +132,11 @@ and OHC are constant placeholders, so Stage B and serving have no real ocean
 signal. Order, gates and what stays verification-only are in
 `docs/input_sources_plan.md`: OISST first, GOES second, GEFS and microwave
 only if the evidence calls for them, dropsonde and buoys for verification.
+The track gap comes first, though: fusion v12's 48 h Atlantic track error is
+231 nm against the 70 nm gate. `docs/skill_gap_plan.md` is the working plan
+and progress record for both: the same-day checks (phase 0), the track
+experiment and homogeneous baseline (phase 1), the ocean inputs (phase 2),
+more training data (phase 3), and what waits on evidence (phase 4).
 
 
 **Sample size -- measured (LSTM proxy); transformer itself still open.** The
