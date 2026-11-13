@@ -67,3 +67,10 @@ This is a **GitHub repository template** designed to provide a consistent, best-
 - If a feature or workflow is not documented in the wiki, add or update the relevant wiki page in the same change.
 - Do not leave documentation drift behind: code, plan, and wiki must stay aligned.
 - When unsure, say which wiki page you are checking and which code path you are validating before proceeding.
+
+## Code Knowledge Graph
+
+- `graphify-out/graph.json` maps the code (modules, functions, components and the calls/imports between them) and is rebuilt by CI on every push to `main`.
+- Query it before broad searches: the `graphify` MCP server (`query_graph`, `get_neighbors`, `shortest_path`, `get_pr_impact`) or `graphify-out/GRAPH_REPORT.md`. Usage, limits and the CLI fallback are in `AGENTS.md`.
+- It covers code only; the wiki remains the source of truth for design and must still be read directly.
+- Never commit changes to `graphify-out/`; CI owns it.

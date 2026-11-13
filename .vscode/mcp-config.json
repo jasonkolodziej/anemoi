@@ -43,6 +43,12 @@
       "type": "http",
       "tools": ["*"],
       "url": "https://mcp.deepwiki.com/mcp"
+    },
+    "graphify": {
+      "type": "local",
+      "command": "uvx",
+      "args": ["--from", "graphifyy[mcp]==0.9.97", "graphify-mcp", "graphify-out/graph.json"],
+      "tools": ["*"]
     }
   }
 }

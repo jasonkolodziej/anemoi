@@ -195,3 +195,10 @@ gdas_cache/
 
 # Written by CI before image builds (anemoi.provenance)
 build-info.json
+
+# graphify (code knowledge graph, see AGENTS.md). CI owns the committed
+# graph.json and GRAPH_REPORT.md; the rest is local cache and machine-specific
+# state (manifest.json holds file mtimes, .graphify_root an absolute path).
+graphify-out/*
+!graphify-out/graph.json
+!graphify-out/GRAPH_REPORT.md
