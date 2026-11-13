@@ -65,6 +65,11 @@ These answer the questions every later phase depends on, and each takes hours, n
     - Intensity is under-dispersed from 48 h at every lead (wind 0.73 to 0.63 overall), which GEFS track conditioning doesn't address.
     - The served 120 h cone uses the ensemble on all 172 cases and misses the truth 45% of the time against the ~33% a calibrated 2/3 circle should.
     - v12's `arch_params` (read 2026-11-13 from `GET /v1/registry/diffusion/architecture?version=12`): `dropout` 0.0, `extra_conditioning_dim` 0. v12 was trained without the dropout that closed September's long-lead under-dispersion (v7 → v8), so by this item's rule the next step is a derived-only retrain with `DIFFUSION_DROPOUT=0.1`, measured with this command, before GEFS. No retrain was run here.
+    - **Dropout-0.1 retrain done (2026-11-13, `anemoi-train-schedule-kqgcz`, derived-only from lstm v12, cnn v8, transformer v8, gnn v7, pinn v7):** diffusion v13 and fusion v13 registered and auto-staged on the point gate (v12s archived; production unchanged). Point error moved slightly: diffusion 48/72/120 h 250/378/537 → 245/354/520 nm, fusion 189/293/609 → 188/292/604. Spread (`docs/backtests/2026-11-13-spread-backtest-diffusion-v13-m50.json`, same 607 windows, 50 members):
+      - Overall track is now calibrated at every lead from 48 h (along 0.93/0.93/0.80/0.92 at 48/72/96/120 h; cross 0.89/0.80/0.87/0.90). 96 h along-track sits exactly on 0.80.
+      - Recurving long lead is still under the gate: 96 h along 0.80 → 0.71, cross 0.81 → 0.79; 120 h cross 0.73 → 0.70 (72 h cross improved 0.77 → 0.92). n = 43–44 cases from few storms, so these move with a handful of storms.
+      - Intensity didn't improve (overall wind 0.59–0.68 from 48 h), and the 120 h served cone still misses 45%.
+      - Verdict still `warranted`. By this item's rule the under-dispersion survived dropout 0.1 and sits in the recurving cases, so **GEFS conditioning (Phase 4) is now the live option** for track; intensity spread needs its own fix, which GEFS track conditioning doesn't address.
   - The backtest has no per-basin split, and validation is now the 2024 season pooled across AL, EP and CP, so one basin can hide another. `calibrate()` already takes a `case_filter`; a per-basin breakdown is a small code change.
 
 ## Phase 1: Track experiment and baseline
@@ -137,7 +142,7 @@ Stage B trains on 2021–2023 (116 storms: 58 Atlantic, 58 Eastern Pacific), val
 ## Phase 4: Later, each gated on evidence
 
 - **GOES into the CNN.** Stage B only, since the archive starts in 2017. Needs a crop cache and a new `in_channels`, so it's a new model version. Gate: CNN with GOES beats CNN without it on Stage B validation per basin, within the cycle-time budget.
-- **GEFS as diffusion conditioning.** Only if Phase 0's spread-skill check shows the ensemble is under-dispersed at recurvature.
+- **GEFS as diffusion conditioning.** Only if Phase 0's spread-skill check shows the ensemble is under-dispersed at recurvature. **Gate met (2026-11-13):** with dropout 0.1 (v13) recurving 96 h along-track is 0.71 and 120 h cross-track 0.70.
 - **Microwave.** Only as a masked optional input with a trained missing-data path. TC PRIMED (Phase 3) supplies the training years.
 - **Gate re-derivation.** Set `track_error_72h_nm`, `track_error_120h_nm` and both intensity thresholds from NHC's verification report, and add a rapid-intensification metric (≥ 30 kt in 24 h).
 - **New basins.** WP needs JTWC best track and Himawari imagery. NI and SH have no OSPO OHC product, so they use the masked OHC path from 2b.
@@ -225,6 +230,11 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-13.** Dropout-0.1 retrain (Phase 0 spread item): diffusion and
+  fusion v13 staged. Overall track spread now calibrated from 48 h; the
+  recurving long-lead cases are still under 0.8 (96 h along 0.71, 120 h
+  cross 0.70), so GEFS conditioning is the live option. Intensity spread
+  and the 45% cone miss rate unchanged.
 - **2026-11-13.** Fusion's pre-registered paired test (Phase 1, step 1),
   after #243 merged and CI rebuilt the image: fusion minus AVNI, Atlantic
   48 h, +154 nm [112, 202] on B and +122 nm [89, 164] on C. The ML layer
