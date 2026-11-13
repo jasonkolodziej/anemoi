@@ -158,6 +158,24 @@ Timeboxes are proposed. Each input lands as its own PR and retrain.
 
 The critical path is Phase 1: its week 2 result decides whether weeks 3–4 go to forecast-lead inputs or back to the architectures. Phase 0 found the OHC files for every Stage B season, so 2b can start whenever 2a has its result.
 
+## Handoff to a local agent
+
+The cloud session can't do these three tasks: two need the training machine and one needs write access to the wiki repository. A local agent with `gcloud` and wiki access takes them. Both training-machine jobs load existing checkpoints only: they don't train, register or promote anything.
+
+1. **Fusion's per-case forecasts** (Phase 1, step 1).
+   - Needs: this branch merged to `main` (for `5ccaf90`) and the training image rebuilt by CI.
+   - Run the `validation-forecasts` command in Phase 1, step 1.
+   - Check that the job reports the registered and recomputed metrics as consistent, and that `n_without_forecast` = 0.
+   - Score it with `anemoi baseline-backtest ... --model-forecasts <file>`, using the decision rule in Decision Log 66: fusion − AVNI, Atlantic 48 h, samples B and C, storm-block bootstrap.
+   - Commit the JSON under `docs/backtests/` and record the result in Phase 1, step 1 and the progress log.
+2. **Spread-skill for diffusion v12** (Phase 0).
+   - First read `dropout` in v12's `arch_params` tag.
+   - Run the 50-member `spread-backtest` command in Phase 0.
+   - Copy the JSON into `docs/backtests/` and record the long-lead track ratios against the 0.8 gate.
+3. **Unblock the wiki.**
+   - Needs: this branch merged to `main`.
+   - In the wiki repository, revert `af8e4ac` through `2717b8f`, then run *Publish wiki*. The full reasoning is in the wiki entry under Risks.
+
 ## Risks and open questions
 
 - ~~**No OHC for 2021–2022.**~~ Not a risk: CoastWatch's older `na`/`np` chain covers 2021–2023 in full (Phase 0).
