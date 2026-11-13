@@ -197,11 +197,18 @@ def resolve_cycle_inputs(
 
 #: Ocean-heat-content files (NOAA OSPO CoastWatch na/np, na14/np14) post a
 #: median 35.5h and at most ~48h after 00Z of the day they are named for
-#: (CoastWatch listings, 2021-2026), so a live cycle can only read the file
-#: named D-2. The SST half of ``sst_ohc`` (OISST v2.1) is
-#: a day earlier at D-1, which is what the combined source uses today because
-#: OHC is not wired as a model input yet (docs/skill_gap_plan.md Phase 2b).
-#: When OHC lands, it carries its own D-2 valid time.
+#: (CoastWatch listings, 2021-2026). The lag is counted on the day a file is
+#: made, its creation day: a cycle at t reads the newest file made on or
+#: before date(t) - OHC_VALID_LAG. Up to 2025 day 084 (old chain and v1r0)
+#: the creation day is the name day, so that is the file named D-2; v1r1
+#: files, from 2025 day 085, are made the day after their name day, so a
+#: cycle reads the one named D-3. Counting creation days keeps every split's
+#: inputs (2021-2023 old chain, 2024 v1r0, 2025+ v1r1) the same age.
+#: data.real_ohc applies the rule, stepping back past a missing or rejected
+#: file. The SST half of ``sst_ohc`` (OISST v2.1) is a day earlier at D-1,
+#: which is what the combined source uses today because OHC is not a model
+#: input yet (docs/skill_gap_plan.md Phase 2b). When OHC lands, it carries
+#: its own valid time.
 OHC_VALID_LAG = timedelta(days=2)
 
 
@@ -210,8 +217,9 @@ def _valid_time_for(source_key: str, t: datetime) -> datetime:
 
     Most observational feeds are current to ``t``. Ensemble perturbations share
     the NWP lag; ``sst_ohc`` is a daily product persisted from the previous day
-    (SST half, D-1). Its OHC half would be D-2 (see :data:`OHC_VALID_LAG`), but
-    OHC is not wired yet so the combined source resolves on the SST rule.
+    (SST half, D-1). Its OHC half is read two creation days back (see
+    :data:`OHC_VALID_LAG`), but OHC is not a model input yet, so the combined
+    source resolves on the SST rule.
     """
     if source_key == "ensemble_perturbations":
         return t - timedelta(hours=6)

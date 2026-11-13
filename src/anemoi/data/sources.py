@@ -205,7 +205,8 @@ REGISTRY: dict[str, DataSource] = {
         DataSource(
             key="sst_ohc",
             provider="NOAA NCEI OISST v2.1 (SST, implemented) + "
-            "NOAA OSPO CoastWatch OHC (not implemented)",
+            "NOAA OSPO CoastWatch OHC (implemented as fetch+decode, "
+            "data.real_ohc; not a model input)",
             role=Role.OPERATIONAL,
             typical_latency=1 * _D,
             max_latency=2 * _D,
@@ -213,18 +214,18 @@ REGISTRY: dict[str, DataSource] = {
             retention="rolling 5yr",
             notes=(
                 "SST half is real (data.real_sst, OISST v2.1). OHC half "
-                "isn't wired yet, but a live feed does exist: NOAA OSPO's "
-                "CoastWatch OHC files (na14/np14 QG3, 0.25 deg NetCDF) are "
-                "current -- na14/2026/ had day 316 (Nov 12) posted Nov 13, "
-                "no gaps since Jul 17. The earlier '~8 months stale, stops "
-                "2026-01-26' finding was a different endpoint (AOML's HDB "
-                "ERDDAP UOHC_2026/TCHP), not this one. The archive covers "
-                "every Stage B season: the older na/np chain runs from "
-                "2020 day 121 to 2024 day 18 and agrees with na14/np14 to "
-                "RMS 0.002 kJ/cm2. Files post up to ~48h late, so a live "
-                "cycle reads D-2. The adapter is the open work "
-                "(docs/skill_gap_plan.md Phase 2b): NetCDF-3 and HDF5, "
-                "v1r1's one-day name shift from 2025 day 85, blank files."
+                "is fetched and decoded (data.real_ohc) but isn't a model "
+                "input: GriddedFields.ohc is still the placeholder. The feed "
+                "is NOAA OSPO's CoastWatch OHC files (na/np QG3 from 2020 "
+                "day 121 to 2024 day 18, na14/np14 from 2024 day 15; 0.25 "
+                "deg, NetCDF-3 and, from 2025 day 85, HDF5), current -- "
+                "na14/2026/ had day 316 (Nov 12) posted Nov 13. The earlier "
+                "'~8 months stale, stops 2026-01-26' finding was a different "
+                "endpoint (AOML's HDB ERDDAP UOHC_2026/TCHP), not this one. "
+                "Files post up to ~48h late, so a cycle reads the newest "
+                "file made on or before D-2 (v1r1 files, from 2025 day 85, "
+                "are made the day after their name day). Wiring it into "
+                "GriddedFields is docs/skill_gap_plan.md Phase 2b."
             ),
         ),
         DataSource(

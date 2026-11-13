@@ -208,6 +208,7 @@ ADAPTERS = {
     "real_goes": ("goes",),
     "real_microwave": ("microwave",),
     "real_sst": ("sst_ohc",),
+    "real_ohc": ("sst_ohc",),
     "real_ensemble": ("ensemble_perturbations",),
     "real_dropsonde": ("dropsonde",),
     "real_ndbc": ("ndbc",),
