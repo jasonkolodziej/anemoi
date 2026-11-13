@@ -192,6 +192,18 @@ test.describe('signed in', () => {
 		await expect(outline('dropsonde')).not.toHaveAttribute('stroke-dasharray');
 		await expect(graph.locator('[data-edge$=">prep"]')).toHaveCount(3 + 4);
 
+		// A screen reader gets the state in words, with no mark or line to
+		// go on.
+		for (const name of [
+			'Working best-track: read by LSTM and PINN',
+			'ERA5: read by CNN, Transformer, GNN and PINN, in pretraining only',
+			'Final best-track: labels and verification only, never a model input',
+			'Dropsondes: verification only, never a model input',
+			'GOES imagery: not used yet',
+		]) {
+			await expect(graph.getByRole('img', { name, exact: true })).toHaveCount(1);
+		}
+
 		const legend = page.getByRole('list', { name: 'How a data source is drawn' });
 		await expect(legend.getByRole('listitem')).toHaveText([
 			'feeds a model',
@@ -276,6 +288,7 @@ test.describe('signed in', () => {
 		await expect(sourceEdges).toHaveCount(SOURCES.length);
 		for (const edge of await sourceEdges.all()) await expect(edge).toHaveAttribute('stroke-dasharray');
 		await expect(page.getByText("This API doesn't say what uses each source")).toBeVisible();
+		await expect(graph.getByRole('img', { name: 'GOES imagery: use not reported', exact: true })).toHaveCount(1);
 	});
 
 	test('architecture draws whatever used_by says, not a mapping of its own', async ({ page }) => {
@@ -343,6 +356,9 @@ test.describe('signed in', () => {
 
 		await expect(goes).toHaveAttribute('data-use', 'unknown');
 		await expect(goes).toContainText('calibration');
+		await expect(
+			graph.getByRole('img', { name: "GOES imagery: calibration, a use this console doesn't know", exact: true }),
+		).toHaveCount(1);
 		await expect(graph.locator('[data-edge="src:goes>prep"]')).toHaveAttribute('stroke-dasharray');
 		await expect(graph.locator('.beam')).toHaveCount(2 + 11); // the same beams as always
 		await expect(page.getByText("A use this console doesn't know")).toBeVisible();

@@ -2,7 +2,7 @@
 	import type { ActivePin, ArchitectureOut, ModelVersionOut, RegistryEntry, SourceOut } from '$lib/api/types';
 	import { colorFor, god } from '$lib/branding';
 	import { displayShape, formatParams, formatShape } from './shapes';
-	import { byUse, hasUnknownEntry, readersOf, sourceName, usedByText, useOf, type SourceUse } from './source-use';
+	import { byUse, hasUnknownEntry, readersOf, sourceName, usedBySpoken, usedByText, useOf, type SourceUse } from './source-use';
 
 	let {
 		registry,
@@ -57,6 +57,9 @@
 		cycle?: boolean;
 		/** A data source: what its role adds to the picture, if anything. */
 		tag?: string;
+		/** A data source: its title, use and tag in a sentence, for a screen
+		 * reader, which gets no mark, outline or edge to go on. */
+		spoken?: string;
 	}
 
 	const SRC = 'src:';
@@ -84,7 +87,8 @@
 			cycle: s.is_operational,
 			// ERA5 and GDAS/GFS have the same readers; only the role says ERA5
 			// is read in Stage A pretraining and never in a cycle.
-			tag: s.role === 'pretrain_only' ? 'pretraining only' : undefined
+			tag: s.role === 'pretrain_only' ? 'pretraining only' : undefined,
+			spoken: `${sourceName(s.key)}: ${usedBySpoken(s)}${s.role === 'pretrain_only' ? ', in pretraining only' : ''}`
 		}));
 	});
 
@@ -428,7 +432,7 @@
 						data-source-node={n.id.slice(SRC.length)}
 						data-use={n.use}
 						role="img"
-						aria-label={`${n.title}: ${n.sub}${n.tag ? `, ${n.tag}` : ''}`}
+						aria-label={n.spoken}
 						class="transition-opacity duration-300"
 						opacity={dim ? 0.45 : 1}
 						onmouseenter={read ? () => (hovered = n.id) : undefined}

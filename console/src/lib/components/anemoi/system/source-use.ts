@@ -60,6 +60,30 @@ export function usedByText(usedBy: string[] | undefined): string {
 	return usedBy.map((u) => MODEL_NAMES[u] ?? u).join(' · ');
 }
 
+/** "a", "a and b", "a, b and c". */
+function spokenList(items: string[]): string {
+	return items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : (items[0] ?? '');
+}
+
+/** How a source is used, as a screen reader should hear it: the state in
+ * words, where the graph shows it as a mark, and no "·" between names. */
+export function usedBySpoken(source: SourceOut): string {
+	const usedBy = source.used_by ?? [];
+	switch (useOf(source)) {
+		case 'input': {
+			const readers = spokenList(readersOf(source).map((m) => MODEL_NAMES[m]));
+			const also = usedBy.filter((u) => !MODELS.has(u));
+			return `read by ${readers}${also.length ? `; also ${spokenList(also)}` : ''}`;
+		}
+		case 'reference':
+			return `${spokenList(usedBy)} only, never a model input`;
+		case 'unused':
+			return 'not used yet';
+		case 'unknown':
+			return source.used_by ? `${spokenList(usedBy)}, a use this console doesn't know` : 'use not reported';
+	}
+}
+
 /** What a source is called on the system graph. One the console has no
  * name for is drawn under its registry key. */
 const SOURCE_NAMES: Record<string, string> = {
