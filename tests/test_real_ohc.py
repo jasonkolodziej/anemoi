@@ -547,9 +547,14 @@ def test_a_real_file_from_each_chain(basin, name_day, file_format, shape, fill_c
 #
 # SHIPS' developmental SOHC is this product, bilinear at the best-track
 # centre, from the file named for the calendar day before the case's UTC
-# date (docs/skill_gap_plan.md Phase 3). At open-ocean Atlantic cases of
-# 2021-2022 (all four NA corners valid, centre not in the 80.0-80.25W strip,
-# where SHIPS mixes in NP's 0.0 column) that is 557 of 702 cases.
+# date (docs/skill_gap_plan.md Phase 3). It holds at open-ocean Atlantic
+# cases of 2021-2022: all four NA corners valid and the centre not in a cell
+# that touches the 80.0W column. SHIPS' AL file takes that column from NP,
+# which holds 0.0 there over the Caribbean, so SOHC comes out low on both
+# sides of 80.0W, not only west of it: Lisa (AL152022, 2022-11-01 06Z,
+# 79.9W) reads 33 where NA alone gives 85.1 and NP's column over NA's 33.4.
+# That leaves 555 of 702 cases (the Phase 0 count of 557 excluded only
+# 80.0-80.25W, and Lisa and Nicole's 79.8W case are the difference).
 
 SHIPS_AL_URL = (
     "https://rammb-data.cira.colostate.edu/ships/data/AL/lsdiaga_1982_2025_sat_ts_7day.txt"
@@ -562,8 +567,10 @@ SHIPS_RECORD_BYTES = 33_003
 SHIPS_WINDOW = (13_100, 13_900)
 SHIPS_MISSING = 9999
 SOHC_TOLERANCE = 0.5
+#: Cases whose bilinear cell touches 80.0W (west longitude, exclusive).
+STRIP_80W = (79.75, 80.25)
 #: Busiest case days per year until each year has this many cases; set
-#: ANEMOI_OHC_SHIPS_ALL=1 to read every day (~160 files, ~450 MB).
+#: ANEMOI_OHC_SHIPS_ALL=1 to read every day (~125 files, ~350 MB).
 SAMPLE_CASES_PER_YEAR = 50
 
 
@@ -626,10 +633,11 @@ def al_2021_2022(cases: list[ShipsCase]) -> list[ShipsCase]:
 
 def open_ocean(cases: list[ShipsCase], na_file: real_ohc.OhcFile) -> list[ShipsCase]:
     """Cases whose four NA corners are valid (the fill mask is static, so
-    any NA file decides) and that are not in the 80.0-80.25W strip."""
+    any NA file decides) and whose cell does not touch the 80.0W column."""
     return [
         c for c in cases
-        if math.isfinite(real_ohc.ohc_at(c.lat, c.lon, na_file)) and not 80.0 < c.lon_w < 80.25
+        if math.isfinite(real_ohc.ohc_at(c.lat, c.lon, na_file))
+        and not STRIP_80W[0] < c.lon_w < STRIP_80W[1]
     ]
 
 
@@ -681,11 +689,11 @@ def test_sohc_equals_bilinear_ohc_on_the_file_named_for_the_day_before():
     days = sample_days(cases, None)
     mask = real_ohc.fetch_ohc_file("na", days[0], fetch=_plain_get)
     usable = open_ocean(cases, mask)
-    assert len(usable) == 557
+    assert len(usable) == 555
 
     results = compare(usable, sample_days(usable, None if every else SAMPLE_CASES_PER_YEAR),
                       _plain_get)
-    assert len(results) >= (557 if every else 100)
+    assert len(results) >= (555 if every else 100)
     far = [(c.storm_id, c.time.isoformat(), c.sohc, v) for c, v in results
            if not abs(v - c.sohc) <= SOHC_TOLERANCE]
     assert far == []
