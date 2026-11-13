@@ -16,6 +16,7 @@ from anemoi.metrics.homogeneous import (
     MIN_STORMS,
     TRACK,
     Member,
+    case_errors,
     homogeneous_mask,
     score_homogeneous,
     storm_block_interval,
@@ -23,6 +24,10 @@ from anemoi.metrics.homogeneous import (
 
 #: One degree of latitude, in nm, on the sphere `geo.haversine_nm` uses.
 NM_PER_DEG = 6371.0088 / 1.852 * np.pi / 180.0
+#: One degree of longitude at 30N on that sphere, worked out by hand:
+#: 2 R asin(cos 30deg sin 0.5deg), R = 6371.0088 km / 1.852. A distance that
+#: left out cos(latitude) would give NM_PER_DEG (60.04) instead.
+ONE_DEG_EAST_AT_30N_NM = 51.99647
 
 STORMS = ["AL011999"] * 8 + ["AL021999"] * 8 + ["EP011999"] * 4
 LEADS = (12, 24)
@@ -75,6 +80,28 @@ def test_the_sample_is_the_intersection_and_one_missing_case_removes_it_for_all(
     assert _row(rows, "AL", 12, INTENSITY).scores["B"].bias == pytest.approx(-4.0)
     mask = homogeneous_mask(members, eligible, STORMS, TRACK)
     assert not mask[3, 0] and mask[3, 1] and mask.sum() == 2 * len(STORMS) - 1
+
+
+def test_an_east_west_error_is_the_great_circle_distance_across_the_dateline_too():
+    obs = _truth()
+    obs[..., 0] = 30.0
+    east = obs.copy()
+    east[..., 1] += 1.0
+    # Half a degree either side of the dateline: one degree apart, not 359.
+    seam_obs = obs.copy()
+    seam_obs[..., 1] = 179.5
+    seam = seam_obs.copy()
+    seam[..., 1] = -179.5
+    eligible = np.ones((len(STORMS), len(LEADS)), dtype=bool)
+    for truth, pred in ((obs, east), (seam_obs, seam)):
+        member = Member("EAST", "x", pred)
+        np.testing.assert_allclose(
+            case_errors(member, truth, TRACK), ONE_DEG_EAST_AT_30N_NM, atol=1e-5,
+        )
+        rows = score_homogeneous([member], truth, eligible, STORMS, LEADS)
+        assert _row(rows, "AL", 12, TRACK).scores["EAST"].mean_error == pytest.approx(
+            ONE_DEG_EAST_AT_30N_NM, abs=1e-5,
+        )
 
 
 def test_a_track_only_member_does_not_shrink_the_intensity_sample():

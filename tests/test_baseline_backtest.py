@@ -5,8 +5,8 @@ with training (`training.real_latents.joint_stage_windows`).
 A constructed HURDAT2 spans 2021-2025, so Stage B's split puts 2024 in
 validation, as the real archive does. The a-decks are written from the
 best track with a known offset per technique (OFCL 0.1 deg north, AVNI
-0.2, ...), so every mean error is known in advance. Nothing here needs
-torch or the network.
+0.2, ..., XTRP 1 deg east), so every mean error is known in advance.
+Nothing here needs torch or the network.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from anemoi.data.hurdat2 import parse_hurdat2, parse_hurdat2_statuses
 from anemoi.data.nhc_verification import OfficialErrors
 from anemoi.data.sources import Flavor
 from anemoi.metrics.basin import per_basin_scores
-from anemoi.metrics.homogeneous import INTENSITY, TRACK
+from anemoi.metrics.homogeneous import INTENSITY, TRACK, case_errors, homogeneous_mask
 from anemoi.training import real_latents
 from anemoi.training.baseline_backtest import (
     DEFAULT_TECHNIQUES,
@@ -37,6 +37,7 @@ from anemoi.training.baseline_backtest import (
     format_report,
     group1_versions_of,
     model_members,
+    persistence_members,
     reconcile_official_errors,
     run_baseline_backtest,
     technique_member,
@@ -49,6 +50,8 @@ from anemoi.training.real_run import displacements_to_absolute, persistence_of, 
 
 #: One degree of latitude, in nm, on the sphere `geo.haversine_nm` uses.
 NM_PER_DEG = 6371.0088 / 1.852 * np.pi / 180.0
+#: That sphere's radius in nm.
+EARTH_RADIUS_NM = 6371.0088 / 1.852
 RADII = ", ".join(["-999"] * 12)
 LEADS = (12, 24, 36, 48, 72, 96, 120)
 
@@ -107,10 +110,11 @@ def cases(archive):
     return validation_cases(tracks, statuses)
 
 
-#: technique -> (north offset in degrees, wind offset in kt or None).
+#: technique -> (north and east offset in degrees, wind offset in kt or None).
 OFFSETS = {
-    "OFCL": (0.1, 2.0), "AVNI": (0.2, -3.0), "AVNO": (0.15, -6.0), "EMXI": (0.25, -4.0),
-    "EMX2": (0.25, -4.0), "OCD5": (1.0, 5.0), "XTRP": (1.5, None),
+    "OFCL": (0.1, 0.0, 2.0), "AVNI": (0.2, 0.0, -3.0), "AVNO": (0.15, 0.0, -6.0),
+    "EMXI": (0.25, 0.0, -4.0), "EMX2": (0.25, 0.0, -4.0), "OCD5": (1.0, 0.0, 5.0),
+    "XTRP": (0.0, 1.0, None),
 }
 OFCO_TIME = datetime(2024, 8, 3, 0, tzinfo=UTC)
 
@@ -145,7 +149,7 @@ def adeck_text(track, statuses) -> str:
             verif = by_time.get(t + timedelta(hours=tau))
             if verif is None:
                 continue
-            for tech, (dlat, dwind) in OFFSETS.items():
+            for tech, (dlat, dlon, dwind) in OFFSETS.items():
                 if tech in ("OFCL",) and not tropical:
                     continue
                 if tech == "EMXI" and t.hour in (0, 12) or tech == "EMX2" and t.hour in (6, 18):
@@ -157,7 +161,9 @@ def adeck_text(track, statuses) -> str:
                     rows.append(_row(basin, cy, t, "OFCO", tau, verif.lat + 0.05, verif.lon, wind))
                     rows.append(_row(basin, cy, t, "OFCL", tau, verif.lat + 2.0, verif.lon, wind))
                     continue
-                rows.append(_row(basin, cy, t, tech, tau, verif.lat + dlat, verif.lon, wind))
+                rows.append(
+                    _row(basin, cy, t, tech, tau, verif.lat + dlat, verif.lon + dlon, wind)
+                )
     return "\n".join(rows) + "\n"
 
 
@@ -367,6 +373,36 @@ def test_samples_a_b_c_shrink_in_turn_and_errors_are_the_known_offsets(report, c
     # B leaves out the EP leads that verify late across the best-track gap.
     assert report.registry_sample["EP"]["n_verifying_fix_not_at_lead"] > 0
     assert report.official_errors == [] and report.reconciliation is None
+
+
+def test_an_east_offset_is_scored_as_a_great_circle_distance_end_to_end(report, cases, adecks):
+    """XTRP's a-deck is 1 deg east of the best track, so its error falls
+    with the cosine of latitude. The expected value uses the spherical law
+    of cosines, not `geo.haversine_nm`, so a wrong distance formula fails."""
+    xtrp, _ = technique_member(TechniqueSpec.parse("XTRP"), cases, adecks)
+    lat = np.radians(cases.obs_abs[..., 0])
+    expected = EARTH_RADIUS_NM * np.arccos(
+        np.sin(lat) ** 2 + np.cos(lat) ** 2 * np.cos(np.radians(1.0))
+    )
+    # Where the verifying fix is not at init + lead (EP012024's gap), the
+    # a-deck's valid time is not the truth's, so the offset is not 1 deg.
+    has = xtrp.has_track & cases.time_ok
+    assert has.any()
+    np.testing.assert_allclose(case_errors(xtrp, cases.obs_abs, TRACK)[has], expected[has],
+                               atol=1e-6)
+    members = [
+        *(technique_member(TechniqueSpec.parse(t), cases, adecks)[0] for t in DEFAULT_TECHNIQUES),
+        *persistence_members(cases),
+    ]
+    in_b = homogeneous_mask(members, cases.mask & cases.time_ok, cases.storm_ids, TRACK)
+    for basin in ("AL", "EP"):
+        in_basin = np.array([s.startswith(basin) for s in cases.storm_ids])
+        for li, lead in enumerate(LEADS):
+            sel = in_b[:, li] & in_basin
+            if sel.any():
+                assert _row_of(report, "B", basin, lead).scores["XTRP"].mean_error == (
+                    pytest.approx(expected[sel, li].mean(), abs=1e-6)
+                )
 
 
 def test_too_few_storms_is_said_in_every_row_of_a_one_storm_basin(report):
