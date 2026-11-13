@@ -28,9 +28,11 @@ from anemoi.data.adeck_source import (
     fetch_adecks,
     read_adeck,
     read_cached_adecks,
+    read_cached_official_errors,
 )
 from anemoi.data.atcf import AtcfError, parse_adeck
 from anemoi.data.atcf_archive import ADECK_URL, NotPublished
+from anemoi.data.nhc_verification import OfficialErrorsError
 
 T0 = datetime(1999, 8, 25, 12, tzinfo=UTC)
 
@@ -162,15 +164,24 @@ def _archive(storm_id: str) -> str:
     return adeck_urls(storm_id)[0]
 
 
+def _errors_url(basin: str) -> str:
+    return adeck_source.OFFICIAL_ERRORS_URL.format(name=adeck_source.OFFICIAL_ERRORS_FILES[basin])
+
+
+#: Bodies of the two kinds of file, as far as `fetch_adecks` checks them.
+ARCHIVED = gzip.compress(b"archived")
+ERRORS = b"Date/Time  STMID  012hT01\n"
+#: What a server can send with status 200 instead of the file.
+ERROR_PAGE = b"<html>oops</html>"
+
+
 def test_fetch_adecks_skips_cached_files_falls_back_and_records_each_outcome(tmp_path):
     (tmp_path / "aal012024.dat.gz").write_bytes(b"cached")
     nhc = _FakeNhc(
         {
-            _archive("AL022024"): b"archived",
-            adeck_urls("AL032024")[1]: b"current season",
-            adeck_source.OFFICIAL_ERRORS_URL.format(
-                name=adeck_source.OFFICIAL_ERRORS_FILES["AL"]
-            ): b"errors",
+            _archive("AL022024"): ARCHIVED,
+            adeck_urls("AL032024")[1]: gzip.compress(b"current season"),
+            _errors_url("AL"): ERRORS,
         },
         fail={_archive("EP012024")},
     )
@@ -185,7 +196,7 @@ def test_fetch_adecks_skips_cached_files_falls_back_and_records_each_outcome(tmp
         ["aal042024.dat.gz", adeck_source.OFFICIAL_ERRORS_FILES["EP"]]
     )
     assert "TimeoutError" in report.failed["aep012024.dat.gz"]
-    assert (tmp_path / "aal022024.dat.gz").read_bytes() == b"archived"
+    assert (tmp_path / "aal022024.dat.gz").read_bytes() == ARCHIVED
     assert (tmp_path / "aal012024.dat.gz").read_bytes() == b"cached"
     assert not list(tmp_path.glob("*.part"))
     assert _archive("AL012024") not in nhc.calls
@@ -194,13 +205,36 @@ def test_fetch_adecks_skips_cached_files_falls_back_and_records_each_outcome(tmp
 
 def test_fetch_adecks_never_runs_more_than_four_requests(tmp_path):
     storms = [f"AL{n:02d}2024" for n in range(1, 13)]
-    nhc = _FakeNhc({_archive(s): b"x" for s in storms})
+    nhc = _FakeNhc({_archive(s): ARCHIVED for s in storms})
     fetch_adecks(storms, tmp_path, fetch=nhc, max_workers=32, official_errors=False)
     assert MAX_WORKERS == 4
     assert 1 <= nhc.max_active <= MAX_WORKERS
     assert len(nhc.calls) == len(storms)
     with pytest.raises(ValueError):
         fetch_adecks(storms, tmp_path, fetch=nhc, max_workers=0)
+
+
+def test_fetch_adecks_does_not_cache_a_body_that_is_not_the_file(tmp_path):
+    nhc = _FakeNhc({_archive("AL012024"): ERROR_PAGE, _errors_url("AL"): ERROR_PAGE})
+    report = fetch_adecks(["AL012024"], tmp_path, fetch=nhc)
+    assert set(report.failed) == {"aal012024.dat.gz", adeck_source.OFFICIAL_ERRORS_FILES["AL"]}
+    assert "not an a-deck" in report.failed["aal012024.dat.gz"]
+    assert "Date/Time" in report.failed[adeck_source.OFFICIAL_ERRORS_FILES["AL"]]
+    assert list(tmp_path.iterdir()) == []
+    # Nothing was kept, so the next run asks again rather than calling it cached.
+    nhc.files = {_archive("AL012024"): ARCHIVED, _errors_url("AL"): ERRORS}
+    again = fetch_adecks(["AL012024"], tmp_path, fetch=nhc)
+    assert not again.failed and not again.cached and len(again.fetched) == 2
+
+
+def test_a_cached_error_file_that_is_not_nhcs_is_named_with_the_way_out(tmp_path):
+    name = adeck_source.OFFICIAL_ERRORS_FILES["EP"]
+    (tmp_path / name).write_bytes(ERROR_PAGE)
+    with pytest.raises(OfficialErrorsError, match=f"{name}.*run `anemoi adeck-fetch` again"):
+        read_cached_official_errors(tmp_path)
+    (tmp_path / name).write_bytes(ERRORS)
+    errors, (record,) = read_cached_official_errors(tmp_path)
+    assert set(errors) == {"EP"} and record["file"] == name
 
 
 def test_fetch_adecks_refuses_an_id_that_is_not_an_atcf_storm_id(tmp_path):

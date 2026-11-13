@@ -1061,6 +1061,18 @@ def test_baseline_backtest_names_a_validation_storm_without_an_adeck(tmp_path, c
     assert json.loads(out.read_text())["adecks_missing"] == ["AL022024"]
 
 
+def test_baseline_backtest_names_a_cached_error_file_that_is_not_nhcs(tmp_path, capsys):
+    from anemoi.data.nhc_verification import OFFICIAL_ERRORS_FILES
+
+    hurdat2, adecks = _baseline_inputs(tmp_path)
+    bad = adecks / OFFICIAL_ERRORS_FILES["AL"]
+    bad.write_text("<html>oops</html>")
+    assert cli.main([
+        "baseline-backtest", "--hurdat2", str(hurdat2), "--adeck-dir", str(adecks),
+    ]) == 1
+    assert f"{bad}: no 'Date/Time' column header" in capsys.readouterr().out
+
+
 def test_baseline_backtest_without_any_adeck_exits_1(tmp_path, capsys):
     hurdat2, _adecks = _baseline_inputs(tmp_path)
     empty = tmp_path / "empty"

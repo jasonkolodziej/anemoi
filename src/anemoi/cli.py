@@ -1184,7 +1184,12 @@ def cmd_baseline_backtest(args: argparse.Namespace) -> int:
     fills ``--adeck-dir``. With ``--model-forecasts`` (the file
     `validation-forecasts` writes on the training machine) the project's
     models are scored on the same cases."""
-    from .data.adeck_source import ARCHIVE_URL, read_cached_adecks, read_cached_official_errors
+    from .data.adeck_source import (
+        ARCHIVE_URL,
+        adeck_path,
+        read_cached_adecks,
+        read_cached_official_errors,
+    )
     from .data.hurdat2 import parse_hurdat2_statuses
     from .data.hurdat2_source import describe
     from .data.nhc_verification import OfficialErrorsError
@@ -1233,7 +1238,11 @@ def cmd_baseline_backtest(args: argparse.Namespace) -> int:
                 "(run `anemoi adeck-fetch`)"
             )
         for storm_id, error in cached.unreadable.items():
-            print(f"baseline-backtest: {storm_id}: unreadable a-deck: {error}")
+            print(
+                f"baseline-backtest: {storm_id}: unreadable a-deck "
+                f"{adeck_path(args.adeck_dir, storm_id)}: {error} "
+                "(delete it and run `anemoi adeck-fetch` again)"
+            )
         if not cached.adecks:
             print(
                 f"baseline-backtest: no a-deck for any validation storm in {args.adeck_dir} "

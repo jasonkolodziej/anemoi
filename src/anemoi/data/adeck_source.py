@@ -37,6 +37,7 @@ from .nhc_verification import (
     OFFICIAL_ERRORS_FILES,
     OFFICIAL_ERRORS_URL,
     OfficialErrors,
+    OfficialErrorsError,
     parse_official_errors,
 )
 
@@ -53,6 +54,9 @@ MAX_DOWNLOAD_BYTES = 64 * 2**20
 MAX_ADECK_TEXT_BYTES = 512 * 2**20
 
 _TIMEOUT_S = 120.0
+
+#: The first bytes of every gzip stream: what an a-deck must start with.
+_GZIP_MAGIC = b"\x1f\x8b"
 
 
 def _get(url: str) -> bytes:
@@ -119,12 +123,26 @@ class AdeckFetchReport:
         }
 
 
+def _check_adeck(body: bytes) -> None:
+    if not body.startswith(_GZIP_MAGIC):
+        raise ValueError("not gzip data, so not an a-deck")
+
+
+def _check_official_errors(body: bytes) -> None:
+    parse_official_errors(body.decode("ascii", errors="replace"))
+
+
 def _fetch_one(
     path: Path, urls: tuple[str, ...], fetch: Callable[[str], bytes],
+    check: Callable[[bytes], None],
 ) -> tuple[str, str]:
     """Download the first of ``urls`` that exists to ``path``. Returns
     ``(outcome, detail)``: ``cached``, ``fetched`` (detail: the URL),
-    ``not_published`` or ``failed`` (detail: why)."""
+    ``not_published`` or ``failed`` (detail: why).
+
+    A body ``check`` rejects is not written. Any non-empty file is kept as
+    cached on the next run, so an error page a server sent with status 200
+    would otherwise stay in the cache for good."""
     if path.exists() and path.stat().st_size > 0:
         return "cached", ""
     for url in urls:
@@ -134,6 +152,10 @@ def _fetch_one(
             continue
         except Exception as exc:  # noqa: BLE001 - one file must not sink the rest
             return "failed", f"{type(exc).__name__}: {exc}"
+        try:
+            check(body)
+        except ValueError as exc:
+            return "failed", f"{url}: {exc}"
         partial = path.with_name(path.name + ".part")
         partial.write_bytes(body)
         partial.replace(path)
@@ -155,7 +177,9 @@ def fetch_adecks(
 
     Files already there are kept, so a re-run fetches only what is missing.
     A file that does not exist upstream is recorded as not published and
-    one that fails as failed; neither stops the others. At most
+    one that fails, or whose body is not that kind of file (an a-deck is
+    gzip; an error file has NHC's column header), as failed and is not
+    written; neither stops the others. At most
     `MAX_WORKERS` requests run at a time. ``fetch`` (a URL to its bytes,
     raising `NotPublished` for a 404) defaults to a plain HTTPS GET.
     """
@@ -164,19 +188,23 @@ def fetch_adecks(
         raise ValueError(f"max_workers must be at least 1, got {max_workers}")
     cache = Path(cache_dir)
     storms = list(dict.fromkeys(storm_ids))
-    jobs: dict[Path, tuple[str, ...]] = {
-        adeck_path(cache, storm_id): adeck_urls(storm_id) for storm_id in storms
+    jobs: dict[Path, tuple[tuple[str, ...], Callable[[bytes], None]]] = {
+        adeck_path(cache, storm_id): (adeck_urls(storm_id), _check_adeck) for storm_id in storms
     }
     if official_errors:
         for basin in sorted({storm_basin(s) for s in storms}):
             name = OFFICIAL_ERRORS_FILES.get(basin)
             if name is not None:
-                jobs[cache / name] = (OFFICIAL_ERRORS_URL.format(name=name),)
+                jobs[cache / name] = (
+                    (OFFICIAL_ERRORS_URL.format(name=name),), _check_official_errors,
+                )
     cache.mkdir(parents=True, exist_ok=True)
 
     report = AdeckFetchReport()
     with ThreadPoolExecutor(max_workers=min(max_workers, MAX_WORKERS)) as pool:
-        outcomes = pool.map(lambda job: _fetch_one(job[0], job[1], fetch), jobs.items())
+        outcomes = pool.map(
+            lambda job: _fetch_one(job[0], job[1][0], fetch, job[1][1]), jobs.items(),
+        )
         for path, (outcome, detail) in zip(jobs, outcomes, strict=True):
             if outcome == "fetched":
                 report.fetched[path.name] = detail
@@ -249,14 +277,23 @@ def read_cached_official_errors(
     cache_dir: Path | str,
 ) -> tuple[dict[str, OfficialErrors], list[dict[str, object]]]:
     """NHC's per-forecast official errors that ``cache_dir`` holds, by
-    basin, with a provenance record per file. Empty when it holds none."""
+    basin, with a provenance record per file. Empty when it holds none.
+    Raises `OfficialErrorsError` naming a file that is not one of NHC's,
+    since `fetch_adecks` keeps any non-empty file and would not replace it."""
     errors: dict[str, OfficialErrors] = {}
     records: list[dict[str, object]] = []
     for basin, name in OFFICIAL_ERRORS_FILES.items():
         path = Path(cache_dir) / name
         if not path.exists():
             continue
-        errors[basin] = parse_official_errors(path.read_text(encoding="ascii", errors="replace"))
+        try:
+            errors[basin] = parse_official_errors(
+                path.read_text(encoding="ascii", errors="replace")
+            )
+        except OfficialErrorsError as exc:
+            raise OfficialErrorsError(
+                f"{path}: {exc}; delete it and run `anemoi adeck-fetch` again"
+            ) from exc
         records.append({
             "basin": basin, **file_record(path), "url": OFFICIAL_ERRORS_URL.format(name=name),
         })
