@@ -85,7 +85,7 @@ This replaces the two constants with real ocean data, in two separate PRs and re
 
 ## Phase 3: More training data (desk research, start now)
 
-Stage B trains on 2021–2023 (116 storms: 58 Atlantic, 58 Eastern Pacific), validates on 2024 (33 storms) and tests on 2025 (33), because `GDAS_ARCHIVE_START` is 2021-01-01 and the splits move with the newest HURDAT2 season (`data.splits.season_boundaries`, N = 2025). The plan first said 21 Atlantic storms from 2021–2022, copied from `docs/multi_basin.md`, which predates the 2025 season. That still limits how much any new input can show. This research needs no GPU time, so it runs from day one.
+Stage B trains on 2021–2023 (116 storms: 58 Atlantic, 58 Eastern Pacific), validates on 2024 (33 storms) and tests on 2025 (33), because `GDAS_ARCHIVE_START` is 2021-01-01 and the splits move with the newest HURDAT2 season (`data.splits.season_boundaries`, N = 2025). The plan first said 21 Atlantic storms from 2021–2022, copied from `docs/multi_basin.md`; the split in the code says otherwise. That still limits how much any new input can show. This research needs no GPU time, so it runs from day one.
 
 | Dataset | What it gives | Covers | Constraint | First step |
 | --- | --- | --- | --- | --- |
