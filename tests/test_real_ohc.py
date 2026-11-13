@@ -43,6 +43,9 @@ pytestmark = pytest.mark.gridded
 
 LAND = (slice(120, 141), slice(60, 81))  # NA rows 30..35N, cols 85..80W: fill
 COLD_FROM_ROW = 200  # 50N and north: 0.0, water below 26 C
+#: sshaE is fill from this row (37.5N) north as well as on ohc's fill: about
+#: 38% of the cells, as in a real NA file (36,341 of 96,641).
+SSHAE_FILL_FROM_ROW = 150
 
 
 def _value(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
@@ -87,7 +90,11 @@ def _write(
         "time": {"_FillValue": None},
     }
     if sshae is not None:
-        err = np.full(ohc.shape, sshae, dtype=np.float32)
+        # A ramp of +-0.05 about ``sshae`` over the valid rows, so its median
+        # is ``sshae`` but one that counted the fill would be ~0.03 lower.
+        rows = np.arange(ohc.shape[0], dtype=np.float32)[:, None]
+        err = np.broadcast_to(sshae + 0.1 * (rows - 75) / 150, ohc.shape).astype(np.float32)
+        err[SSHAE_FILL_FROM_ROW:] = -999.0
         err[ohc == -999.0] = -999.0
         err[:5, :5] = 5.0  # a few large values must not move the median
         data["sshaE"] = (grid, err[None], {"units": "1"})
@@ -271,9 +278,10 @@ def test_a_file_made_later_than_its_name_says_is_rejected(tmp):
 
 def test_sshae_median_flags_a_degraded_file(tmp, files):
     clean = _decode(files["na3"])
-    assert clean.sshae_median == pytest.approx(0.29)  # fill and the 5.0 block don't count
+    assert clean.sshae_median == pytest.approx(0.29, abs=1e-3)  # fill and 5.0s don't count
     assert not clean.degraded
     bad = _decode(_write(tmp, "na", sshae=0.33))
+    assert bad.sshae_median == pytest.approx(0.33, abs=1e-3)  # counting fill would give ~0.30
     assert bad.degraded
     assert bad.metadata()["degraded"] is True
     none = _decode(_write(tmp, "na", sshae=None))
@@ -496,6 +504,20 @@ def test_stepping_back_stops_after_the_stated_maximum(files):
 def test_no_file_in_either_basin_raises():
     with pytest.raises(OhcUnavailable, match="no usable OHC file"):
         real_ohc.ohc_global(datetime(2022, 8, 1, tzinfo=UTC), fetch=Archive())
+
+
+def test_a_degraded_basin_flags_the_field(files, tmp):
+    t = datetime(2022, 8, 3, 12, tzinfo=UTC)  # reads the files named 2022-08-01
+    archive = _full_archive(files, date(2022, 7, 25), date(2022, 8, 5))
+    clean = real_ohc.ohc_global(t, fetch=archive)
+    assert clean.degraded is False
+    assert clean.metadata()["degraded"] is False
+    archive.put("np", date(2022, 8, 1), _write(tmp, "np", sshae=0.40))
+    field = real_ohc.ohc_global(t, fetch=archive)
+    assert field.degraded is True
+    meta = field.metadata()
+    assert meta["degraded"] is True
+    assert [(b["basin"], b["degraded"]) for b in meta["basins"]] == [("np", True), ("na", False)]
 
 
 def test_a_fetch_failure_that_is_not_a_404_is_not_stepped_over(files):
