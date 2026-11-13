@@ -225,7 +225,9 @@
 		return { trained, verified: split(v.tags['verified_basins']) };
 	}
 
-	const nodeEls: Record<string, SVGGElement> = {};
+	// $state although nothing reacts to it: bind:this into a plain object
+	// logs binding_property_non_reactive on every render in development.
+	const nodeEls = $state<Record<string, SVGGElement>>({});
 	function select(model: string) {
 		selected = model;
 		anchor = nodeEls[model] ?? null;
