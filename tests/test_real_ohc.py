@@ -502,10 +502,24 @@ def test_ohc_global_places_both_basins_and_reports_where_they_came_from(files):
     assert real_ohc.ohc_at(25.0, -90.0, field) == float(na.ohc[100, 40])
 
 
-def test_a_naive_cycle_time_is_utc():
-    assert real_ohc.target_creation_day(datetime(2022, 8, 3, 18)) == date(2022, 8, 1)
-    eastern = datetime(2022, 8, 3, 21, tzinfo=timezone(timedelta(hours=-5)))  # 08-04 02Z
-    assert real_ohc.target_creation_day(eastern) == date(2022, 8, 2)
+def test_a_cycle_time_must_be_a_synoptic_utc_time():
+    """As at every cycle-time entry point (time_utils.require_synoptic): a
+    naive local time east of Greenwich would read a file a day too new."""
+    assert real_ohc.target_creation_day(datetime(2022, 8, 3, 18, tzinfo=UTC)) == date(2022, 8, 1)
+    archive = Archive()
+    for t in (
+        datetime(2022, 8, 4, 0),  # naive
+        datetime(2022, 8, 4, 8, tzinfo=timezone(timedelta(hours=9))),  # 08-03 23Z, local
+        datetime(2022, 8, 4, 9, tzinfo=timezone(timedelta(hours=9))),  # 00Z, but not as UTC
+        datetime(2022, 8, 3, 21, tzinfo=UTC),  # not 00/06/12/18Z
+    ):
+        with pytest.raises(ValueError):
+            real_ohc.target_creation_day(t)
+        with pytest.raises(ValueError):
+            real_ohc.select_file("na", t, fetch=archive)
+        with pytest.raises(ValueError):
+            real_ohc.ohc_global(t, fetch=archive)
+    assert archive.requested == []
 
 
 def test_the_date_rule_uses_the_availability_lag():

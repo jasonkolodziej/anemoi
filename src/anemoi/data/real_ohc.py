@@ -61,12 +61,13 @@ import math
 import urllib.request
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.error import HTTPError, URLError
 
 import numpy as np
 
+from ..time_utils import require_synoptic
 from .availability import OHC_VALID_LAG
 from .real_gridded import GRID_NLAT, GRID_NLON, GRID_RESOLUTION_DEG
 
@@ -195,8 +196,11 @@ def name_day_for_creation(made: date) -> date | None:
 
 
 def cycle_date(t: datetime) -> date:
-    """UTC calendar date of cycle time ``t`` (a naive ``t`` is taken as UTC)."""
-    return t.date() if t.tzinfo is None else t.astimezone(UTC).date()
+    """Calendar date of the cycle at ``t``. ``t`` must be a synoptic UTC
+    time, as at every cycle-time entry point (``ValueError`` otherwise): a
+    naive local time east of Greenwich would read a file a day too new."""
+    require_synoptic(t)
+    return t.date()
 
 
 def target_creation_day(t: datetime) -> date:
@@ -484,11 +488,11 @@ def select_file(
     fetch: Fetch | None = None,
     max_step_back_days: int = MAX_STEP_BACK_DAYS,
 ) -> BasinChoice:
-    """The ``basin`` file a cycle at ``t`` reads: the newest whose creation
-    day is on or before ``date(t) - 2``. A creation day with no file (404,
-    or v1r1's naming switch) or a rejected file is stepped over, at most
-    ``max_step_back_days`` times. Other fetch failures raise: a timeout is
-    not a reason to read older data."""
+    """The ``basin`` file a cycle at ``t`` (a synoptic UTC time) reads: the
+    newest whose creation day is on or before ``date(t) - 2``. A creation
+    day with no file (404, or v1r1's naming switch) or a rejected file is
+    stepped over, at most ``max_step_back_days`` times. Other fetch failures
+    raise: a timeout is not a reason to read older data."""
     _check_basin(basin)
     if max_step_back_days < 0:
         raise ValueError(f"max_step_back_days must be >= 0, got {max_step_back_days}")
@@ -581,10 +585,10 @@ def ohc_global(
     fetch: Fetch | None = None,
     max_step_back_days: int = MAX_STEP_BACK_DAYS,
 ) -> OhcField:
-    """Global OHC for a cycle at ``t`` under the date rule
-    (:func:`select_file`, per basin). A basin with no usable file in the
-    window stays NaN and is reported; raises :class:`OhcUnavailable` when
-    neither basin has one."""
+    """Global OHC for a cycle at ``t`` (a synoptic UTC time) under the
+    date rule (:func:`select_file`, per basin). A basin with no usable file
+    in the window stays NaN and is reported; raises :class:`OhcUnavailable`
+    when neither basin has one."""
     choices = tuple(
         select_file(basin, t, fetch=fetch, max_step_back_days=max_step_back_days)
         for basin in BASINS
