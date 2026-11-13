@@ -508,6 +508,7 @@ test.describe('signed in', () => {
 		// Role is still there and says something else: GOES may be read in
 		// a cycle, and nothing reads it.
 		await expect(await sourceCell(page, 'goes', 'Role')).toHaveText('operational');
+		await expect(page.getByText("This API doesn't say what uses each source")).toHaveCount(0);
 		// No column is pushed off the right edge of the table.
 		const hidden = await page
 			.getByRole('table')
@@ -533,6 +534,9 @@ test.describe('signed in', () => {
 			await expect(cell).not.toContainText('not used yet');
 		}
 		await expect(page.getByText('not used yet')).toHaveCount(0);
+		// The dashes are explained where a sighted reader sees them, not
+		// only to a screen reader.
+		await expect(page.getByText("This API doesn't say what uses each source")).toBeVisible();
 	});
 
 	test('sources on a phone: each source with its role and use, nothing to scroll sideways for', async ({

@@ -22,6 +22,10 @@
 
 	onMount(load);
 
+	// An API from before `used_by` leaves it out of every row. Each cell then
+	// shows a dash; this says why, once, where a sighted reader sees it.
+	const unreported = $derived(sources?.some((s) => !s.used_by) ?? false);
+
 	function fmtMinutes(m: number): string {
 		return m >= 60 ? `${(m / 60).toFixed(1)}h` : `${m.toFixed(0)}m`;
 	}
@@ -57,6 +61,9 @@
 	{:else if sources === null}
 		<p class="text-sm text-text-faint">Loading…</p>
 	{:else}
+		{#if unreported}
+			<p class="mb-4 text-sm text-text-muted">This API doesn't say what uses each source, so Used by shows a dash.</p>
+		{/if}
 		<!-- Narrower than the table: one block per source. Seven columns
 		     don't fit a phone, and a table scrolled sideways shows a
 		     source's key or what uses it, not both. -->
