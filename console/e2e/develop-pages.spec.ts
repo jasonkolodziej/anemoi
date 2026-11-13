@@ -378,6 +378,26 @@ test.describe('signed in', () => {
 		await expect(graph.locator('[data-source-node="besttrack_working"]')).toBeInViewport({ ratio: 1 });
 	});
 
+	// Between a phone and a desktop the graph card is narrower than the
+	// graph. It keeps its desktop size and scrolls, rather than shrinking
+	// its text below what a desktop shows.
+	test('architecture keeps the graph its desktop size on a small laptop', async ({ page }) => {
+		const graph = page.locator('svg[aria-label="Anemoi system"]');
+		const scroller = graph.locator('xpath=..');
+		await page.setViewportSize({ width: 1440, height: 900 });
+		await page.goto('/architecture');
+		await expect(graph.locator('[data-source-node]')).toHaveCount(SOURCES.length);
+		const desktop = (await graph.boundingBox())!.width;
+		expect(await scroller.evaluate((el) => el.scrollWidth - el.clientWidth)).toBe(0);
+		await expect(page.getByText('Scroll the graph sideways')).toHaveCount(0);
+
+		await page.setViewportSize({ width: 1024, height: 768 });
+		await expect(page.getByText('Scroll the graph sideways')).toBeVisible();
+		expect((await graph.boundingBox())!.width).toBeGreaterThanOrEqual(desktop - 8);
+		expect(await scroller.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeGreaterThan(0);
+		expect(await sidewaysOverflow(page)).toBe(0);
+	});
+
 	// Moved from registry.spec.ts (#92 gap 1): the provenance column renders
 	// what the demo API returns.
 	test('registry renders provenance for a seeded demo version', async ({ page }) => {

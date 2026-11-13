@@ -25,9 +25,11 @@
 		anchor?: SVGGElement | null;
 	} = $props();
 
-	// The pipeline left to right, in one coordinate space. On a large screen
-	// the SVG scales to the page's width; on a smaller one it keeps the size
-	// it has there and its container scrolls sideways.
+	// The pipeline left to right, in one coordinate space. The SVG fills its
+	// container, but is never drawn narrower than 1072 px: about the graph
+	// card's width on a desktop, where its 15-unit text is ~8.7 px. Any
+	// narrower and the text would shrink further, so the container scrolls
+	// sideways instead, from a small laptop down to a phone.
 	const W = 1840;
 	const SOURCE = { cx: 126, w: 232, h: 52, pitch: 62 };
 	const PAD = 14;
@@ -291,7 +293,7 @@
 
 <div class="relative">
 	<div bind:this={scroller} onscroll={measure} class="overflow-x-auto">
-		<svg viewBox={`0 0 ${W} ${H}`} class="h-auto w-full min-w-[1080px] lg:min-w-0" role="group" aria-label="Anemoi system">
+		<svg viewBox={`0 0 ${W} ${H}`} class="h-auto w-full min-w-[1072px]" role="group" aria-label="Anemoi system">
 			<defs>
 				<marker id="sys-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
 					<path d="M 0 0 L 10 5 L 0 10 z" class="fill-text-faint" />
