@@ -1554,7 +1554,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser(
         "validation-forecasts",
-        help="write the champions' forecast for every validation window (needs checkpoints)",
+        help="write fusion's and its Group 1 inputs' forecast for every validation window "
+             "(inference only; needs checkpoints)",
     )
     p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
     p.add_argument("--gdas-cache-dir", dest="gdas_cache_dir", required=True)
