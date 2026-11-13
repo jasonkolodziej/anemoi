@@ -401,6 +401,21 @@ def test_bilinear_needs_all_four_corners(files):
     assert math.isnan(real_ohc.ohc_at(20.0, -100.1, na))  # west of NA
 
 
+def test_bilinear_on_a_files_north_and_east_edges_steps_back_inside_it(tmp):
+    """60N is NA's last row and 0E its last column: no node lies beyond
+    them, so the cell is the one below or west of the edge, and a point on
+    the edge reads the edge node."""
+    lat, lon = real_ohc.expected_coordinates("na")
+    ohc = _value(lat, lon)  # the plane all the way north, no cold rows
+    ohc[LAND] = -999.0
+    na = _decode(_write(tmp, "na", ohc=ohc))
+    assert real_ohc.ohc_at(60.0, -50.0, na) == float(na.ohc[240, 200])
+    assert real_ohc.ohc_at(10.0, 0.0, na) == float(na.ohc[40, 400])
+    assert real_ohc.ohc_at(60.0, 0.0, na) == float(na.ohc[240, 400])
+    assert real_ohc.ohc_at(60.0, -49.9, na) == pytest.approx(100.0 + 30.0 - 4.99, abs=1e-4)
+    assert math.isnan(real_ohc.ohc_at(60.01, -50.0, na))
+
+
 def test_bilinear_wraps_at_greenwich_on_the_lattice(files):
     na = _decode(files["na3"])
     field = real_ohc.place([na])
