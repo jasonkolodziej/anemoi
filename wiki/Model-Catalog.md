@@ -49,6 +49,8 @@ Recurrent architectures learn smooth, physics-constrained temporal evolution fro
 
 Global average pooling at the end makes the encoder resolution-agnostic, which matters because GOES crop sizes differ between the 512 and 1024 pixel datasets.
 
+> **What it reads today (2026-11-12):** the 10 cached gridded fields (ERA5 in Stage A, GDAS f006 in Stage B) as its channel stack, plus one constant channel per training basin (`training.real_run_cnn`). `data.real_goes` fetches real GOES-18/19 crops in exactly this shape, but no training or serving path reads it yet -- that is step 2 of `docs/input_sources_plan.md` (Stage B only: the archive starts in 2017). Served champion: cnn v8, trained and verified in AL and EP.
+
 ### Notus — Transformer — `models/transformer.py`
 
 *South wind. Heavy, deliberate, sees the whole sky. The strategist.* · `#F59E0B`
@@ -74,6 +76,8 @@ Self-attention captures long-range dependencies — a trough over the Great Plai
 - **In pipeline:** critical for rapid intensification, where inner-core processes are localised and non-Euclidean
 
 Implemented as an interaction network with `index_add_` scatter rather than a PyTorch Geometric dependency, so the reference implementation installs with plain torch. The message/update decomposition is the standard one; swapping in PyG later is a local change.
+
+> **What it reads today (2026-11-12):** the cached 41×41 gridded crop as a regular lattice (every 4th cell a node, `training.real_run_gnn`), not a station or buoy mesh. Buoy, dropsonde and microwave data have fetch adapters (`data.real_ndbc`, `data.real_dropsonde`, `data.real_microwave`) but are kept for verification rather than model input in `docs/input_sources_plan.md`: too sparse and too biased by where recon flies to train on. Served champion: gnn v7, trained and verified in AL and EP.
 
 ### Kaikias — PINN / Neural ODE — `models/pinn.py`
 

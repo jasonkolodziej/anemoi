@@ -46,6 +46,7 @@ src/anemoi/
 │   ├── gridded_cache.py  source-agnostic concurrent fetch + disk cache engine, plus durable R2 archive sync (#22)
 │   ├── era5_cache.py     era5-specific fetch fn over gridded_cache (Stage A)
 │   ├── gdas_cache.py     gdas-specific fetch fn over gridded_cache (Stage B); one NWP lead per cache dir (#215)
+│   ├── cache_localize.py copy a cache tree to local disk once, before training reads it every epoch (#234)
 │   ├── real_goes.py      GOES-18/19 ABI imagery + derived products -> SatelliteCrop (#146)
 │   ├── real_microwave.py RSS SSMIS microwave radiometer data (#147)
 │   ├── real_dropsonde.py NOAA/AFRC dropsonde profiles (#147)
@@ -65,6 +66,7 @@ src/anemoi/
 │   ├── triggers.py       retrain triggers + derived-model cascade
 │   ├── device.py         MPS/CUDA/CPU selection for local (non-cloud) runs
 │   ├── streaming.py      per-batch torch DataLoader for large cached datasets (#22)
+│   ├── optim.py          the transformer's AdamW + warmup + cosine + clipping (#238)
 │   ├── capacity_ablation.py  #9 capacity-vs-sample-size ablation harness
 │   ├── noise_sensitivity.py  #12 WorkingTrackNoise sensitivity harness
 │   ├── real_run.py       real Stage A/B curriculum for the LSTM baseline (#22) -- track-only, no gridded cache needed
@@ -126,8 +128,9 @@ docker/
 console/                   SvelteKit console on Cloudflare Workers (anemoi.systems)
 ├── src/routes/            storms, storms/[stormId], models, sources, registry, monitoring,
 │                          retraining, docs, auth, profile; api/[...path] proxies to anemoi-api-real
-├── src/lib/               api client, components/anemoi (ConeMap, RIFlagBanner, …),
-│                          lastKnown.ts (last-seen data per page, #207), poll.ts, utils.ts
+├── src/lib/               api client, components/anemoi (ConeMap, RIFlagBanner, system/, …),
+│                          lastKnown.ts (last-seen data per page, #207), poll.ts, utils.ts,
+│                          geo.ts (antimeridian-safe longitudes, #239), notify.ts (toasts)
 ├── scripts/sync-wiki.mjs  renders ../wiki into /docs at build time
 ├── migrations/            D1 schema (auth, API keys, cycle_runs)
 └── e2e/                   Playwright suites

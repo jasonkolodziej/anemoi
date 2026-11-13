@@ -63,7 +63,14 @@ So between t+0:00 and t+1:30 the newest forecast on a storm is still the previou
 
 ---
 
-## The GCP training instance
+## Training compute
+
+**Since 2026-11-12, real training runs as a Cloud Run Job on an L4** (`anemoi-train-gpu`, `us-east4`), which costs nothing between executions; the CPU job `anemoi-train-schedule` (`us-central1`) fills the caches and runs one-off commands. Commands, quota and measured run times: [docker/cloud-run-training/README.md](https://github.com/jasonkolodziej/anemoi/blob/main/docker/cloud-run-training/README.md). A GPU execution can be preempted and the job has no retries, so a run that ends without its `[OK]` summary is re-run by hand; a subset run re-syncs diffusion and fusion itself (#240).
+
+### The GCP training VM (stopped)
+
+The VM below ran the first real curricula and is kept for the migration runbook; it is stopped and should stay stopped unless Cloud Run GPUs are unavailable.
+
 
 `anemoi-train-1` (GPU, real training only — never in the request path) does not need to run 24/7, and running it idle is a real, found cost mistake, not a defensible steady state: confirmed live (2026-09-17) via `gcloud compute ssh` — 8+ hours uptime, 0% GPU utilization, no active session, after its most recent real training run had already completed.
 

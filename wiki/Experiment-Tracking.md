@@ -10,6 +10,8 @@ Tags are **validated**, not free-form. An untagged or mistagged run is one that 
 
 When a real `mlflow_client` is configured (`tracking.mlflow_client.mlflow_client_from_env()`, `MLFLOW_TRACKING_URI`), `experiment_tracking.log_curriculum_stages()` also creates one real MLflow run per completed curriculum stage (Stage A and Stage B each get their own run, matching `RunTags`' own per-stage `stage_name` field) under the correct wind-god experiment name, logging the per-run verification metrics below for the deployable stage. Per-epoch metrics (`train_loss` per epoch, `gpu_utilization`, `gpu_memory_gb`) are **not** logged -- that needs changes inside every `train_*_stage`'s own epoch loop (seven files), judged more invasive than the value justifies for now; what's logged is the per-stage final loss and the full verification dict, already computed and sitting in memory once a stage completes.
 
+**MLflow is optional (#233).** Every stage's tags, metrics and params are also written to durable storage (R2) as `runs/<model>/<timestamp>.json`, with the MLflow run id when there is one, whether or not MLflow is configured or reachable. MLflow is a view onto those records, not their only copy. `mlflow_client_from_env()` probes the server once at startup and skips it for the whole run if it doesn't answer, and it defaults MLflow's HTTP retries to 2 and its timeout to 20 s, so a down server costs seconds, not minutes per call. See [Decision Log](Decision-Log) 61.
+
 ---
 
 ## Run tags

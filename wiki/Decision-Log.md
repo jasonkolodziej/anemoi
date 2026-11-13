@@ -800,8 +800,6 @@ The API job in `deploy.yml` runs it, since the cycle's product maths is what the
 
 **Enforced by** `tests/test_real_gridded.py` (each variable read once, levels in the right fields), `tests/test_gridded_cache.py` (shards disjoint, covering, balanced; one write per file).
 
----
-
 ### 60. A live system view, read from the models, behind sign-in with the other Develop pages — *console, api, security*
 
 **Decided:** the console's **Develop → Architecture** page draws the system from the registry and the models themselves; the Mermaid diagram on Home stays as the plain overview. Architecture, Registry, Monitoring and Retraining are signed-in only, grouped under a **Develop** menu.
@@ -811,6 +809,67 @@ The API job in `deploy.yml` runs it, since the cycle's product maths is what the
 - **Access.** Each Develop page has a `-guard.ts` (`$lib/server/require-sign-in`) that sends a signed-out visitor to sign in and back. anemoi-api-real's Worker refuses the reads only those pages make without a user or API key (`requiresSignedInUser`); the reads the public storm page makes stay open. The architecture endpoint also builds models on the container, another reason not to leave it open.
 
 **Enforced by** `tests/test_model_architecture.py` (every model described; a version's `arch_params` used; the GNN fed its real lattice), `docker/api/test/routing.test.ts` (which reads need a user, decoded paths included), `console/e2e/develop-pages.spec.ts` (redirects, the Develop menu, the system and layer views, muted beams; the registry and monitoring tests moved here, as those pages now need sign-in).
+
+---
+
+### 61. MLflow is optional: a down server stalled GPU training, and nothing it records lives only there (#233, #235) — *tracking, training*
+
+**Found** on the first multi-basin GPU run (2026-11-12): MLflow answered 502, and after the LSTM's Stage A the run sat at 0% GPU and 1% CPU for 20+ minutes. Tracking never fails a run, but MLflow's client retries each call 7 times with a doubling backoff and a 120 s timeout, about four minutes per call, and each stage makes several calls. Across 13 stages that is hours of an idle GPU against Cloud Run's 12-hour GPU task limit.
+
+- **Fail fast.** `mlflow_client_from_env()` defaults `MLFLOW_HTTP_REQUEST_MAX_RETRIES=2` and `MLFLOW_HTTP_REQUEST_TIMEOUT=20` (an explicit env value wins) and probes the server with one read-only call. Unreachable at startup means no client, so the run never calls it again.
+- **Durable copy.** `log_curriculum_stages()` writes every stage's tags, metrics and params, plus the MLflow run id when there is one, to `runs/<model>/<timestamp>.json` through the registry's checkpoint store, MLflow or not. The registry itself was already mirrored to R2 on every write.
+- **For that run.** The GPU job (`anemoi-train-gpu`, us-east4) had its `MLFLOW_TRACKING_URI` secret removed and was restarted; it predates this change.
+
+**Enforced by** `tests/test_mlflow_client.py` (an unreachable server returns None in under 30 s; explicit retry settings win), `tests/test_experiment_tracking.py` (records written with no MLflow; a failing store never fails training).
+
+---
+
+### 62. Training reads its caches from memory, each sample decoded once: the first GPU run went from stalled to 3 h (#234, #236) — *training, performance*
+
+**Found** on the first multi-basin GPU run (`anemoi-train-gpu`, one L4, us-east4). With MLflow out of the way (decision 61), the gridded models still left the GPU idle, for two reasons in turn:
+
+- **The bucket mount.** Training streams each window's fields every epoch (`training.streaming.WindowDataset`), and `/cache` is gcsfuse, which keeps no file contents between opens: every sample was a cross-region round trip. The CNN sat at 0% GPU, 3% CPU. **Fix (#234):** the entrypoint copies the caches to `/tmp` (memory-backed) once with 64 parallel copies (`anemoi cache-localize`): 38,911 ERA5 files, 2.55 GB, in ~175 s; GDAS f006 in 17 s. On any failure, including a directory that can't be listed (#235), it trains from `/cache`.
+- **Decoding.** From memory, the CNN still ran at ~9% GPU with the CPU saturated: each window decoded its `.npz` every epoch, ~97k decodes per Stage A epoch with `n_augment=3`. **Fix (#236):** with `ANEMOI_FIELDS_MEMO=1` (set by the training entrypoint, off elsewhere) `load_cached_fields` keeps each decoded sample, keyed by path, mtime and size, with read-only arrays. The main process decodes every training file in its statistics pass before the DataLoader forks, so the workers share them copy-on-write (~5 GB, memory steady at ~28% of 32 GiB). With 7 workers (`NUM_WORKERS=7`) the local profile went from 4,776 to 28,278 windows/s.
+
+**Result** (2026-11-12, `anemoi-train-gpu-gk6cw`, image `c68519a`): all 8 tasks in 3 h 08 min: LSTM 6.6 min, CNN 27 min, transformer 91 min, GNN 32 min, PINN ~23 min, latents + diffusion + fusion ~4 min. GPU ~20–27% on the CNN (a small model at batch 32 is bound by per-step overhead), ~50% on the transformer, ~58% on the GNN.
+
+**Also:** the GPU job runs in us-east4, the region the Cloud Run L4 quota was granted in (us-central1 was denied), reading the us-central1 bucket. A GPU task timeout over 1 h needs the beta launch stage (`gcloud beta run jobs`).
+
+**Enforced by** `tests/test_cache_localize.py` (copies every file; reruns fill gaps; an unlistable directory fails the copy), `tests/test_gridded_cache.py` (memo off decodes each read; on decodes once with read-only arrays; a rewritten file is decoded again); the full suite also passes with the memo on.
+
+---
+
+### 63. The transformer gets warmup, cosine decay and clipping: it had never fitted, and was what kept EP out of distribution (#238) — *training, multi-basin*
+
+**Found** after the first multi-basin run (decision 62): EP stayed out of distribution for every model, because the registry counts a basin only when every Group 1 champion is verified there, and the transformer's champion was still the Atlantic-only v5. The new v7 hadn't been staged: its AL 48 h error was 315 nm against v5's 282, beyond the 5% new-basin tolerance. The stage records (`runs/<model>/*.json` in R2, decision 61) showed why: its Stage A ended at a **training** loss of 1.63 on standardised targets, worse than predicting the mean (~1.0), while the CNN reached 0.02 and the GNN 0.25 on the same windows. Plain Adam at a constant 1e-3, with no warmup or clipping, over ~360k steps had never trained this pre-norm transformer.
+
+**Decided:** the transformer alone uses AdamW (weight decay 0.01), each stage's learning rate capped at 3e-4 (Stage B's 1e-4 unchanged), linear warmup over 5% of the stage's steps, cosine decay to 10% of the peak on the last update, and gradient-norm clipping at 1.0 (`training/optim.py`, `configs/curriculum.yaml` `transformer`). The other models train fine on plain Adam and keep it.
+
+**Result** (`anemoi-train-gpu-vhfz9`, transformer only, 95 min Stage A): Stage A training loss 1.63 → **0.017**; transformer v8 overall 48 h 211 nm (v7 265, v5 282), **AL 261** (beats v5 outright), EP 139, CP 118, beating persistence in all three. Staged, which made EP verified for every champion; the live API has served EP storms in distribution since. Diffusion and fusion were re-synced to the new champion set (v12, `--derived-from-champions`).
+
+**Enforced by** `tests/test_optim.py` (warmup, the cosine floor on the last update, config validation, the clipped gradient norm on a real optimiser); `tests/test_config_sync.py` imports the module so its keys count as read.
+
+---
+
+### 64. A Pacific storm in the product: its own cone radii, a basin filter, a map that crosses 180, and CP waits for its storms (#239) — *inference, console, multi-basin*
+
+Phase 1 of docs/multi_basin.md after its first training run (decision 57), tracked in #237.
+
+- **Cone radii per basin.** NHC publishes one 2/3-probability column for the Eastern and Central North Pacific (2026: 25/37/48/56/78/106/138 nm, against the Atlantic's 25/39/49/62/95/134/200). `configs/inference.yaml` `ensemble.climatological_cone_nm_by_basin`; `run_cycle` reads the basin from the storm id, and the climatological fallback ensemble, the fallback cone and the underdispersion check use that basin's radii, as does the spread backtest per case. The demo cycle and demo API pass the basin too (review of #239). WP, IO and SH keep the Atlantic's until radii are chosen for them.
+- **Console.** A basin filter on the storm list, kept in the URL (`?basin=EP`), shown when more than one basin has a storm. The map unwraps longitudes around the storm (`$lib/geo.unwrapLon`), so a Central Pacific track crossing 180 is drawn continuously. The badge reads **not verified**, not "untrained": `trained_basin` has meant *verified* since decision 56, and the models do train on EP.
+- **CP waits for its storms.** A basin counts as trained from Stage B's training samples, and Stage B's training seasons (2021–2023) hold no CP-id storm: those ids go only to storms that form there (one in 2024, two in 2025), while the eleven EP storms that tracked into Central Pacific waters count as EP. Counting Stage A's 1,148 ERA5 CP fixes instead would verify CP on 36 validation windows. The boundaries roll with the newest final season, so CP is gated like any basin once the 2024 storm enters training.
+
+**Enforced by** `tests/test_postprocess.py` and `tests/test_cycle.py` (Pacific radii for EP/CP, Atlantic for the rest; an EP fallback cone and ensemble tighter than an AL one), `console/e2e/basins.spec.ts` (unwrapping across 180; the filter, its URL state and the badge).
+
+---
+
+### 65. Diffusion and fusion are conditioned on the champions inference serves, not on whatever this run trained (#240) — *training, serving*
+
+**Found** on the same runs as decision 63. Latents came from *this run's* Group 1 versions. In the full run, transformer v7 failed its gate but still conditioned diffusion/fusion v11, so they were desynced from the served v5 for three hours (live cycles refuse a derived model whose `latent_signature` doesn't match the champions). In the transformer-only run, latents failed outright, leaving diffusion/fusion stale until a separate `--derived-from-champions` re-sync.
+
+**Decided:** `_run_latents` uses each Group 1 model's champion after this run's promotions: this run's version only if it was promoted, otherwise the champion loaded from the registry, as `seed_from_champions` does. A derived-only re-sync also skips copying the ERA5 cache, since latents read GDAS alone.
+
+**Enforced by** `tests/test_real_orchestrator.py` (a subset run's latents use the other models' champions; a trained but unpromoted model is replaced by its champion; the recorded `group1_versions` are the champions).
 
 ---
 

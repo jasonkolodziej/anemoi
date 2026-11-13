@@ -25,6 +25,12 @@ The blocks below are the files with their full-line comments removed; the files 
 Two-stage training. See [Train/Serve Consistency](Train-Serve-Consistency).
 
 ```yaml
+data:
+  # The basins training reads, as ATCF codes (docs/multi_basin.md). One model
+  # per architecture is trained on all of them; each is scored and gated on
+  # its own.
+  basins: [AL, EP, CP]
+
 stage_a:
   name: A  # fixed: recorded in run tags
   flavor: era5_pretrain  # fixed: the stage defines it
@@ -49,12 +55,26 @@ stage_b:
   learning_rate: 1.0e-4
   frozen_modules: [encoder]
 
+# How the transformer is optimised (training/optim.py; Decision Log 63).
+# Each stage's learning_rate is capped at max_learning_rate, warmed up over
+# warmup_fraction of the stage's steps, then decayed by cosine to
+# min_learning_rate_fraction of the peak; gradients are clipped to
+# grad_clip_norm (0 = off). Only the transformer reads these.
+transformer:
+  max_learning_rate: 3.0e-4
+  warmup_fraction: 0.05
+  min_learning_rate_fraction: 0.1
+  grad_clip_norm: 1.0
+  weight_decay: 0.01
+
 working_track_noise:
   position_rms_nm: 15.0
   intensity_rms_kt: 5.0
   pressure_rms_mb: 3.0
   quantise: true
 ```
+
+The season ranges shown are the fixed fallback; a real archive's splits roll with its newest final season (`data.splits.season_boundaries`: for an archive ending in 2025, Stage B trains on 2021-2023, validates on 2024, tests on 2025).
 
 **The hard rule:** the final stage is always the operational flavor. A run that stops after Stage A cannot be registered or promoted.
 
@@ -110,6 +130,11 @@ ensemble:
     72: 95
     96: 134
     120: 200
+  # Per basin where NHC publishes its own column (EP and CP share one);
+  # any other basin uses the Atlantic table above.
+  climatological_cone_nm_by_basin:
+    EP: {12: 25, 24: 37, 36: 48, 48: 56, 72: 78, 96: 106, 120: 138}
+    CP: {12: 25, 24: 37, 36: 48, 48: 56, 72: 78, 96: 106, 120: 138}
 
 products:
   lead_hours: [12, 24, 36, 48, 72, 96, 120]  # fixed: the trained models' output leads
@@ -130,7 +155,7 @@ cycle_start_latest + reduced_worst_case + advisory_margin ≤ advisory_offset
 
 > **`scheduled_run_offset_minutes` is when production runs a cycle**, not when it may start: `anemoi-api-real`'s cron (`30 1,7,13,19 * * *` in `docker/api/wrangler.jsonc`) fires 90 minutes after each synoptic time, 10 minutes past the vitals timeout, so vitals have landed or the estimated fallback is the honest answer. The console's storm page uses its own copy (`CYCLE_RUN_DELAY_MIN` in `console/src/lib/utils.ts`) to say when the next cycle is due. The Python side refuses an offset that isn't after the vitals timeout, and the sync test reads the cron and the console constant -- move one without the others and it fails.
 
-`ensemble.reduced_members` is the load-shedding ensemble size (the 2:1 ratio of #8). `products.cone_percentile` and `products.landfall_threshold_nm` are the definitions of two served products: the ensemble cone's radius is the 67th percentile of member distance from the ensemble mean, and landfall probability counts members passing within 60 nm of the requested coastal point. `ensemble.climatological_cone_nm` is NHC's current-season (2026) 2/3-probability cone, used when the ensemble is too tight to trust; re-baseline it every season.
+`ensemble.reduced_members` is the load-shedding ensemble size (the 2:1 ratio of #8). `products.cone_percentile` and `products.landfall_threshold_nm` are the definitions of two served products: the ensemble cone's radius is the 67th percentile of member distance from the ensemble mean, and landfall probability counts members passing within 60 nm of the requested coastal point. `ensemble.climatological_cone_nm` is NHC's current-season (2026) Atlantic 2/3-probability cone, used when the ensemble is too tight to trust, and `climatological_cone_nm_by_basin` the Eastern/Central Pacific column (138 vs 200 nm at 120 h); a cycle picks the table by its storm's basin (Decision Log 64). Re-baseline both every season.
 
 ---
 

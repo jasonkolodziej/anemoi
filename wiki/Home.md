@@ -44,14 +44,14 @@ Six independent checks for what is arguably one policy is deliberate. Each guard
 
 ## System at a glance
 
-The overview. For the system as it is serving now -- each model's served version, its basins, the shapes passed between models, and every layer, read from the models themselves -- see [**Develop → Architecture**](https://anemoi.systems/architecture) in the console (signed in).
+The overview. Dashed sources have real fetch adapters but feed no model yet ([Data Sources](Data-Sources); the order for wiring them is `docs/input_sources_plan.md`). The served models are trained on the Atlantic and Eastern Pacific and verified in both (2026-11-12, [Decision Log](Decision-Log) 57, 63); the Central Pacific waits for Stage B training storms. For the system as it is serving now -- each model's served version, its basins, the shapes passed between models, and every layer, read from the models themselves -- see [**Develop → Architecture**](https://anemoi.systems/architecture) in the console (signed in).
 
 ```mermaid
 flowchart TD
     A[Working best-track / TC-Vitals] --> F
     B[GDAS/GFS t−6 analysis] --> F
-    C[GOES imagery] --> F
-    D[Buoy / dropsonde / microwave] --> F
+    C[GOES imagery<br/>fetched, not read by a model yet] -.-> F
+    D[Buoy / dropsonde / microwave<br/>fetched, not read by a model yet] -.-> F
     F[Preprocessing &<br/>feature engineering] --> G1[LSTM]
     F --> G2[CNN]
     F --> G3[Transformer]
@@ -62,7 +62,7 @@ flowchart TD
     G4 --> P
     P --> FU[Fusion / consensus]
     FU --> AE[**Anemoi-Core**<br/>deterministic track + intensity]
-    AE --> ME[**Anemoi-Spread**<br/>diffusion ensemble<br/>20–50 members]
+    AE --> ME[**Anemoi-Spread**<br/>diffusion ensemble<br/>50 members, 25 under load shedding]
     ME --> PP[Post-processing:<br/>cone, intensity PDF,<br/>landfall, RI flag]
     PP --> OUT[Dissemination:<br/>JSON / GeoJSON / archive]
 ```
