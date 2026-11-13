@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { getActivePin, getArchitecture, listRegistry } from '$lib/api/endpoints';
+	import { getActivePin, getArchitecture, getSources, listRegistry } from '$lib/api/endpoints';
 	import { errorDetail, notifyError } from '$lib/notify';
-	import type { ActivePin, ArchitectureOut, RegistryEntry } from '$lib/api/types';
+	import type { ActivePin, ArchitectureOut, RegistryEntry, SourceOut } from '$lib/api/types';
 	import SystemGraph from '$lib/components/anemoi/system/SystemGraph.svelte';
 	import ArchitectureView from '$lib/components/anemoi/system/ArchitectureView.svelte';
 	import { formatParams } from '$lib/components/anemoi/system/shapes';
@@ -15,6 +15,8 @@
 	let pin = $state<ActivePin | null>(null);
 	let architectures = $state<Record<string, ArchitectureOut | undefined>>({});
 	let failed = $state<Record<string, string>>({});
+	let sources = $state<SourceOut[] | null>(null);
+	let sourcesFailed = $state(false);
 	let loading = $state(true);
 	let selected = $state<string | null>(null);
 	let anchor = $state<SVGGElement | null>(null);
@@ -81,7 +83,24 @@
 		}
 	}
 
-	onMount(load);
+	// The graph's left column: every registered source and which models read
+	// it (`used_by`). Its own request with its own retry, like the registry
+	// and each model above: the rest of the graph is drawn without it, with
+	// one stand-in node where the sources go.
+	async function loadSources() {
+		sourcesFailed = false;
+		try {
+			sources = await getSources();
+		} catch (e) {
+			sourcesFailed = true;
+			notifyError('Could not load the data sources', e, loadSources);
+		}
+	}
+
+	onMount(() => {
+		load();
+		loadSources();
+	});
 
 	const total = $derived(
 		Object.values(architectures).reduce((sum, a) => sum + (a?.total_params ?? 0), 0)
@@ -105,7 +124,7 @@
 	</header>
 
 	<div bind:this={graphEl} class="mb-6 rounded-lg border border-border bg-bg p-3">
-		<SystemGraph {registry} {pin} {architectures} bind:selected bind:anchor />
+		<SystemGraph {registry} {pin} {architectures} {sources} {sourcesFailed} bind:selected bind:anchor />
 		<p class="mt-2 px-1 text-xs text-text-faint">
 			Select a model to open its layers; the beams show where data flows, and selecting a model mutes every path
 			it isn't on. Basins: <span class="text-clear">✓ verified</span> (beats persistence there) ·

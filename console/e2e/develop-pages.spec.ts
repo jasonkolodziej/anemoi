@@ -92,8 +92,9 @@ test.describe('signed in', () => {
 		await page.goto('/architecture');
 		await expect(page.getByRole('heading', { name: 'Architecture' })).toBeVisible();
 		const muted = page.locator('svg[aria-label="Anemoi system"] .beam-muted');
-		// Nothing selected: only the two sources no model reads yet are muted.
-		await expect(muted).toHaveCount(2);
+		// Nothing selected: every beam runs. An edge nothing travels (from a
+		// source no model reads yet) has no beam to mute.
+		await expect(muted).toHaveCount(0);
 
 		// Desktop width: the layers open in a popover laid over the graph,
 		// inside the screen -- the page doesn't scroll for it.
@@ -119,10 +120,10 @@ test.describe('signed in', () => {
 		await expect(cnn).toContainText('blocks.3');
 		// The demo versions predate arch_params, and the page says so.
 		await expect(popover.getByText(/builder's defaults/)).toBeVisible();
-		// The CNN's path: the GFS source in, through PINN, fusion and
-		// diffusion out. The other three models' edges and the best-track
-		// source are muted on top of the two unused sources.
-		await expect(muted).toHaveCount(2 + 1 + 3 + 3);
+		// The CNN's path: GDAS/GFS and ERA5 in, through PINN, fusion and
+		// diffusion out. Muted: the working best-track (the CNN doesn't
+		// read it), and the other three models' edges in and out.
+		await expect(muted).toHaveCount(1 + 3 + 3);
 
 		// Hovering a block lists what's inside it.
 		await cnn.getByRole('button', { name: /^blocks\.0,/ }).hover();
@@ -131,8 +132,146 @@ test.describe('signed in', () => {
 		// Escape closes it, and the whole system flows again.
 		await page.keyboard.press('Escape');
 		await expect(popover).toBeHidden();
-		await expect(muted).toHaveCount(2);
+		// The pointer was on the popover, which lay over the graph: move it
+		// off, or the node now under it is hovered and mutes the rest.
+		await page.mouse.move(0, 0);
+		await expect(muted).toHaveCount(0);
 		expect(pageErrors).toEqual([]);
+	});
+
+	// The graph's sources, and which models read them, come from
+	// /v1/sources (`used_by`), not from a list kept in the console.
+	test('architecture draws every registered source and how it is used', async ({ page }) => {
+		const pageErrors: string[] = [];
+		page.on('pageerror', (err) => pageErrors.push(err.message));
+		await page.goto('/architecture');
+		const graph = page.locator('svg[aria-label="Anemoi system"]');
+		const source = (key: string) => graph.locator(`[data-source-node="${key}"]`);
+
+		await expect(graph.locator('[data-source-node]')).toHaveCount(SOURCES.length);
+		for (const { key } of SOURCES) await expect(source(key)).toBeVisible();
+
+		// Three states, told apart in the node's own words (and by its mark,
+		// outline and edge, which a screenshot shows and this can't).
+		await expect(source('besttrack_working')).toHaveAttribute('data-use', 'input');
+		await expect(source('besttrack_working')).toContainText('LSTM · PINN');
+		await expect(source('gdas_gfs')).toContainText('CNN · Transformer · GNN · PINN');
+		// ERA5 feeds the same models, in Stage A pretraining only.
+		await expect(source('era5')).toHaveAttribute('data-use', 'input');
+		await expect(source('era5')).toContainText('Stage A');
+		for (const key of ['dropsonde', 'ndbc']) {
+			await expect(source(key)).toHaveAttribute('data-use', 'reference');
+			await expect(source(key)).toContainText('verification only');
+		}
+		await expect(source('besttrack_final')).toHaveAttribute('data-use', 'reference');
+		await expect(source('besttrack_final')).toContainText('labels · verification');
+		for (const key of ['goes', 'microwave', 'sst_ohc', 'ensemble_perturbations']) {
+			await expect(source(key)).toHaveAttribute('data-use', 'unused');
+			await expect(source(key)).toContainText('not used yet');
+		}
+
+		const legend = page.getByRole('list', { name: 'How a data source is drawn' });
+		await expect(legend.getByRole('listitem')).toHaveText([
+			'feeds a model',
+			'labels or verification only, never a model input',
+			'not used yet',
+		]);
+
+		// A beam per edge something travels: the three sources a model
+		// reads, then the eleven edges from preprocessing on.
+		const beams = graph.locator('.beam');
+		const muted = graph.locator('.beam-muted');
+		await expect(beams).toHaveCount(3 + 11);
+		await expect(muted).toHaveCount(0);
+
+		// Hovering a model keeps the sources it reads: the LSTM's is the
+		// working best-track alone. Muted: the two gridded sources, and the
+		// other three models' edges in and out.
+		await page.getByRole('button', { name: /\(lstm\)/ }).hover();
+		await expect(muted).toHaveCount(2 + 3 + 3);
+		await expect(source('besttrack_working')).toHaveAttribute('opacity', '1');
+		await expect(source('gdas_gfs')).toHaveAttribute('opacity', '0.45');
+
+		// Hovering a source keeps the models that read it: GDAS/GFS feeds
+		// the gridded three and PINN. Muted: the other two sources that
+		// feed a model, and the LSTM's edge in and out.
+		await source('gdas_gfs').hover();
+		await expect(muted).toHaveCount(2 + 1 + 1);
+		await expect(page.locator('[data-model-node="cnn"]')).toHaveAttribute('opacity', '1');
+		await expect(page.locator('[data-model-node="lstm"]')).toHaveAttribute('opacity', '0.45');
+
+		// A source nothing reads has no path to show, and mutes nothing.
+		await source('dropsonde').hover();
+		await expect(muted).toHaveCount(0);
+		await source('goes').hover();
+		await expect(muted).toHaveCount(0);
+		expect(pageErrors).toEqual([]);
+	});
+
+	test('architecture draws the pipeline when the sources fail to load', async ({ page }) => {
+		const pageErrors: string[] = [];
+		page.on('pageerror', (err) => pageErrors.push(err.message));
+		await serveInstead(page, '/v1/sources', { status: 503, json: { detail: 'registry offline' } });
+		await page.goto('/architecture');
+		const graph = page.locator('svg[aria-label="Anemoi system"]');
+
+		// One stand-in where the sources go, a toast that offers a retry, and
+		// the rest of the system as usual.
+		await expect(graph.locator('[data-sources-pending]')).toContainText('not available right now');
+		await expect(graph.locator('[data-source-node]')).toHaveCount(0);
+		await expect(page.getByText('Could not load the data sources')).toBeVisible();
+		await expect(page.getByRole('button', { name: /\(lstm\)/ })).toBeVisible();
+		await expect(graph.locator('.beam')).toHaveCount(11);
+		await expect(page.getByRole('list', { name: 'How a data source is drawn' })).toHaveCount(0);
+
+		// Retry, with the API back.
+		await page.unroute('**/api/v1/sources');
+		await page.getByRole('button', { name: 'Retry' }).click();
+		await expect(graph.locator('[data-source-node]')).toHaveCount(SOURCES.length);
+		await expect(graph.locator('[data-sources-pending]')).toHaveCount(0);
+		expect(pageErrors).toEqual([]);
+	});
+
+	test('architecture draws no source as feeding a model when the API predates used_by', async ({ page }) => {
+		await serveInstead(page, '/v1/sources', { json: SOURCES_BEFORE_USED_BY });
+		await page.goto('/architecture');
+		const graph = page.locator('svg[aria-label="Anemoi system"]');
+
+		await expect(graph.locator('[data-source-node]')).toHaveCount(SOURCES.length);
+		await expect(graph.locator('[data-source-node][data-use="unknown"]')).toHaveCount(SOURCES.length);
+		await expect(graph.getByText('not used yet')).toHaveCount(0);
+		// No beam leaves a source: only the eleven edges from preprocessing on.
+		await expect(graph.locator('.beam')).toHaveCount(11);
+		await expect(page.getByText("This API doesn't say what uses each source")).toBeVisible();
+	});
+
+	test('architecture on a phone: the graph scrolls sideways, the page does not', async ({ page }) => {
+		await page.setViewportSize(PHONE);
+		await page.goto('/architecture');
+		const graph = page.locator('svg[aria-label="Anemoi system"]');
+		const scroller = graph.locator('xpath=..');
+		await expect(graph.locator('[data-source-node]')).toHaveCount(SOURCES.length);
+
+		// The graph is wider than the screen, and says it scrolls.
+		expect(await scroller.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeGreaterThan(0);
+		await expect(page.getByText('Scroll the graph sideways')).toBeVisible();
+		expect(await sidewaysOverflow(page)).toBe(0);
+
+		// The far end of the pipeline starts off-screen and is reached by
+		// scrolling the graph, with the page staying where it is.
+		const last = page.getByRole('button', { name: /\(diffusion\)/ });
+		await expect(last).not.toBeInViewport();
+		await scroller.evaluate((el) => el.scrollTo({ left: el.scrollWidth }));
+		await expect(last).toBeInViewport({ ratio: 1 });
+		const box = (await last.boundingBox())!;
+		expect(box.x).toBeGreaterThanOrEqual(0);
+		expect(box.x + box.width).toBeLessThanOrEqual(PHONE.width);
+		expect(await page.evaluate(() => window.scrollX)).toBe(0);
+		expect(await sidewaysOverflow(page)).toBe(0);
+
+		// And back: the first source is in view again.
+		await scroller.evaluate((el) => el.scrollTo({ left: 0 }));
+		await expect(graph.locator('[data-source-node="besttrack_working"]')).toBeInViewport({ ratio: 1 });
 	});
 
 	// Moved from registry.spec.ts (#92 gap 1): the provenance column renders
