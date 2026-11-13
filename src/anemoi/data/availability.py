@@ -195,11 +195,22 @@ def resolve_cycle_inputs(
     return CycleInputs(target_time=t, as_of=as_of, nwp=nwp, statuses=tuple(statuses))
 
 
+#: Ocean-heat-content files (NOAA OSPO CoastWatch na14/np14) post ~11:30 the
+#: day after their valid date -- about 36h of latency -- so a live cycle can
+#: only read the OHC valid at D-2. The SST half of ``sst_ohc`` (OISST v2.1) is
+#: a day earlier at D-1, which is what the combined source uses today because
+#: OHC is not wired as a model input yet (docs/skill_gap_plan.md Phase 2b).
+#: When OHC lands, it carries its own D-2 valid time.
+OHC_VALID_LAG = timedelta(days=2)
+
+
 def _valid_time_for(source_key: str, t: datetime) -> datetime:
     """Valid time of the observation a cycle at ``t`` would use.
 
     Most observational feeds are current to ``t``. Ensemble perturbations share
-    the NWP lag; SST/OHC is a daily product persisted from the previous day.
+    the NWP lag; ``sst_ohc`` is a daily product persisted from the previous day
+    (SST half, D-1). Its OHC half would be D-2 (see :data:`OHC_VALID_LAG`), but
+    OHC is not wired yet so the combined source resolves on the SST rule.
     """
     if source_key == "ensemble_perturbations":
         return t - timedelta(hours=6)

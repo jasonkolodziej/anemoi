@@ -34,8 +34,10 @@ These answer the questions every later phase depends on, and each takes hours, n
 
 - [ ] **Check the OHC training archive.** Look for `na`/`np` files for 2021–2022 (Stage B years) in CoastWatch THREDDS or NCEI. The `na14/` tree lists only 2024–2026, and the old `na/2025` and `na/2026` folders were empty. If the files aren't there, OHC either waits for Phase 3 or trains from SHIPS predictors.
 - [ ] **Compare the `na` and `na14` versions.** Diff one overlapping day for grid, units and value range before training across the switch.
-- [ ] **Correct the stale OHC claim.** Update the `sst_ohc` provider/notes in `data/sources.py`, Decision-Log #30 and wiki Data-Sources. The "stops 2026-01-26" result came from AOML's HDB ERDDAP. OSPO's CoastWatch `na14/2026/` has day 316 (Nov 12) posted Nov 13, with no gaps since Jul 17.
-- [ ] **Set the OHC date rule.** Files post about 11:30 the day after their valid date (about 36 h latency), so a live cycle uses the file from D−2. Put that rule in `data.availability`.
+- [x] **Correct the stale OHC claim.** Update the `sst_ohc` provider/notes in `data/sources.py`, Decision-Log #30 and wiki Data-Sources. The "stops 2026-01-26" result came from AOML's HDB ERDDAP. OSPO's CoastWatch `na14/2026/` has day 316 (Nov 12) posted Nov 13, with no gaps since Jul 17.
+  - Done. `data/sources.py` `sst_ohc` provider/notes now name the OSPO CoastWatch feed and the AOML endpoint mix-up; wiki Data-Sources (the status row, the registry row and the prose note) and Decision-Log #30 carry the correction.
+- [x] **Set the OHC date rule.** Files post about 11:30 the day after their valid date (about 36 h latency), so a live cycle uses the file from D−2. Put that rule in `data.availability`.
+  - Done as `OHC_VALID_LAG` (2 days) in `data.availability`, documented beside `_valid_time_for`. The combined `sst_ohc` source still resolves on the SST D−1 rule, because OHC isn't a model input yet; the D−2 rule applies when OHC is wired (Phase 2b).
 - [ ] **Ship the Sources page fix** (input_sources_plan step 0). Rename the column to **Role** and add **Used by** from `/v1/sources`.
   - API half done (`b672fca`): `/v1/sources` returns `used_by` per source, from one mapping in `data/sources.py` that was read from the training and live-cycle code. A test fails once any module imports the adapter of a source still listed as unused.
   - Console half in progress: the Sources page column, and the system graph drawn from the same field. The column is already headed **Role**; what's left there is the subtitle, which reads the role as a status.
@@ -155,6 +157,11 @@ The critical path is Phase 1: its week 2 result decides whether weeks 3–4 go t
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-13.** OHC claim corrected and the date rule set (Phase 0). The
+  "stops 2026-01-26" finding was AOML's HDB ERDDAP, not the state of the
+  product; `data/sources.py` `sst_ohc`, wiki Data-Sources and Decision-Log #30
+  now name OSPO's live CoastWatch feed. The ~36 h latency (read D−2) is
+  `OHC_VALID_LAG` in `data.availability`.
 - **2026-11-13.** Spread-skill check: the v12 ensemble's spread has never
   been measured, so the phase 0 item is a backtest run, not a lookup. The
   command and how to read it are under that item.

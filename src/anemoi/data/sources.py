@@ -201,7 +201,7 @@ REGISTRY: dict[str, DataSource] = {
         DataSource(
             key="sst_ohc",
             provider="NOAA NCEI OISST v2.1 (SST, implemented) + "
-            "NOAA OSPO ERDDAP (OHC, not implemented)",
+            "NOAA OSPO CoastWatch OHC (not implemented)",
             role=Role.OPERATIONAL,
             typical_latency=1 * _D,
             max_latency=2 * _D,
@@ -209,13 +209,15 @@ REGISTRY: dict[str, DataSource] = {
             retention="rolling 5yr",
             notes=(
                 "SST half is real (data.real_sst, OISST v2.1). OHC half "
-                "deliberately isn't: NOAA OSPO's ERDDAP OHC/TCHP products "
-                "looked live (real 200, real schema) but their real data "
-                "stops at 2026-01-26, confirmed ~8 months stale as of "
-                "this writing -- serving that as current would be worse "
-                "than the existing placeholder. GODAS/ORAS5 remains the "
-                "documented path; its exact real access point wasn't "
-                "found in the time spent."
+                "isn't wired yet, but a live feed does exist: NOAA OSPO's "
+                "CoastWatch OHC files (na14/np14 QG3, 0.25 deg NetCDF) are "
+                "current -- na14/2026/ had day 316 (Nov 12) posted Nov 13, "
+                "no gaps since Jul 17. The earlier '~8 months stale, stops "
+                "2026-01-26' finding was a different endpoint (AOML's HDB "
+                "ERDDAP UOHC_2026/TCHP), not this one. OHC still waits on "
+                "the 2021-2022 training archive (docs/skill_gap_plan.md "
+                "Phase 0/2b); files post ~36h late, so a live cycle reads "
+                "D-2."
             ),
         ),
         DataSource(
