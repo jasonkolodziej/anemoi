@@ -458,7 +458,7 @@ gcloud run jobs execute anemoi-train-schedule --region us-central1 --tasks 20 --
 Then the spike, on the GPU job: Stage A once, then a baseline and a steering Stage B arm per seed, against no registry (nothing registered, nothing uploaded). `--localize-to` copies the three caches into `/tmp` first, since a one-off command skips the entrypoint's localisation (Decision Log 62). Update the GPU job's image to the merge first (above).
 
 ```bash
-gcloud beta run jobs execute anemoi-train-gpu --region us-east4 --async --task-timeout 43200s \
+gcloud beta run jobs execute anemoi-train-gpu --region us-east4 --async \
   --update-env-vars ANEMOI_FIELDS_MEMO=1 \
   --args=steering-spike,--hurdat2,/app/data/hurdat2-atl.txt,--era5-cache-dir,/cache/era5_cache,--gdas-cache-dir,/cache/gdas_cache_f006,--steering-cache-dir,/cache/steering_f006,--seeds,20260806,20260807,--num-workers,7,--localize-to,/tmp/anemoi-cache,--out,/cache/backtests/steering-spike-transformer.json
 ```
