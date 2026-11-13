@@ -36,6 +36,9 @@ const SOURCES = API['/v1/sources'] as SourceRow[];
 /** /v1/sources as an API from before `used_by` sends it. The console and
  * the API deploy separately, so the console can meet one. */
 const SOURCES_BEFORE_USED_BY = SOURCES.map(({ used_by: _, ...row }) => row);
+/** /v1/sources with some rows' `used_by` replaced. */
+const sourcesWith = (usedBy: Record<string, string[]>) =>
+	SOURCES.map((row) => (row.key in usedBy ? { ...row, used_by: usedBy[row.key] } : row));
 
 const PHONE = { width: 390, height: 844 };
 
@@ -260,6 +263,22 @@ test.describe('signed in', () => {
 		await expect(sourceEdges).toHaveCount(SOURCES.length);
 		for (const edge of await sourceEdges.all()) await expect(edge).toHaveAttribute('stroke-dasharray');
 		await expect(page.getByText("This API doesn't say what uses each source")).toBeVisible();
+	});
+
+	// A newer API may name a use this console doesn't know. It may not be a
+	// model, so it must not be drawn as feeding one.
+	test('architecture draws a use it does not know without claiming it feeds a model', async ({ page }) => {
+		await serveInstead(page, '/v1/sources', { json: sourcesWith({ goes: ['calibration'] }) });
+		await page.goto('/architecture');
+		const graph = page.locator('svg[aria-label="Anemoi system"]');
+		const goes = graph.locator('[data-source-node="goes"]');
+
+		await expect(goes).toHaveAttribute('data-use', 'unknown');
+		await expect(goes).toContainText('calibration');
+		await expect(graph.locator('[data-edge="src:goes>prep"]')).toHaveAttribute('stroke-dasharray');
+		await expect(graph.locator('.beam')).toHaveCount(3 + 11); // the same three sources as always
+		await expect(page.getByText("A use this console doesn't know")).toBeVisible();
+		await expect(page.getByText("This API doesn't say what uses each source")).toHaveCount(0);
 	});
 
 	test('architecture on a phone: the graph scrolls sideways, the page does not', async ({ page }) => {

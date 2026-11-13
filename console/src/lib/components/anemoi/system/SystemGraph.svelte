@@ -2,7 +2,7 @@
 	import type { ActivePin, ArchitectureOut, ModelVersionOut, RegistryEntry, SourceOut } from '$lib/api/types';
 	import { colorFor, god } from '$lib/branding';
 	import { displayShape, formatParams, formatShape } from './shapes';
-	import { byUse, readersOf, sourceName, usedByText, useOf, type SourceUse } from './source-use';
+	import { byUse, hasUnknownEntry, readersOf, sourceName, usedByText, useOf, type SourceUse } from './source-use';
 
 	let {
 		registry,
@@ -264,6 +264,9 @@
 	// and none of these three from an API that doesn't send `used_by`.
 	const drawn = $derived(new Set(sourceNodes.map((n) => n.use)));
 	const legend = $derived(LEGEND.filter((item) => drawn.has(item.use)));
+	// Why a source is drawn as unknown, when one is.
+	const unreported = $derived(sources?.some((s) => !s.used_by) ?? false);
+	const unplaced = $derived(sources?.some(hasUnknownEntry) ?? false);
 </script>
 
 <!-- The mark that tells the three states apart without colour: a solid
@@ -478,8 +481,11 @@
 			{/each}
 		</ul>
 	{/if}
-	{#if drawn.has('unknown')}
+	{#if unreported}
 		<p>This API doesn't say what uses each source, so none is drawn as feeding a model.</p>
+	{/if}
+	{#if unplaced}
+		<p>A use this console doesn't know is named as the API sends it, and isn't drawn as feeding a model.</p>
 	{/if}
 </div>
 

@@ -122,9 +122,13 @@ for role only (Stage B lists `goes` and `sst_ohc`). `tests/test_sources.py`
 holds the mapping to the code: it fails when a module names the adapter of a
 source `used_by` calls unread, and when a model's entry disagrees with its
 training runner's or live builder's signature. It reads names, not data
-flow, so the `verification` entries still rest on review. The console's
-Sources page and system graph are being moved onto this field from their
-own copy.
+flow, so the `verification` entries still rest on review.
+
+The console's Sources page and system graph read this field instead of
+keeping their own copy, so a model that gains an input changes `used_by` in
+the same change. The console counts only the five model names above as model
+inputs. An entry outside this table, which a newer API could send, is shown
+as sent and never drawn as feeding a model.
 
 ## The one mutating route
 
