@@ -968,3 +968,116 @@ def test_cmd_sources_says_which_verification_is_only_designated(capsys):
     assert "not used yet: no model, label or verification code reads" in out
     names = " and ".join(sources.VERIFICATION_NOT_READ_YET)
     assert f"verification on {names} is a designation: nothing reads them yet" in out
+
+
+_RADII = ", ".join(["-999"] * 12)
+
+
+def _hurdat2_storm(storm_id: str, start: datetime, n: int) -> str:
+    lines = [f"{storm_id},          TEST, {n:5d},"]
+    for i in range(n):
+        t = start + timedelta(hours=6 * i)
+        lines.append(
+            f"{t:%Y%m%d}, {t:%H%M},  , TS, {15.0 + 0.3 * i:4.1f}N, {50.0 + 0.5 * i:5.1f}W, "
+            f" 50, {1000 - i:4d}, {_RADII},"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _baseline_inputs(tmp_path):
+    """A HURDAT2 file whose 2024 season is validation (one Atlantic storm),
+    and that storm's a-deck: OFCL and AVNI 0.1 deg north of the best track."""
+    import gzip
+
+    from anemoi.data.hurdat2 import parse_hurdat2_file
+
+    text = "".join(
+        _hurdat2_storm(f"AL01{year}", datetime(year, 8, 1, tzinfo=UTC), 14)
+        for year in (2021, 2022, 2023, 2024, 2025)
+    )
+    hurdat2 = tmp_path / "hurdat2.txt"
+    hurdat2.write_text(text)
+    (storm,) = [t for t in parse_hurdat2_file(hurdat2) if t.storm_id == "AL012024"]
+    by_time = {f.valid_time: f for f in storm.fixes}
+    rows = []
+    for fix in storm.fixes:
+        for tau in (12, 24, 36, 48):
+            verif = by_time.get(fix.valid_time + timedelta(hours=tau))
+            if verif is None:
+                continue
+            for tech in ("OFCL", "AVNI"):
+                rows.append(
+                    f"AL, 01, {fix.valid_time:%Y%m%d%H}, 03, {tech}, {tau:3d}, "
+                    f"{round(verif.lat * 10) + 1:d}N, {round(-verif.lon * 10):d}W,  55, 0,"
+                )
+    adecks = tmp_path / "adecks"
+    adecks.mkdir()
+    with gzip.open(adecks / "aal012024.dat.gz", "wt") as fh:
+        fh.write("\n".join(rows) + "\n")
+    return hurdat2, adecks
+
+
+def test_baseline_backtest_scores_cached_adecks_and_writes_the_report(tmp_path, capsys):
+    import json
+
+    hurdat2, adecks = _baseline_inputs(tmp_path)
+    out = tmp_path / "reports" / "baseline.json"
+    code = cli.main([
+        "baseline-backtest", "--hurdat2", str(hurdat2), "--adeck-dir", str(adecks),
+        "--techniques", "OFCL", "AVNI", "--registered-error", "fusion:AL:48=200",
+        "--out", str(out),
+    ])
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert "sample B, track error (nm)" in printed and f"wrote {out}" in printed
+    body = json.loads(out.read_text())
+    assert body["kind"] == "homogeneous_baseline" and body["seasons"] == [2024, 2024]
+    assert [m["name"] for m in body["members"]][:2] == ["OFCL", "AVNI"]
+    assert body["adecks"][0]["storm_id"] == "AL012024" and body["adecks_missing"] == []
+    assert body["hurdat2"]["hurdat2_sha256"]
+    row = next(
+        r for r in body["results"]
+        if (r["sample"], r["basin"], r["lead_hours"], r["quantity"]) == ("B", "AL", 12, "track_nm")
+    )
+    assert row["scores"]["OFCL"]["mean_error"] == pytest.approx(6.0, abs=0.1)
+
+
+def test_baseline_backtest_without_any_adeck_exits_1(tmp_path, capsys):
+    hurdat2, _adecks = _baseline_inputs(tmp_path)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert cli.main([
+        "baseline-backtest", "--hurdat2", str(hurdat2), "--adeck-dir", str(empty),
+    ]) == 1
+    assert "run `anemoi adeck-fetch` first" in capsys.readouterr().out
+
+
+def test_baseline_backtest_refuses_a_seed_other_than_the_forecast_files(tmp_path, capsys):
+    import json
+
+    hurdat2, adecks = _baseline_inputs(tmp_path)
+    forecasts = tmp_path / "forecasts.json"
+    forecasts.write_text(json.dumps({
+        "kind": "validation_forecasts", "seed": 1, "n_augment": 1,
+        "lead_hours": [12, 24, 36, 48, 72, 96, 120], "models": [], "cases": [],
+    }))
+    assert cli.main([
+        "baseline-backtest", "--hurdat2", str(hurdat2), "--adeck-dir", str(adecks),
+        "--model-forecasts", str(forecasts), "--seed", "2",
+    ]) == 1
+    assert "written with seed 1" in capsys.readouterr().out
+
+
+def test_adeck_fetch_reads_the_split_and_keeps_cached_files(tmp_path, monkeypatch, capsys):
+    from anemoi.data import adeck_source
+
+    def no_network(url):
+        raise AssertionError(f"fetched {url}")
+
+    monkeypatch.setattr(adeck_source, "_get", no_network)
+    hurdat2, adecks = _baseline_inputs(tmp_path)
+    assert cli.main([
+        "adeck-fetch", "--hurdat2", str(hurdat2), "--cache-dir", str(adecks),
+        "--no-official-errors",
+    ]) == 0
+    assert "1 val storm(s): 0 fetched, 1 already there" in capsys.readouterr().out

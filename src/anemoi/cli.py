@@ -1147,6 +1147,159 @@ def cmd_spread_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_adeck_fetch(args: argparse.Namespace) -> int:
+    """Download NHC's a-decks for one split's storms into ``--cache-dir``
+    (`data.adeck_source`), with NHC's own per-forecast official errors, for
+    `baseline-backtest` to read. Skips what is already there; at most four
+    requests at a time."""
+    from .data.adeck_source import fetch_adecks
+    from .data.sources import Flavor
+    from .data.splits import Split, assign_splits, filter_tracks
+    from .training.real_run import boundaries_for_tracks
+
+    tracks = _training_tracks(args.hurdat2)
+    assignment = assign_splits(tracks, boundaries_for_tracks(Flavor.GDAS_FINETUNE, tracks))
+    storms = [t.storm_id for t in filter_tracks(tracks, assignment, Split(args.split))]
+    if not storms:
+        print(f"adeck-fetch: {args.hurdat2} has no {args.split} storms")
+        return 1
+    report = fetch_adecks(
+        storms, args.cache_dir, max_workers=args.max_workers,
+        official_errors=not args.no_official_errors,
+    )
+    print(json.dumps(report.as_dict(), indent=2))
+    print(
+        f"adeck-fetch: {len(storms)} {args.split} storm(s): {len(report.fetched)} fetched, "
+        f"{len(report.cached)} already there, {len(report.not_published)} not published, "
+        f"{len(report.failed)} failed"
+    )
+    return 1 if report.failed else 0
+
+
+def cmd_baseline_backtest(args: argparse.Namespace) -> int:
+    """Score operational guidance (NHC's official forecast, the GFS
+    tracker, CLIPER) on the registry's own validation windows, from cached
+    a-decks: `training.baseline_backtest`. Reads files only; `adeck-fetch`
+    fills ``--adeck-dir``. With ``--model-forecasts`` (the file
+    `validation-forecasts` writes on the training machine) the project's
+    models are scored on the same cases."""
+    from .data.adeck_source import ARCHIVE_URL, read_cached_adecks, read_cached_official_errors
+    from .data.hurdat2 import parse_hurdat2_statuses
+    from .data.hurdat2_source import describe
+    from .data.nhc_verification import OfficialErrorsError
+    from .provenance import git_sha
+    from .training.baseline_backtest import (
+        DEFAULT_REFERENCES,
+        DEFAULT_TECHNIQUES,
+        BaselineBacktestError,
+        RegisteredError,
+        ValidationForecasts,
+        format_report,
+        run_baseline_backtest,
+        techniques_to_read,
+        validation_tracks,
+    )
+
+    techniques = tuple(args.techniques or DEFAULT_TECHNIQUES)
+    try:
+        forecasts = (
+            ValidationForecasts.read(args.model_forecasts) if args.model_forecasts else None
+        )
+        # The forecasts are for one draw of the working fixes: the cases
+        # must be enumerated with the seed and augmentation they were.
+        seed, n_augment = args.seed, args.n_augment
+        if forecasts is not None:
+            file_seed = forecasts.header.get("seed")
+            file_augment = forecasts.header.get("n_augment")
+            if (seed, n_augment) not in ((None, None), (file_seed, file_augment)):
+                raise BaselineBacktestError(
+                    f"{args.model_forecasts} was written with seed {file_seed} and n_augment "
+                    f"{file_augment}; drop --seed/--n-augment or pass the same"
+                )
+            seed, n_augment = file_seed, file_augment
+        seed = 20260806 if seed is None else seed
+        n_augment = 1 if n_augment is None else n_augment
+
+        tracks = _training_tracks(args.hurdat2)
+        statuses = parse_hurdat2_statuses(Path(args.hurdat2).read_text())
+        cached = read_cached_adecks(
+            args.adeck_dir, [t.storm_id for t in validation_tracks(tracks)],
+            techniques_to_read(techniques),
+        )
+        for storm_id, error in cached.unreadable.items():
+            print(f"baseline-backtest: {storm_id}: unreadable a-deck: {error}")
+        if not cached.adecks:
+            print(
+                f"baseline-backtest: no a-deck for any validation storm in {args.adeck_dir} "
+                "(run `anemoi adeck-fetch` first)"
+            )
+            return 1
+        official, official_records = read_cached_official_errors(args.adeck_dir)
+        report = run_baseline_backtest(
+            tracks, statuses, cached.adecks,
+            techniques=techniques, references=tuple(args.references or DEFAULT_REFERENCES),
+            model_forecasts=forecasts,
+            models=tuple(m for m in args.models.split(",") if m),
+            official_errors=official,
+            registered=[RegisteredError.parse(r) for r in args.registered_error],
+            seed=seed, n_augment=n_augment,
+        )
+    except (BaselineBacktestError, OfficialErrorsError) as exc:
+        print(f"baseline-backtest: {exc}")
+        return 1
+    report.hurdat2 = describe(args.hurdat2)
+    report.adecks = cached.records
+    report.adecks_missing = sorted([*cached.missing, *cached.unreadable])
+    report.official_errors = official_records
+    report.git_commit = git_sha()
+    report.diagnostics["adeck_archive_url"] = ARCHIVE_URL
+    print(format_report(report))
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(report.to_json())
+        print(f"\nwrote {args.out}")
+    return 0
+
+
+def cmd_validation_forecasts(args: argparse.Namespace) -> int:
+    """Write fusion's forecast, and each of its Group 1 inputs', for every
+    validation window to one file, for `baseline-backtest
+    --model-forecasts`. Inference only: loads registered checkpoints and
+    trains, registers and promotes nothing. Needs the checkpoints and the
+    GDAS cache, so it runs where training runs. The file checks itself
+    against the registry; exit 1 if it does not reproduce fusion's
+    registered numbers (the file is still written, to be looked at)."""
+    from .data.hurdat2 import parse_hurdat2_statuses
+    from .data.hurdat2_source import describe
+    from .provenance import git_sha
+    from .tracking.checkpoint_store import CheckpointStore, S3Config
+    from .tracking.registry import ModelRegistry
+    from .training.baseline_backtest import (
+        BaselineBacktestError,
+        dump_validation_forecasts,
+        format_forecast_check,
+    )
+
+    store = CheckpointStore(S3Config.from_env())
+    registry = ModelRegistry(args.registry_root, checkpoint_store=store)
+    try:
+        forecasts = dump_validation_forecasts(
+            _training_tracks(args.hurdat2),
+            parse_hurdat2_statuses(Path(args.hurdat2).read_text()),
+            registry, store, args.gdas_cache_dir,
+            seed=args.seed, n_augment=args.n_augment, fusion_version=args.fusion_version,
+            hurdat2=describe(args.hurdat2), git_commit=git_sha(),
+        )
+    except BaselineBacktestError as exc:
+        print(f"validation-forecasts: {exc}")
+        return 1
+    forecasts.write(args.out)
+    print(format_forecast_check(forecasts))
+    print(f"\nwrote {args.out}")
+    return 0 if forecasts.consistent else 1
+
+
 def cmd_consistency_distill(args: argparse.Namespace) -> int:
     """Real consistency-distillation evaluation (GitHub #15): distil a
     student from the current (or ``--diffusion-version``) champion diffusion
@@ -1329,6 +1482,82 @@ def main(argv: list[str] | None = None) -> int:
         default=str(Path.home() / ".anemoi" / "registry"),
     )
     p.set_defaults(func=cmd_spread_backtest)
+
+    p = sub.add_parser(
+        "adeck-fetch",
+        help="download NHC's a-decks (operational guidance) for a split's storms",
+    )
+    p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
+    p.add_argument("--cache-dir", dest="cache_dir", required=True, help="local dir to cache into")
+    p.add_argument("--split", default="val", choices=["train", "val", "test"])
+    p.add_argument("--max-workers", dest="max_workers", type=int, default=4,
+                   help="requests at a time (never more than 4)")
+    p.add_argument(
+        "--no-official-errors", dest="no_official_errors", action="store_true",
+        help="skip NHC's per-forecast official error files (the reconciliation needs them)",
+    )
+    p.set_defaults(func=cmd_adeck_fetch)
+
+    p = sub.add_parser(
+        "baseline-backtest",
+        help="score OFCL/GFS/CLIPER from the a-decks on the registry's validation windows",
+    )
+    p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
+    p.add_argument("--adeck-dir", dest="adeck_dir", required=True,
+                   help="directory `adeck-fetch` filled (read only)")
+    p.add_argument(
+        "--techniques", nargs="+", default=None, metavar="SPEC",
+        help="a-deck members, [LABEL=]TECH[/TECH...][-LAG]: AVNI; OFCL=OFCO/OFCL (first an "
+             "initial time has); AVNO-6 (the run 6 h earlier at tau+6). Default: "
+             "training.baseline_backtest.DEFAULT_TECHNIQUES (OFCL=OFCO/OFCL, AVNI, AVNO-6, "
+             "AVNO, EMXI=EMXI/EMX2, OCD5, XTRP)",
+    )
+    p.add_argument(
+        "--references", nargs="+", default=None, metavar="MEMBER",
+        help="members every other is compared with pairwise (default: AVNI OFCL)",
+    )
+    p.add_argument(
+        "--model-forecasts", dest="model_forecasts", default=None,
+        help="per-case forecast file written by `validation-forecasts`",
+    )
+    p.add_argument("--models", default="fusion",
+                   help="comma-separated models to score from --model-forecasts")
+    p.add_argument(
+        "--registered-error", dest="registered_error", nargs="+", default=[],
+        metavar="MODEL:BASIN:LEAD=NM",
+        help="a model's registered track error, e.g. fusion:AL:48=231: bounds what it can "
+             "score on the homogeneous sample while its forecasts are not at hand",
+    )
+    p.add_argument("--seed", type=int, default=None,
+                   help="must match training's seed to reproduce its val windows "
+                        "(default: the forecast file's, else 20260806)")
+    p.add_argument("--n-augment", dest="n_augment", type=int, default=None,
+                   help="training-storm augmentations drawn before the val windows by the "
+                        "latents task (default: the forecast file's, else 1)")
+    p.add_argument("--out", default=None, help="also write the full report as JSON")
+    p.set_defaults(func=cmd_baseline_backtest)
+
+    p = sub.add_parser(
+        "validation-forecasts",
+        help="write the champions' forecast for every validation window (needs checkpoints)",
+    )
+    p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
+    p.add_argument("--gdas-cache-dir", dest="gdas_cache_dir", required=True)
+    p.add_argument("--seed", type=int, default=20260806,
+                   help="must match training's seed to reproduce its val windows")
+    p.add_argument("--n-augment", dest="n_augment", type=int, default=1,
+                   help="as the latents task draws them (1), not train-schedule's --n-augment")
+    p.add_argument(
+        "--fusion-version", dest="fusion_version", type=int, default=None,
+        help="dump this registered fusion version instead of the current champion "
+             "(its Group 1 inputs are the versions its latent signature names)",
+    )
+    p.add_argument("--out", required=True, help="where to write the forecast file (JSON)")
+    p.add_argument(
+        "--registry-root", dest="registry_root",
+        default=str(Path.home() / ".anemoi" / "registry"),
+    )
+    p.set_defaults(func=cmd_validation_forecasts)
 
     p = sub.add_parser(
         "consistency-distill",
