@@ -32,7 +32,9 @@ from __future__ import annotations
 import io
 import json
 import math
+import os
 import time
+import uuid
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -220,12 +222,29 @@ def write_meta(cache_dir: Path | str) -> None:
     }
     path = Path(cache_dir) / CACHE_META_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
+
+    def check() -> bool:
+        if not path.exists():
+            return False
         old = json.loads(path.read_text())
         if old != meta:
             raise ValueError(f"{path} was written with other settings: {old}")
+        return True
+
+    if check():
         return
-    path.write_text(json.dumps(meta, indent=1) + "\n")
+    # Parallel Cloud Run tasks all start here at once. On GCS FUSE a shared
+    # write fails with a stale file handle (ESTALE) for all but one, so each
+    # writes its own temporary file and renames it; a task that still loses
+    # the race reads back the winner's file instead.
+    tmp = path.with_name(f"{CACHE_META_NAME}.{os.getpid()}.{uuid.uuid4().hex}.part")
+    try:
+        tmp.write_text(json.dumps(meta, indent=1) + "\n")
+        tmp.replace(path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
+        if not check():
+            raise
 
 
 FlowFetcher = Callable[[datetime, int], LeadFlow]

@@ -191,3 +191,32 @@ def test_shards_partition_the_times():
     assert sorted(t for s in shards for t in s) == times
     with pytest.raises(ValueError):
         steering.shard_times(times, 3, 3)
+
+
+def test_meta_written_concurrently_by_another_task_is_accepted(tmp_path, monkeypatch):
+    """Parallel Cloud Run tasks race to write the meta; on GCS FUSE the
+    losers' writes fail with ESTALE. A loser that finds the winner's file
+    goes on (the steering-cache job's first run lost 5 of 20 tasks)."""
+    from pathlib import Path
+
+    real_replace = Path.replace
+
+    def racing_replace(self, target):
+        real_replace(self, target)  # the "other task" wins first
+        raise OSError(116, "Stale file handle")
+
+    monkeypatch.setattr(Path, "replace", racing_replace)
+    steering.write_meta(tmp_path)
+    assert (tmp_path / steering.CACHE_META_NAME).exists()
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_a_meta_write_that_fails_with_no_file_raises(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    def broken(self, target):
+        raise OSError(5, "I/O error")
+
+    monkeypatch.setattr(Path, "replace", broken)
+    with pytest.raises(OSError):
+        steering.write_meta(tmp_path)
