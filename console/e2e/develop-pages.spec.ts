@@ -151,8 +151,7 @@ test.describe('signed in', () => {
 		await expect(graph.locator('[data-source-node]')).toHaveCount(SOURCES.length);
 		for (const { key } of SOURCES) await expect(source(key)).toBeVisible();
 
-		// Three states, told apart in the node's own words (and by its mark,
-		// outline and edge, which a screenshot shows and this can't).
+		// Three states, told apart in the node's own words.
 		await expect(source('besttrack_working')).toHaveAttribute('data-use', 'input');
 		await expect(source('besttrack_working')).toContainText('LSTM · PINN');
 		await expect(source('gdas_gfs')).toContainText('CNN · Transformer · GNN · PINN');
@@ -169,6 +168,18 @@ test.describe('signed in', () => {
 			await expect(source(key)).toHaveAttribute('data-use', 'unused');
 			await expect(source(key)).toContainText('not used yet');
 		}
+		// And by line, not colour: a source a model reads has a solid
+		// outline and edge, one nothing reads yet a dashed outline and edge,
+		// and labels or verification no edge into the pipeline at all.
+		const edgeFrom = (key: string) => graph.locator(`[data-edge="src:${key}>prep"]`);
+		const outline = (key: string) => source(key).locator('rect').first();
+		await expect(edgeFrom('besttrack_working')).not.toHaveAttribute('stroke-dasharray');
+		await expect(outline('besttrack_working')).not.toHaveAttribute('stroke-dasharray');
+		await expect(edgeFrom('goes')).toHaveAttribute('stroke-dasharray');
+		await expect(outline('goes')).toHaveAttribute('stroke-dasharray');
+		await expect(edgeFrom('dropsonde')).toHaveCount(0);
+		await expect(outline('dropsonde')).not.toHaveAttribute('stroke-dasharray');
+		await expect(graph.locator('[data-edge$=">prep"]')).toHaveCount(3 + 4);
 
 		const legend = page.getByRole('list', { name: 'How a data source is drawn' });
 		await expect(legend.getByRole('listitem')).toHaveText([
@@ -242,6 +253,12 @@ test.describe('signed in', () => {
 		await expect(graph.getByText('not used yet')).toHaveCount(0);
 		// No beam leaves a source: only the eleven edges from preprocessing on.
 		await expect(graph.locator('.beam')).toHaveCount(11);
+		// And every source's edge is dashed, the way an unused one's is: a
+		// solid edge would say the labels-only final best-track feeds the
+		// models.
+		const sourceEdges = graph.locator('[data-edge$=">prep"]');
+		await expect(sourceEdges).toHaveCount(SOURCES.length);
+		for (const edge of await sourceEdges.all()) await expect(edge).toHaveAttribute('stroke-dasharray');
 		await expect(page.getByText("This API doesn't say what uses each source")).toBeVisible();
 	});
 

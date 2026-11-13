@@ -293,12 +293,17 @@
 				{@const flowing = carries(e)}
 				{@const live = flowing && lit(e)}
 				{@const label = e.label?.()}
+				<!-- Dashed when nothing is known to travel it: a source nothing
+				     reads yet, the stand-in, or a source whose use the API
+				     didn't say. A solid edge would claim that last one feeds
+				     the models, labels-only best-track included. -->
 				<path
 					d={path(a, b)}
+					data-edge={`${e.from}>${e.to}`}
 					fill="none"
 					class="stroke-border-strong transition-opacity duration-300"
 					stroke-width="1.4"
-					stroke-dasharray={a.use === 'unused' || a.use === 'pending' ? '5 6' : undefined}
+					stroke-dasharray={a.use && a.use !== 'input' ? '5 6' : undefined}
 					opacity={lit(e) ? 1 : 0.35}
 					marker-end="url(#sys-arrow)"
 				/>
