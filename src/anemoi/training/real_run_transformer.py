@@ -25,7 +25,7 @@ for that, out of scope here.
 from __future__ import annotations
 
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,6 +47,7 @@ from .promotion import MetricSet
 from .real_run import (
     LEAD_STEPS,
     RunArtifacts,
+    StageWindow,
     boundaries_for_tracks,
     displacement_validation_metrics,
     freeze_encoder,
@@ -296,6 +297,9 @@ def train_transformer_stage_streaming(
     num_workers: int = 0,
     device=None,
     basins: Sequence[str] = (),
+    extra_x: Callable[[StageWindow], np.ndarray | None] | None = None,
+    on_validation: Callable[[list[StageWindow], np.ndarray], None] | None = None,
+    trainable: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_transformer_stage`'s streaming analog
     (`docs/streaming_dataloader.md`) -- same return contract, real
@@ -306,6 +310,17 @@ def train_transformer_stage_streaming(
     `real_run.train_lstm_stage_streaming` for the reference implementation
     this follows. ``num_workers`` (default 0) forwards to
     `streaming.make_dataloader` -- see that function's docstring.
+
+    ``extra_x`` (the steering spike, docs/skill_gap_plan.md Phase 1 step 2)
+    maps a window to a vector appended as constant channels after the basin
+    channels, the way `basin_input` adds a basin; a window it maps to
+    ``None`` is dropped from training and validation. A zero-length vector
+    adds nothing but still filters, which keeps a no-steering arm on the
+    same windows. ``on_validation`` receives the validation windows and
+    their de-standardised predictions, in order. ``trainable`` names
+    parameter prefixes made trainable after the stage's own freezing
+    (Stage B freezes everything outside ``head.``), for a new input path
+    that has to learn while the existing weights keep the stage's policy.
     """
     from .streaming import (
         OnlineMaskedLeadMeanStd,
@@ -335,6 +350,20 @@ def train_transformer_stage_streaming(
     val_windows = filter_windows_with_finite_fields(
         raw_val_windows, cache_dir, TRANSFORMER_FIELD_NAMES,
     )
+    extras: dict[tuple[str, datetime], np.ndarray] = {}
+    if extra_x is not None:
+        def keep(windows):
+            kept = []
+            for sw in windows:
+                vec = extra_x(sw)
+                if vec is not None:
+                    extras[(sw.storm_id, sw.current.valid_time)] = np.asarray(
+                        vec, dtype=np.float64,
+                    ).reshape(-1)
+                    kept.append(sw)
+            return kept
+
+        train_windows, val_windows = keep(train_windows), keep(val_windows)
     if not train_windows or not val_windows:
         raise ValueError(
             f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
@@ -347,9 +376,14 @@ def train_transformer_stage_streaming(
             storm_id=sw.storm_id, valid_time=sw.current.valid_time,
             lat=sw.current.lat, lon=sw.current.lon,
         )))
-        return with_basin_channels(
+        stack = with_basin_channels(
             _sanitized_channel_stack(fields)[:, :gh, :gw], sw.storm_id, basins,
         )
+        if extra_x is None:
+            return stack
+        vec = extras[(sw.storm_id, sw.current.valid_time)]
+        const = np.broadcast_to(vec[:, None, None], (vec.size, gh, gw))
+        return np.concatenate([stack, const.astype(stack.dtype)], axis=0)
 
     n_leads = len(LEAD_STEPS)
     raw_train_ds = WindowDataset(train_windows, build_x)
@@ -377,6 +411,14 @@ def train_transformer_stage_streaming(
     )
 
     freeze_encoder(model, stage.frozen_modules)
+    if trainable:
+        matched = False
+        for name, param in model.named_parameters():
+            if name.startswith(tuple(trainable)):
+                param.requires_grad = True
+                matched = True
+        if not matched:
+            raise ValueError(f"no parameter starts with any of {tuple(trainable)}")
     model.to(device)
 
     def masked_mse_sums(pred, target, mask3):
@@ -424,6 +466,8 @@ def train_transformer_stage_streaming(
         val_loss = val_diff2 / max(val_mask, 1.0)
         pred_val = np.concatenate(pred_val_rows, axis=0) * y_std + y_mean
 
+    if on_validation is not None:
+        on_validation(list(val_windows), pred_val)
     val_metrics = window_validation_metrics(stage, val_windows, pred_val, train_windows)
     return model, train_loss, val_loss, val_metrics, (x_mean, x_std, y_mean, y_std)
 

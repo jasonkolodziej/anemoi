@@ -285,6 +285,83 @@ def cmd_gdas_cache(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_steering_cache(args: argparse.Namespace) -> int:
+    """Cache forecast-lead steering features (`data.steering`) for Stage B's
+    windows: the t-6 GFS run's f006..f054, one fetch per valid time shared by
+    every storm then, sharded by valid time across Cloud Run tasks
+    (docs/skill_gap_plan.md Phase 1, step 2)."""
+    from .data.gridded_cache import build_fetch_tasks
+    from .data.sources import Flavor
+    from .data.splits import Split, assign_splits, filter_tracks
+    from .data.steering import run_steering_cache
+    from .training.real_run import boundaries_for_tracks
+
+    tracks = _training_tracks(args.hurdat2)
+    boundaries = boundaries_for_tracks(Flavor.GDAS_FINETUNE, tracks)
+    assignment = assign_splits(tracks, boundaries=boundaries)
+    tasks = []
+    for name in args.splits:
+        split_tracks = filter_tracks(tracks, assignment, Split(name))
+        tasks.extend(build_fetch_tasks(split_tracks))
+        n_fixes = sum(len(t.fixes) for t in split_tracks)
+        print(f"{name}: {len(split_tracks)} storms, {n_fixes} fixes")
+    report = run_steering_cache(
+        tasks, args.cache_dir,
+        max_workers=args.max_workers, skip_existing=not args.force,
+        shard_index=args.shard_index, shard_count=args.shard_count,
+        progress_every=args.progress_every,
+    )
+    print(f"shard {args.shard_index}/{args.shard_count}: {report.n_times} valid times, "
+          f"{report.n_written} written, {report.n_skipped} skipped, {report.n_failed} failed, "
+          f"{report.elapsed_s:.0f}s")
+    for what, error in report.failures[:20]:
+        print(f"  FAILED {what}: {error}")
+    return 1 if report.n_failed and report.n_written == 0 else 0
+
+
+def cmd_steering_spike(args: argparse.Namespace) -> int:
+    """The steering-along-track spike (docs/skill_gap_plan.md Phase 1, step 2):
+    Stage A once, then a baseline and a steering Stage B arm per seed, against
+    no registry (`training.steering_spike`). Copies the caches into
+    ``--localize-to`` first, as the training entrypoint does (Decision Log 62),
+    since a one-off command skips that step."""
+    import json
+
+    from .data.cache_localize import localize_cache
+    from .training.steering_spike import run_steering_spike
+
+    os.environ.setdefault("ANEMOI_FIELDS_MEMO", "1")
+    caches = {"era5": args.era5_cache_dir, "gdas": args.gdas_cache_dir,
+              "steering": args.steering_cache_dir}
+    if args.localize_to:
+        for name, src in list(caches.items()):
+            dst = Path(args.localize_to) / name
+            try:
+                rep = localize_cache(src, dst)
+                print(f"localized {name}: {rep.n_copied} copied, {rep.n_skipped} skipped, "
+                      f"{rep.n_bytes / 2**30:.2f} GiB, {rep.elapsed_s:.0f}s", flush=True)
+                caches[name] = str(dst)
+            except Exception as exc:  # noqa: BLE001 -- fall back to reading in place
+                print(f"localize {name} failed ({exc}); reading {src} directly", flush=True)
+
+    tracks = _training_tracks(args.hurdat2)
+    report = run_steering_spike(
+        tracks, caches["era5"], caches["gdas"], caches["steering"],
+        seeds=args.seeds, n_augment=args.n_augment, batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        log=lambda msg: print(msg, flush=True),
+    )
+    print(json.dumps(report["steering_minus_baseline"], indent=1))
+    if "baseline_seed_noise" in report:
+        print("baseline seed noise:", json.dumps(report["baseline_seed_noise"], indent=1))
+    if args.out:
+        out = Path(args.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(report, indent=1) + "\n")
+        print(f"wrote {out}")
+    return 0
+
+
 def cmd_train(args: argparse.Namespace) -> int:
     """Run a real Stage A/B curriculum against a real HURDAT2 file (#22).
 
@@ -1712,6 +1789,41 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     p.set_defaults(func=cmd_gdas_cache)
+
+    p = sub.add_parser(
+        "steering-cache",
+        help="cache GFS forecast-lead steering along an advected track (skill-gap Phase 1 step 2)",
+    )
+    p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
+    p.add_argument("--cache-dir", dest="cache_dir", required=True)
+    p.add_argument("--splits", nargs="+", default=["train", "val"],
+                   choices=["train", "val", "test"])
+    p.add_argument("--max-workers", dest="max_workers", type=int, default=4)
+    p.add_argument("--force", action="store_true", help="recompute even if cached")
+    p.add_argument("--progress-every", dest="progress_every", type=int, default=25)
+    p.add_argument("--shard-index", dest="shard_index", type=int,
+                   default=int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0")))
+    p.add_argument("--shard-count", dest="shard_count", type=int,
+                   default=int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1")))
+    p.set_defaults(func=cmd_steering_cache)
+
+    p = sub.add_parser(
+        "steering-spike",
+        help="Stage B with and without forecast-lead steering, no registry (Phase 1 step 2)",
+    )
+    p.add_argument("--hurdat2", required=True)
+    p.add_argument("--era5-cache-dir", dest="era5_cache_dir", required=True)
+    p.add_argument("--gdas-cache-dir", dest="gdas_cache_dir", required=True)
+    p.add_argument("--steering-cache-dir", dest="steering_cache_dir", required=True)
+    p.add_argument("--seeds", type=int, nargs="+", default=[20260806],
+                   help="one Stage B pair per seed; Stage A uses the first")
+    p.add_argument("--n-augment", dest="n_augment", type=int, default=3)
+    p.add_argument("--batch-size", dest="batch_size", type=int, default=16)
+    p.add_argument("--num-workers", dest="num_workers", type=int, default=0)
+    p.add_argument("--localize-to", dest="localize_to", default=None,
+                   help="copy the caches here first (e.g. /tmp/anemoi-cache)")
+    p.add_argument("--out", default=None, help="write the report JSON here")
+    p.set_defaults(func=cmd_steering_spike)
 
     p = sub.add_parser("train", help="run a real Stage A/B curriculum (#22)")
     p.add_argument("--model", default="lstm", choices=["lstm", "cnn", "transformer", "gnn", "pinn"])

@@ -448,6 +448,21 @@ gcloud run jobs execute anemoi-train-schedule --region us-central1 \
 
 Real runs 2026-09-23 (`DIFFUSION_DROPOUT=0.1`/`0.05`, `DIFFUSION_WEIGHT_DECAY=1e-4`, each ~9-13 minutes end to end including image pull): see "Common env knobs" below for the results and GitHub #166 for the full backtest output.
 
+The steering-along-track spike (docs/skill_gap_plan.md Phase 1, step 2). First the steering cache, on the CPU job: the t−6 GFS run's f006–f054 for every Stage B train and validation time, one fetch per valid time (nine files, twelve messages each), sharded across tasks by valid time (about 50 s per valid time per worker):
+
+```bash
+gcloud run jobs execute anemoi-train-schedule --region us-central1 --tasks 20 --task-timeout 3600s \
+  --args=steering-cache,--hurdat2,/app/data/hurdat2-atl.txt,--cache-dir,/cache/steering_f006,--max-workers,4
+```
+
+Then the spike, on the GPU job: Stage A once, then a baseline and a steering Stage B arm per seed, against no registry (nothing registered, nothing uploaded). `--localize-to` copies the three caches into `/tmp` first, since a one-off command skips the entrypoint's localisation (Decision Log 62). Update the GPU job's image to the merge first (above).
+
+```bash
+gcloud beta run jobs execute anemoi-train-gpu --region us-east4 --async \
+  --update-env-vars ANEMOI_FIELDS_MEMO=1 \
+  --args=steering-spike,--hurdat2,/app/data/hurdat2-atl.txt,--era5-cache-dir,/cache/era5_cache,--gdas-cache-dir,/cache/gdas_cache_f006,--steering-cache-dir,/cache/steering_f006,--seeds,20260806,20260807,--num-workers,7,--localize-to,/tmp/anemoi-cache,--out,/cache/backtests/steering-spike-transformer.json
+```
+
 Fusion's forecast for every validation window, for the homogeneous baseline (wiki [Verification Metrics](../../wiki/Verification-Metrics.md), "Homogeneous baseline"). Inference only: it loads fusion and the five Group 1 versions its latent signature names from the registry and runs them on the validation windows alone (the training windows, 2,733 with the 2025 HURDAT2, are enumerated for the noise draw but not run); it trains, registers and promotes nothing. CPU is enough, as for `spread-backtest`, and the image needs the commit that added the command (CI rebuilds it on `main`):
 
 ```bash

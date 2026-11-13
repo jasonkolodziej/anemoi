@@ -51,6 +51,7 @@ constant with a docstring saying so -- see
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -370,21 +371,36 @@ def fetch_gdas_grib2_fields(
     use); if omitted, uses the plain ``requests.get`` module functions
     (this function's original, single-sample behaviour).
     """
+    targets = [(sn, f"{lvl} mb", (sn, lvl)) for sn, lvl in GDAS_LEVEL_MESSAGES]
+    targets.append((*GDAS_MSLP_KEY, GDAS_MSLP_KEY))
+    return fetch_grib2_messages(
+        gfs_url(valid_time, lead_hours), targets, timeout=timeout, session=session,
+    )
+
+
+def fetch_grib2_messages(
+    url: str,
+    targets: Sequence[tuple[str, str, Any]],
+    *,
+    timeout: float = 60.0,
+    session: Any = None,
+) -> dict[Any, np.ndarray]:
+    """Byte-range fetch ``targets`` from the GRIB2 file at ``url`` using its
+    ``.idx`` sidecar. Each target is ``(shortName, level_label, out_key)``,
+    e.g. ``("UGRD", "500 mb", ("UGRD", 500))``; returns ``{out_key: (nj, ni)
+    array}``. Raises ``KeyError`` when a message isn't in the index and
+    ``requests.HTTPError`` when the file or index isn't there."""
     require_gdas_deps()
     import eccodes  # noqa: PLC0415
     import requests  # noqa: PLC0415
 
     http = session if session is not None else requests
 
-    url = gfs_url(valid_time, lead_hours)
     idx_resp = http.get(f"{url}.idx", timeout=timeout)
     idx_resp.raise_for_status()
     byte_ranges = _parse_grib2_index(idx_resp.text)
 
-    targets = [(sn, f"{lvl} mb", (sn, lvl)) for sn, lvl in GDAS_LEVEL_MESSAGES]
-    targets.append((*GDAS_MSLP_KEY, GDAS_MSLP_KEY))
-
-    fields: dict[tuple[str, int | str], np.ndarray] = {}
+    fields: dict[Any, np.ndarray] = {}
     for short_name, level_label, out_key in targets:
         start, end = byte_ranges.get((short_name, level_label), (None, None))
         if start is None:
