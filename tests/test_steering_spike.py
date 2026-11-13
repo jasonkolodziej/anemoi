@@ -72,9 +72,10 @@ def test_expanded_patch_channels_start_as_the_same_function():
     before, _ = model(x)
     expand_patch_channels(model, 5)
     assert model.patch.in_channels == 9
+    assert model.patch.extra.weight.abs().sum() == 0
     after, _ = model(torch.cat([x, torch.randn(3, 5, 8, 8) * 100], dim=1))
     assert torch.allclose(before, after, atol=1e-5)
-    assert model.patch.weight.requires_grad
+    assert model.patch.extra.weight.requires_grad
 
 
 def test_track_errors_are_zero_for_a_perfect_forecast_and_nan_without_a_target():
@@ -183,3 +184,85 @@ def test_steering_vectors_are_appended_after_the_basin_channels(tmp_path):
     assert seen["pred"].shape[1:] == (7, 3)
     # constant channels after the fields
     assert model.patch.in_channels == len(TRANSFORMER_FIELD_NAMES) + 3
+
+
+def test_stage_b_trains_the_steering_conv_and_keeps_the_rest_frozen(tmp_path):
+    """Stage B freezes everything outside ``head.``; the steering conv must
+    still learn (PR #245 review), and only when it is named trainable."""
+    import torch
+
+    from anemoi.models.transformer import build_transformer
+    from anemoi.training.curriculum import stage_b
+    from anemoi.training.real_run_transformer import (
+        GRID_SIZE,
+        TRANSFORMER_FIELD_NAMES,
+        train_transformer_stage_streaming,
+    )
+    from anemoi.training.steering_spike import STEERING_PARAMS, expand_patch_channels
+
+    train, val = (make_track("AL012021", 2021, n=26, seed=1),
+                  make_track("AL012022", 2022, n=26, seed=2))
+    for t in (train, val):
+        cache_all_fixes(tmp_path, t, Flavor.GDAS_FINETUNE)
+    rng = np.random.default_rng(0)
+    vecs: dict = {}
+
+    def extra(sw):  # varies by window, so it carries signal
+        key = (sw.storm_id, sw.current.valid_time)
+        return vecs.setdefault(key, rng.normal(size=4))
+
+    def run(trainable):
+        torch.manual_seed(0)
+        model, _ = build_transformer(n_variables=len(TRANSFORMER_FIELD_NAMES),
+                                     grid_size=GRID_SIZE, d_model=16, n_heads=2, n_layers=1,
+                                     dropout=0.0)
+        expand_patch_channels(model, 4)
+        base_before = model.patch.base.weight.detach().cpu().clone()
+        train_transformer_stage_streaming(
+            model, stage_b(epochs=2, learning_rate=1e-2), [train], [val], tmp_path,
+            np.random.default_rng(0), n_augment=1, batch_size=4, basins=(), extra_x=extra,
+            trainable=trainable,
+        )
+        return model, base_before
+
+    model, base_before = run((STEERING_PARAMS,))
+    assert model.patch.extra.weight.abs().sum() > 0
+    assert torch.equal(model.patch.base.weight.detach().cpu(), base_before)
+    frozen, _ = run(())
+    assert frozen.patch.extra.weight.abs().sum() == 0  # what the review caught
+    with pytest.raises(ValueError, match="no parameter"):
+        run(("nope.",))
+
+
+def test_with_zero_steering_both_arms_are_the_same_run(tmp_path, monkeypatch):
+    """All-zero steering standardises to zeros, so the steering conv gets no
+    gradient and the arms differ only if their batch order differs (PR #245
+    review: building the conv used to advance torch's RNG in one arm)."""
+    from anemoi.training import steering_spike
+
+    era5, gdas, steer = tmp_path / "era5", tmp_path / "gdas", tmp_path / "steer"
+    tracks = [
+        make_track("AL011985", season=1985, n=26, seed=0),
+        make_track("AL012021", season=2021, n=26, seed=1),
+        make_track("AL022021", season=2021, n=26, seed=2),
+        make_track("AL012022", season=2022, n=26, seed=7),
+        make_track("AL012023", season=2023, n=26, seed=3),
+    ]
+    for t in tracks:
+        cache_all_fixes(era5, t, Flavor.ERA5_PRETRAIN)
+        cache_all_fixes(gdas, t, Flavor.GDAS_FINETUNE)
+        for fix in t.fixes:
+            steering.save_steering(
+                steering.steering_path(steer, t.storm_id, fix.valid_time),
+                np.zeros((len(steering.STEERING_LEADS_H), len(steering.FEATURE_NAMES)),
+                         dtype=np.float32),
+                FetchTask(t.storm_id, fix.valid_time, fix.lat, fix.lon),
+            )
+    report = steering_spike.run_steering_spike(
+        tracks, era5, gdas, steer, seeds=(1,), n_augment=1, batch_size=4, d_model=16,
+        dropout=0.0, curriculum_kwargs={"a": {"epochs": 1}, "b": {"epochs": 2}},
+        log=lambda _m: None,
+    )
+    al = report["steering_minus_baseline"]["1"]["AL"]
+    assert al["n_cases"] > 0
+    assert al["mean_diff_nm"] == pytest.approx(0.0, abs=1e-6)

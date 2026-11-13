@@ -9,10 +9,12 @@ registered version:
   `real_run_transformer.run_transformer_curriculum`.
 * **Two Stage B arms from the same weights.** ``baseline`` fine-tunes on the
   usual channels; ``steering`` adds `data.steering`'s features as constant
-  channels (`train_transformer_stage_streaming`'s ``extra_x``), whose
-  patch-embedding weights start at zero, so both arms start as the same
-  function. Both see exactly the same windows (those with steering), the
-  same window draw and the same shuffling seed.
+  channels (`train_transformer_stage_streaming`'s ``extra_x``) through their
+  own zero-initialised conv (`expand_patch_channels`), so both arms start as
+  the same function. Stage B's freezing (everything outside ``head.``)
+  applies to both; the steering conv is the one addition left trainable.
+  Both see the same windows (those with steering), the same window draw and,
+  reseeded after the model is built, the same batch order.
 * **Replicates.** Each seed in ``seeds`` runs both arms; the baseline's
   spread across seeds is the run-to-run noise a difference has to clear.
 * **Nothing is registered.** No registry is touched and checkpoints aren't
@@ -55,22 +57,38 @@ GATE_LEAD_H = 48
 MIN_STORMS_FOR_INTERVAL = 8
 
 
+#: Parameter prefix of the steering input path (`expand_patch_channels`),
+#: trained in Stage B while the stage's freezing policy holds elsewhere.
+STEERING_PARAMS = "patch.extra."
+
+
 def expand_patch_channels(model, n_extra: int):
-    """Give ``model.patch`` (the transformer's patch embedding) ``n_extra``
-    more input channels whose weights are zero, so the model computes the
-    same function until training moves them."""
+    """Replace ``model.patch`` (the transformer's patch embedding) with one
+    that takes ``n_extra`` more input channels through a separate,
+    zero-initialised, bias-free conv (``patch.extra``), added to the
+    original's output. The model computes the same function until
+    ``patch.extra`` trains, and Stage B's freezing of the original weights
+    (everything outside ``head.``) is untouched: the caller unfreezes
+    :data:`STEERING_PARAMS` alone."""
     torch = require_torch()
-    old = model.patch
-    new = torch.nn.Conv2d(
-        old.in_channels + n_extra, old.out_channels,
-        kernel_size=old.kernel_size, stride=old.stride, bias=old.bias is not None,
-    ).to(old.weight.device)
-    with torch.no_grad():
-        new.weight.zero_()
-        new.weight[:, : old.in_channels] = old.weight
-        if old.bias is not None:
-            new.bias.copy_(old.bias)
-    model.patch = new
+    nn = torch.nn
+    base = model.patch
+
+    class ExtraChannelPatch(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.base = base
+            self.extra = nn.Conv2d(n_extra, base.out_channels, kernel_size=base.kernel_size,
+                                   stride=base.stride, bias=False)
+            nn.init.zeros_(self.extra.weight)
+            self.extra.to(base.weight.device)
+            self.in_channels = base.in_channels + n_extra
+
+        def forward(self, x):
+            c = self.base.in_channels
+            return self.base(x[:, :c]) + self.extra(x[:, c:])
+
+    model.patch = ExtraChannelPatch()
     return model
 
 
@@ -206,6 +224,10 @@ def run_steering_spike(
             arm_model.load_state_dict(after_a)
             if arm == "steering":
                 expand_patch_channels(arm_model, STEERING_DIM)
+            # Building the steering conv draws from torch's global RNG, which
+            # the DataLoader shuffles with: reseed so both arms see the same
+            # batch order.
+            torch.manual_seed(seed)
             captured: dict = {}
 
             def keep(windows, pred, captured=captured):
@@ -215,7 +237,11 @@ def run_steering_spike(
                 arm_model, stage_b, b_train, b_val, gdas_cache_dir, rng_b,
                 n_augment=n_augment, batch_size=batch_size, num_workers=num_workers,
                 device=device, basins=basins, extra_x=extra, on_validation=keep,
+                trainable=(STEERING_PARAMS,) if arm == "steering" else (),
             )
+            if arm == "steering":
+                moved = float(arm_model.patch.extra.weight.detach().abs().sum())
+                log(f"seed {seed} steering: |patch.extra| = {moved:.4g} after Stage B")
             errors, storm_ids = track_errors_nm(captured["windows"], captured["pred"])
             keys = [(sw.storm_id, sw.current.valid_time.isoformat()) for sw in captured["windows"]]
             results.append(ArmResult(arm, seed, keys, errors, storm_ids, float(val_loss)))

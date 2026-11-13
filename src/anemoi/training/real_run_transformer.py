@@ -299,6 +299,7 @@ def train_transformer_stage_streaming(
     basins: Sequence[str] = (),
     extra_x: Callable[[StageWindow], np.ndarray | None] | None = None,
     on_validation: Callable[[list[StageWindow], np.ndarray], None] | None = None,
+    trainable: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_transformer_stage`'s streaming analog
     (`docs/streaming_dataloader.md`) -- same return contract, real
@@ -316,7 +317,10 @@ def train_transformer_stage_streaming(
     ``None`` is dropped from training and validation. A zero-length vector
     adds nothing but still filters, which keeps a no-steering arm on the
     same windows. ``on_validation`` receives the validation windows and
-    their de-standardised predictions, in order.
+    their de-standardised predictions, in order. ``trainable`` names
+    parameter prefixes made trainable after the stage's own freezing
+    (Stage B freezes everything outside ``head.``), for a new input path
+    that has to learn while the existing weights keep the stage's policy.
     """
     from .streaming import (
         OnlineMaskedLeadMeanStd,
@@ -407,6 +411,14 @@ def train_transformer_stage_streaming(
     )
 
     freeze_encoder(model, stage.frozen_modules)
+    if trainable:
+        matched = False
+        for name, param in model.named_parameters():
+            if name.startswith(tuple(trainable)):
+                param.requires_grad = True
+                matched = True
+        if not matched:
+            raise ValueError(f"no parameter starts with any of {tuple(trainable)}")
     model.to(device)
 
     def masked_mse_sums(pred, target, mask3):
