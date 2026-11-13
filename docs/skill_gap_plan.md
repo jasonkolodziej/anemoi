@@ -40,6 +40,13 @@ These answer the questions every later phase depends on, and each takes hours, n
   - API half done (`b672fca`): `/v1/sources` returns `used_by` per source, from one mapping in `data/sources.py` that was read from the training and live-cycle code. A test fails once any module imports the adapter of a source still listed as unused.
   - Console half in progress: the Sources page column, and the system graph drawn from the same field. The column is already headed **Role**; what's left there is the subtitle, which reads the role as a status.
 - [ ] **Pull phase 1's spread-skill and rank histograms per lead.** This settles the GEFS question with data you already have.
+  - Not a lookup: it needs one run. Nothing measures the v12 ensemble's spread. Diffusion training scores only the ensemble mean, so the registry, R2 and the live calibration endpoint hold point errors and cone containment, not spread-skill or rank histograms. Every per-lead table in the repo is for diffusion v6 or v7 (20 members, 637 Atlantic windows from 2023).
+  - The run, on the CPU training job (about 10 minutes for the September runs):
+    `gcloud run jobs execute anemoi-train-schedule --region us-central1 --task-timeout 3600s --args=spread-backtest,--hurdat2,/app/data/hurdat2-atl.txt,--gdas-cache-dir,/cache/gdas_cache_f006,--registry-root,/tmp/registry,--members,50,--out,/cache/spread-backtest-diffusion-v12-m50.json`
+    then copy the JSON into `docs/backtests/`. `--out` under `/cache` and the timeout are untested additions to the documented command.
+  - Read `dropout` in diffusion v12's `arch_params` tag first. `--diffusion-dropout` defaults to 0.0 and the documented GPU job doesn't set `DIFFUSION_DROPOUT`. Dropout 0.1 is what closed the long-lead under-dispersion in September (v7 0.45 to 0.73 at 72 to 120 h, v8 0.86 to 1.04). v12's training set is about three times that one, so dropout 0.0 need not reproduce v7's result.
+  - Until the run exists the GEFS gate is undecided, so GEFS doesn't start. The last healthy model measured (v8, 50 members, 2026-09-29) read `not_warranted`. If v12's long-lead track ratios are below 0.8, try a derived-only retrain with dropout 0.1 before GEFS; GEFS is the live option only if under-dispersion survives that and sits in the recurving cases.
+  - The backtest has no per-basin split, and validation is now the 2024 season pooled across AL, EP and CP, so one basin can hide another. `calibrate()` already takes a `case_filter`; a per-basin breakdown is a small code change.
 
 ## Phase 1: Track experiment and baseline
 
@@ -130,6 +137,7 @@ The critical path is Phase 1: its week 2 result decides whether weeks 3–4 go t
 - **The forecast-lead input breaks train/serve parity.** Training must use GFS leads from the t−6 cycle, the same as serving. AWS `noaa-gfs-bdp-pds` holds 2021 onward, so this is covered.
 - **Version switch.** If `na` → `na14` changed the grid or algorithm, training across it adds a distribution shift.
 - **Small samples.** With 21 AL storms, per-basin gains can be noise. Report them per lead, with storm-level bootstrap intervals, before promoting.
+- **The wiki can't publish.** The GitHub wiki was edited directly after its last publish (from `3bae888`), and `publish-wiki.sh` compares the wiki with `wiki/` at that commit, so it refuses every publish, including after the edits are copied into `wiki/` (done in `e83ee7b`). To unblock: once this branch is on `main`, revert the five direct commits in the wiki repository (`af8e4ac` through `2717b8f`) so it matches `wiki/` at `3bae888`, then run *Publish wiki*. Nothing is lost, because `wiki/` contains every one of those edits. A lasting fix is for the script to accept a wiki whose edits are already contained in `wiki/`.
 - **Open:** How far back does the AIFS open-data archive go?
 - **Open:** Is the CoastWatch latency stable during busy seasons? So far it's only been seen in Jul–Nov 2026.
 
@@ -147,6 +155,13 @@ The critical path is Phase 1: its week 2 result decides whether weeks 3–4 go t
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-13.** Spread-skill check: the v12 ensemble's spread has never
+  been measured, so the phase 0 item is a backtest run, not a lookup. The
+  command and how to read it are under that item.
+- **2026-11-13.** `wiki/` brought level with the published wiki (`e83ee7b`):
+  Decision Log 61 to 65 and nine pages had been edited directly in the wiki
+  and were missing here. Publishing stays blocked until the wiki is reset to
+  its last published state (see "Risks and open questions").
 - **2026-11-13.** `used_by` on the source registry and `/v1/sources`
   (`b672fca`), the API half of the Sources page fix. Reading the code for it
   corrected two rows of the table above: GEFS is read by nothing, and
