@@ -163,7 +163,7 @@ A registered `{basin}/track_error_{lead}h_nm` says neither how hard its windows 
 
 C still starts each storm 24 h after its first fix and assigns basin by storm id (EP rows include CPHC-issued forecasts west of 140W; CP is CPHC, with no NHC counterpart).
 
-**Members.** `OFCL` (the regular advisory: `OFCO` where a special advisory replaced it, as NHC verifies), `AVNI` (the previous GFS run shifted to the storm's position at `t`: the GFS track a cycle has), `AVNO-6` (the raw track of the `t−6` run whose fields the models read), `AVNO` (late: the `t` run arrives after NHC's `t+3` advisory, context only), `EMXI` (ECMWF interpolated: `EMXI` at 06/18Z, `EMX2` at 00/12Z, since ECMWF's full runs start at 00 and 12Z), `OCD5` (CLIPER5 track, Decay-SHIFOR5 intensity: NHC's skill baseline), `XTRP` (extrapolation from the working fixes), and the registry's `persistence` with the same rule on the un-noised best track. `--techniques` takes any a-deck technique (`TVCN`, `HCCA`, ...). Each row carries the storm count and the largest storm's share, case- and storm-weighted means, and against `AVNI` and `OFCL` the paired difference with a storm-block bootstrap interval (10,000 resamples: at 2,000 an endpoint moved by about 0.2 nm between seeds), the beat rate and a Diebold–Mariano p-value on one case per storm; under 8 storms, means only.
+**Members.** `OFCL` (the regular advisory: `OFCO` where a special advisory replaced it, as NHC verifies), `AVNI` (the previous GFS run shifted to the storm's position at `t`: the GFS track a cycle has), `AVNO-6` (the raw track of the `t−6` run whose fields the models read), `AVNO` (late: the `t` run arrives after NHC's `t+3` advisory, context only), `EMXI/EMX2` (ECMWF interpolated: `EMXI` at 06/18Z, `EMX2` at 00/12Z, since ECMWF's full runs start at 00 and 12Z; about half the cases each, so not comparable with NHC's `EMXI` verification), `OCD5` (CLIPER5 track, Decay-SHIFOR5 intensity: NHC's skill baseline), `XTRP` (extrapolation from the working fixes), and the registry's `persistence` with the same rule on the un-noised best track. `--techniques` takes any a-deck technique (`TVCN`, `HCCA`, ...). Each row carries the storm count and the largest storm's share, case- and storm-weighted means, and against `AVNI` and `OFCL` the paired difference with a storm-block bootstrap interval (10,000 resamples: at 2,000 an endpoint moved by about 0.2 nm between seeds), the beat rate and a Diebold–Mariano p-value on one case per storm; under 8 storms, means only.
 
 **Decision rule, fixed before any model number exists:** fusion minus AVNI, Atlantic, 48 h track, on B and C. Positive with a storm-block interval excluding zero on both: the ML layer subtracts value; negative and excluding zero on both: it adds value; otherwise the season does not decide. The registry's `nhc_consensus_beat_rate_48h` threshold is a different comparison (against NHC's consensus, `TVCN`); nothing computes it yet.
 
@@ -171,7 +171,7 @@ C still starts each storm 24 h after its first fix and assigns basin by storm id
 
 **2024**, 48 h track error in nm (`docs/backtests/2026-11-13-homogeneous-baseline-val2024.json`; * fewer than 8 storms):
 
-| Basin, sample | n (storms) | OFCL | AVNI | AVNO-6 | AVNO | EMXI | OCD5 | XTRP | persistence | un-noised |
+| Basin, sample | n (storms) | OFCL | AVNI | AVNO-6 | AVNO | EMXI/EMX2 | OCD5 | XTRP | persistence | un-noised |
 |---|---|---|---|---|---|---|---|---|---|---|
 | AL A | 255 (15) | | | | | | | | 335 | 287 |
 | AL B | 242 (15) | 57 | 66 | 67 | 58 | 59 | 248 | 297 | 330 | 285 |

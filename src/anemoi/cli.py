@@ -1525,7 +1525,7 @@ def main(argv: list[str] | None = None) -> int:
         help="a-deck members, [LABEL=]TECH[/TECH...][-LAG]: AVNI; OFCL=OFCO/OFCL (first an "
              "initial time has); AVNO-6 (the run 6 h earlier at tau+6). Default: "
              "training.baseline_backtest.DEFAULT_TECHNIQUES (OFCL=OFCO/OFCL, AVNI, AVNO-6, "
-             "AVNO, EMXI=EMXI/EMX2, OCD5, XTRP)",
+             "AVNO, EMXI/EMX2, OCD5, XTRP)",
     )
     p.add_argument(
         "--references", nargs="+", default=None, metavar="MEMBER",

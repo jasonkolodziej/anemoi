@@ -42,8 +42,9 @@ run's track shifted to the storm's position at ``t`` (the 6 h interpolation;
 ``AVN2`` is the 12 h one) and is what was available. ``AVNO-6`` is that
 previous run's raw track at ``tau + 6``: the same model fields the project's
 models read, with no interpolator. ECMWF's full runs start at 00 and 12Z
-only, so its early track (``EMXI=EMXI/EMX2``) is the 6 h interpolation at
-06 and 18Z and the 12 h one at 00 and 12Z. `DECISION_RULE` says which
+only, so its early track (``EMXI/EMX2``) is the 6 h interpolation at
+06 and 18Z and the 12 h one at 00 and 12Z, about half each: not the EMXI
+NHC verifies. `DECISION_RULE` says which
 comparison decides, and is fixed before any model number exists.
 
 **The project's own models** join through a per-case forecast file
@@ -111,7 +112,8 @@ OFFICIAL = "OFCL=OFCO/OFCL"
 #: The ECMWF track a cycle has. ECMWF's full runs start at 00 and 12Z, so
 #: the a-deck interpolates them 6 h forward to 06 and 18Z (EMXI) and 12 h
 #: forward to 00 and 12Z (EMX2): EMXI alone exists at half the initial times.
-ECMWF = "EMXI=EMXI/EMX2"
+#: Named for both, so its errors are not read as NHC's EMXI verification.
+ECMWF = "EMXI/EMX2"
 #: The members scored unless told otherwise. CLP5 is not among them: its
 #: track is OCD5's (`technique_diagnostics` measures it), so requiring both
 #: could only shrink the sample.
@@ -150,7 +152,7 @@ BASIN_NOTES: dict[str, str] = {
 DECISION_RULE = (
     "Fixed before any model number exists. Primary comparison: fusion against AVNI "
     "(the GFS track available at the cycle), Atlantic, 48 h track error, on samples B "
-    "and C, with AVNO-6, EMXI, OFCL and OCD5 beside it. Fusion's paired difference "
+    "and C, with AVNO-6, EMXI/EMX2, OFCL and OCD5 beside it. Fusion's paired difference "
     "from AVNI (fusion minus AVNI) decides: positive with a storm-block interval that "
     "excludes zero on both samples, the ML layer subtracts value; negative and "
     "excluding zero on both, it adds value; otherwise this season does not decide. "

@@ -303,7 +303,9 @@ def test_technique_specs():
     )
     lagged = TechniqueSpec.parse("AVNO-6")
     assert (lagged.name, lagged.lag_hours, lagged.kind) == ("AVNO-6", 6, "lagged")
-    assert TechniqueSpec.parse("EMXI=EMXI/EMX2").kind == "early"
+    ecmwf = TechniqueSpec.parse("EMXI/EMX2")
+    assert (ecmwf.name, ecmwf.techniques, ecmwf.kind) == ("EMXI/EMX2", ("EMXI", "EMX2"), "early")
+    assert "EMXI/EMX2" in DEFAULT_TECHNIQUES
     assert TechniqueSpec.parse("HWFI").kind == "guidance"
     for bad in ("avni", "AVNO-5", "OFCL=", "TOOLONG"):
         with pytest.raises(BaselineBacktestError):
@@ -357,7 +359,7 @@ def test_samples_a_b_c_shrink_in_turn_and_errors_are_the_known_offsets(report, c
     assert a.n_cases == report.registry_sample["AL"]["n_by_lead"]["12"]
     assert a.n_cases > b.n_cases > c.n_cases > 0
     assert set(a.scores) == {"persistence", "persistence_besttrack"}
-    assert {"OFCL", "AVNI", "AVNO-6", "AVNO", "EMXI", "OCD5", "XTRP"} <= set(b.scores)
+    assert {"OFCL", "AVNI", "AVNO-6", "AVNO", "EMXI/EMX2", "OCD5", "XTRP"} <= set(b.scores)
     assert b.scores["AVNI"].mean_error == pytest.approx(0.2 * NM_PER_DEG, rel=1e-6)
     assert c.scores["OCD5"].mean_error == pytest.approx(1.0 * NM_PER_DEG, rel=1e-6)
     assert _row_of(report, "B", "AL", 12, INTENSITY).scores["OFCL"].bias == pytest.approx(2.0)
