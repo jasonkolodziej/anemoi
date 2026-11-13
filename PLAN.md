@@ -132,6 +132,11 @@ and OHC are constant placeholders, so Stage B and serving have no real ocean
 signal. Order, gates and what stays verification-only are in
 `docs/input_sources_plan.md`: OISST first, GOES second, GEFS and microwave
 only if the evidence calls for them, dropsonde and buoys for verification.
+The track gap comes first, though: fusion v12's 48 h Atlantic track error is
+231 nm against the 70 nm gate. `docs/skill_gap_plan.md` is the working plan
+and progress record for both: the same-day checks (phase 0), the track
+experiment and homogeneous baseline (phase 1), the ocean inputs (phase 2),
+more training data (phase 3), and what waits on evidence (phase 4).
 
 
 **Sample size -- measured (LSTM proxy); transformer itself still open.** The

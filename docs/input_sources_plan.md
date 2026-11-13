@@ -4,6 +4,9 @@
 (`docs/multi_basin.md`) has trained and been evaluated per basin. That run is
 the baseline every step below is measured against.
 
+**Execution and progress:** `docs/skill_gap_plan.md` schedules these steps
+alongside the track experiment and records what's done.
+
 ## Where things stand
 
 Eight sources have real, tested adapters in `src/anemoi/data/`. Two of them
