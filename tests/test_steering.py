@@ -220,3 +220,23 @@ def test_a_meta_write_that_fails_with_no_file_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "replace", broken)
     with pytest.raises(OSError):
         steering.write_meta(tmp_path)
+
+
+def test_a_failed_cleanup_does_not_stop_the_recovery(tmp_path, monkeypatch):
+    """PR #246 review: an ESTALE from unlinking the temporary file must not
+    skip reading the winner's meta."""
+    from pathlib import Path
+
+    real_replace = Path.replace
+
+    def racing_replace(self, target):
+        real_replace(self, target)
+        raise OSError(116, "Stale file handle")
+
+    def stale_unlink(self, missing_ok=False):
+        raise OSError(116, "Stale file handle")
+
+    monkeypatch.setattr(Path, "replace", racing_replace)
+    monkeypatch.setattr(Path, "unlink", stale_unlink)
+    steering.write_meta(tmp_path)
+    assert (tmp_path / steering.CACHE_META_NAME).exists()

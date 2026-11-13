@@ -242,7 +242,10 @@ def write_meta(cache_dir: Path | str) -> None:
         tmp.write_text(json.dumps(meta, indent=1) + "\n")
         tmp.replace(path)
     except OSError:
-        tmp.unlink(missing_ok=True)
+        try:  # best effort: the same mount can refuse the cleanup too
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
         if not check():
             raise
 
