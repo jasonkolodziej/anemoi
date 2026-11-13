@@ -32,9 +32,7 @@ from __future__ import annotations
 import io
 import json
 import math
-import os
 import time
-import uuid
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -233,21 +231,36 @@ def write_meta(cache_dir: Path | str) -> None:
 
     if check():
         return
-    # Parallel Cloud Run tasks all start here at once. On GCS FUSE a shared
-    # write fails with a stale file handle (ESTALE) for all but one, so each
-    # writes its own temporary file and renames it; a task that still loses
-    # the race reads back the winner's file instead.
-    tmp = path.with_name(f"{CACHE_META_NAME}.{os.getpid()}.{uuid.uuid4().hex}.part")
+    # Parallel Cloud Run tasks all start here at once, on GCS FUSE. Create the
+    # file exclusively, so a task never overwrites meta another task already
+    # published (with other settings, it would mix incompatible entries).
+    # A task that loses (the file exists, or the mount refuses the write with
+    # a stale file handle) waits for the winner's file to become visible:
+    # the mount caches "not found" for a few seconds (gcsfuse's negative stat
+    # TTL is 5 s by default), so one read straight away isn't enough.
+    text = json.dumps(meta, indent=1) + "\n"
     try:
-        tmp.write_text(json.dumps(meta, indent=1) + "\n")
-        tmp.replace(path)
-    except OSError:
-        try:  # best effort: the same mount can refuse the cleanup too
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
-        if not check():
-            raise
+        with path.open("x") as fh:
+            fh.write(text)
+        return
+    except OSError as exc:
+        error = exc
+    deadline = time.monotonic() + META_WAIT_S
+    while True:
+        try:
+            if check():
+                return
+        except (OSError, json.JSONDecodeError):
+            pass  # not visible or not complete yet
+        if time.monotonic() >= deadline:
+            raise error
+        time.sleep(META_POLL_S)
+
+
+#: How long a task that lost the race to write the meta waits for the
+#: winner's file, and how often it looks.
+META_WAIT_S = 30.0
+META_POLL_S = 1.0
 
 
 FlowFetcher = Callable[[datetime, int], LeadFlow]
