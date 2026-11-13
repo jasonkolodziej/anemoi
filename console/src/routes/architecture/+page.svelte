@@ -126,8 +126,8 @@
 	<div bind:this={graphEl} class="mb-6 rounded-lg border border-border bg-bg p-3">
 		<SystemGraph {registry} {pin} {architectures} {sources} {sourcesFailed} bind:selected bind:anchor />
 		<p class="mt-2 px-1 text-xs text-text-faint">
-			Select a model to open its layers; the beams show where data flows, and selecting a model mutes every path
-			it isn't on. Basins: <span class="text-clear">✓ verified</span> (beats persistence there) ·
+			Select a model to open its layers; the beams show where data flows in a forecast cycle, and selecting a model
+			mutes every path it isn't on. Basins: <span class="text-clear">✓ verified</span> (beats persistence there) ·
 			<span class="text-lips">trained</span> · not trained. Edge labels are the shapes each model is fed and
 			returns, batch left out.
 		</p>

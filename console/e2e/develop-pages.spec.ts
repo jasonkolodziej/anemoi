@@ -160,7 +160,7 @@ test.describe('signed in', () => {
 		await expect(source('gdas_gfs')).toContainText('CNN · Transformer · GNN · PINN');
 		// ERA5 feeds the same models, in Stage A pretraining only.
 		await expect(source('era5')).toHaveAttribute('data-use', 'input');
-		await expect(source('era5')).toContainText('Stage A');
+		await expect(source('era5')).toContainText('pretraining only');
 		for (const key of ['dropsonde', 'ndbc']) {
 			await expect(source(key)).toHaveAttribute('data-use', 'reference');
 			await expect(source(key)).toContainText('verification only');
@@ -191,26 +191,31 @@ test.describe('signed in', () => {
 			'not used yet',
 		]);
 
-		// A beam per edge something travels: the three sources a model
-		// reads, then the eleven edges from preprocessing on.
+		// A beam per edge something travels in a forecast cycle: the two
+		// sources a cycle's models read, then the eleven edges from
+		// preprocessing on. ERA5's edge is solid, as the models do read
+		// it, but carries no beam: nothing reads it in a cycle.
 		const beams = graph.locator('.beam');
 		const muted = graph.locator('.beam-muted');
-		await expect(beams).toHaveCount(3 + 11);
+		await expect(beams).toHaveCount(2 + 11);
 		await expect(muted).toHaveCount(0);
+		await expect(graph.locator('[data-beam="src:gdas_gfs>prep"]')).toHaveCount(1);
+		await expect(graph.locator('[data-beam="src:era5>prep"]')).toHaveCount(0);
+		await expect(edgeFrom('era5')).not.toHaveAttribute('stroke-dasharray');
 
 		// Hovering a model keeps the sources it reads: the LSTM's is the
-		// working best-track alone. Muted: the two gridded sources, and the
-		// other three models' edges in and out.
+		// working best-track alone. Muted: the GDAS/GFS beam, and the other
+		// three models' edges in and out.
 		await page.getByRole('button', { name: /\(lstm\)/ }).hover();
-		await expect(muted).toHaveCount(2 + 3 + 3);
+		await expect(muted).toHaveCount(1 + 3 + 3);
 		await expect(source('besttrack_working')).toHaveAttribute('opacity', '1');
 		await expect(source('gdas_gfs')).toHaveAttribute('opacity', '0.45');
 
 		// Hovering a source keeps the models that read it: GDAS/GFS feeds
-		// the gridded three and PINN. Muted: the other two sources that
-		// feed a model, and the LSTM's edge in and out.
+		// the gridded three and PINN. Muted: the working best-track's beam,
+		// and the LSTM's edge in and out.
 		await source('gdas_gfs').hover();
-		await expect(muted).toHaveCount(2 + 1 + 1);
+		await expect(muted).toHaveCount(1 + 1 + 1);
 		await expect(page.locator('[data-model-node="cnn"]')).toHaveAttribute('opacity', '1');
 		await expect(page.locator('[data-model-node="lstm"]')).toHaveAttribute('opacity', '0.45');
 
@@ -276,7 +281,7 @@ test.describe('signed in', () => {
 		await expect(goes).toHaveAttribute('data-use', 'unknown');
 		await expect(goes).toContainText('calibration');
 		await expect(graph.locator('[data-edge="src:goes>prep"]')).toHaveAttribute('stroke-dasharray');
-		await expect(graph.locator('.beam')).toHaveCount(3 + 11); // the same three sources as always
+		await expect(graph.locator('.beam')).toHaveCount(2 + 11); // the same beams as always
 		await expect(page.getByText("A use this console doesn't know")).toBeVisible();
 		await expect(page.getByText("This API doesn't say what uses each source")).toHaveCount(0);
 	});

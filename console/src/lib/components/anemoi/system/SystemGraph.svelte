@@ -51,6 +51,8 @@
 		use?: SourceUse | 'pending';
 		/** A data source: the models that read it. */
 		readers?: string[];
+		/** A data source: whether a forecast cycle may read it (`is_operational`). */
+		cycle?: boolean;
 		/** A data source: what its role adds to the picture, if anything. */
 		tag?: string;
 	}
@@ -77,9 +79,10 @@
 			sub: s.used_by ? usedByText(s.used_by) : 'use not reported',
 			use: useOf(s),
 			readers: readersOf(s),
-			// The role is the only thing that tells ERA5 from GDAS/GFS here:
-			// the same models read both, ERA5 in Stage A pretraining alone.
-			tag: s.role === 'pretrain_only' ? 'Stage A' : undefined
+			cycle: s.is_operational,
+			// ERA5 and GDAS/GFS have the same readers; only the role says ERA5
+			// is read in Stage A pretraining and never in a cycle.
+			tag: s.role === 'pretrain_only' ? 'pretraining only' : undefined
 		}));
 	});
 
@@ -174,11 +177,12 @@
 	const focus = $derived(byId.get(hovered ?? selected ?? ''));
 	const onPath = $derived(focus ? pathOf(focus) : null);
 
-	/** Whether anything travels the edge at all: not from a source no model
-	 * reads, or one whose use isn't known. */
+	/** Whether anything travels the edge in a forecast cycle, which is what
+	 * the beams show: not from a source no model reads, one whose use isn't
+	 * known, or one the models read in pretraining only. */
 	function carries(e: Edge): boolean {
-		const use = byId.get(e.from)?.use;
-		return use === undefined || use === 'input';
+		const from = byId.get(e.from);
+		return from?.use === undefined || (from.use === 'input' && from.cycle === true);
 	}
 	const lit = (e: Edge) => onPath === null || onPath.has(e);
 
@@ -317,6 +321,7 @@
 					     once a cycle, later the further downstream the edge is. -->
 					<path
 						d={path(a, b)}
+						data-beam={`${e.from}>${e.to}`}
 						fill="none"
 						pathLength="100"
 						class="beam"
@@ -437,7 +442,7 @@
 						<text x={x + (marked ? 36 : 14)} y={y + 24} class={`text-[15px] ${quiet ? 'fill-text-muted' : 'fill-text'}`}>{n.title}</text>
 						<text x={x + 14} y={y + 43} class="fill-text-muted text-[14px]">{n.sub}</text>
 						{#if n.tag}
-							<text x={x + n.w - 12} y={y + 24} text-anchor="end" class="fill-text-muted text-[13px]">{n.tag}</text>
+							<text x={x + n.w - 12} y={y + 24} text-anchor="end" class="fill-text-muted text-[14px]">{n.tag}</text>
 						{/if}
 					</g>
 				{:else}
