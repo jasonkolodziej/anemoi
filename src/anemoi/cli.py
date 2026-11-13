@@ -17,7 +17,7 @@ from . import __version__
 from .data.atcf import storm_basin
 from .data.availability import LatencyOracle
 from .data.besttrack import TrackQuality
-from .data.sources import REGISTRY, Role
+from .data.sources import REGISTRY, Role, used_by
 from .data.splits import assign_splits
 from .data.synthetic import generate_archive
 from .inference.cycle import climatological_ensemble, run_cycle
@@ -65,11 +65,26 @@ def cmd_schedule(args: argparse.Namespace) -> int:
 def cmd_sources(args: argparse.Namespace) -> int:
     rows = sorted(REGISTRY.values(), key=lambda s: (s.role.value, s.key))
     width = max(len(s.key) for s in rows)
+    # A role is permission, so an operational source nothing reads yet looks
+    # the same as one every model reads unless the row says who uses it.
+    users = {s.key: ", ".join(used_by(s.key)) or "not used yet" for s in rows}
+    users_width = max(len(u) for u in users.values())
+    print(
+        f"  {'source':<{width}}  {'role':<14} {'latency':>8}  "
+        f"{'used by':<{users_width}}  provider"
+    )
     for src in rows:
         marker = " " if src.role is Role.OPERATIONAL else "*"
         hours = src.typical_latency.total_seconds() / 3600.0
-        print(f"{marker} {src.key:<{width}}  {src.role.value:<14} ~{hours:>6.1f}h  {src.provider}")
+        print(
+            f"{marker} {src.key:<{width}}  {src.role.value:<14} ~{hours:>6.1f}h  "
+            f"{users[src.key]:<{users_width}}  {src.provider}"
+        )
     print("\n* not readable during a forecast cycle (Scope v2.1 §4.6)")
+    print(
+        "used by: the models that read the source as an input, then labels "
+        "and verification"
+    )
     return 0
 
 

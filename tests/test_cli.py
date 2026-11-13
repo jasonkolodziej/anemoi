@@ -935,3 +935,22 @@ def test_drift_reference_fit_reports_no_cache_found(tmp_path, capsys):
     )
     assert cli.cmd_drift_reference_fit(args) == 1
     assert "no cached GDAS fields found" in capsys.readouterr().out
+
+
+def test_cmd_sources_prints_who_uses_each_source(capsys):
+    """One row per registry source, with the same `used_by` the API serves
+    (`data.sources.used_by`) -- the role column alone reads as if every
+    operational source fed a model."""
+    from anemoi.data import sources
+
+    assert cli.cmd_sources(argparse.Namespace()) == 0
+
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].split() == ["source", "role", "latency", "used", "by", "provider"]
+    rows = {line[2:].split()[0]: line for line in lines[1 : 1 + len(sources.REGISTRY)]}
+    assert set(rows) == set(sources.REGISTRY)
+    for key, line in rows.items():
+        users = ", ".join(sources.used_by(key)) or "not used yet"
+        assert f"h  {users} " in line, key
+    assert rows["gdas_gfs"].startswith("  ")
+    assert rows["era5"].startswith("* ")

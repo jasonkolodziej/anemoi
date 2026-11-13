@@ -102,3 +102,19 @@ def test_docs_route_is_unaffected():
     from anemoi.api.main import app
 
     assert app.docs_url == "/docs"
+
+
+def test_sources_used_by_is_documented_in_the_openapi_schema(client):
+    """`used_by` is a fixed vocabulary in a plain `string[]`, so the schema's
+    description is the only place a reader of /docs or /redoc learns it --
+    every value the registry can return has to be named there."""
+    from anemoi.data import sources
+
+    schema = client.get("/openapi.json").json()["components"]["schemas"]["SourceOut"]
+    assert "used_by" in schema["required"]
+
+    used_by = schema["properties"]["used_by"]
+    assert used_by["type"] == "array"
+    assert used_by["items"] == {"type": "string"}
+    for value in (*sources.MODEL_INPUTS, sources.LABELS, sources.VERIFICATION):
+        assert f"`{value}`" in used_by["description"], value

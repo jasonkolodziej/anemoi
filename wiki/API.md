@@ -94,7 +94,17 @@ All paths are prefixed `/v1`.
 |---|---|---|
 | GET | `/health` | Status, API version, anemoi version, whether torch is installed |
 | GET | `/models` | The six wind gods + Fusion — a console's design-token source |
-| GET | `/sources` | The §4.1 data source registry, same rows as `anemoi sources` |
+| GET | `/sources` | The §4.1 data source registry, same rows as `anemoi sources`. Each row carries `role` (what the source may be used for) and `used_by` (who uses it today, below) |
+
+**`used_by`** on a `/sources` row is a list from a fixed vocabulary, in a fixed order:
+
+1. The models that read the source as an input, in training or when serving: `lstm`, `cnn`, `transformer`, `gnn`, `pinn`.
+2. `labels`: the source supplies the supervision targets.
+3. `verification`: the source is kept for verifying forecasts and is never a model input.
+
+`[]` means the source is registered, and may be read as its role allows, but nothing uses it yet. `role` can't say this: eight of the ten sources are `operational`, and two of them feed a model.
+
+`verification` on `dropsonde` and `ndbc` is a designation: they won't become model inputs, and no verification code reads them yet. The values per source, and where they come from in the code, are on [Data Sources](Data-Sources#who-uses-each-source). The console's Sources page and system graph read this field.
 
 ### Schedule
 

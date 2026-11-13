@@ -38,6 +38,7 @@ def models() -> schemas.ModelCatalog:
 @router.get("/sources", response_model=list[schemas.SourceOut])
 def sources() -> list[schemas.SourceOut]:
     """The §4.1 data source registry, sorted role then key -- matches
-    ``anemoi sources``."""
+    ``anemoi sources``. ``role`` is what a source may be used for;
+    ``used_by`` is who uses it today (``data.sources.used_by``)."""
     rows = sorted(REGISTRY.values(), key=lambda src: (src.role.value, src.key))
     return [convert.source_out(r) for r in rows]

@@ -69,6 +69,33 @@ An unrecognised flag should render as "degraded, reason opaque" rather than
 being dropped — new flags can ship in `anemoi.inference` without a client
 release as long as consumers treat the prefix match as best-effort.
 
+## Role is permission, `used_by` is use
+
+`GET /v1/sources` returns the data source registry. `role` says what a source
+may be used for: eight of the ten sources are `operational`, which means a
+cycle is allowed to read them, not that a model does. `used_by` says who uses
+each source today, from a fixed vocabulary in a fixed order:
+
+| Value | Meaning |
+|---|---|
+| `lstm`, `cnn`, `transformer`, `gnn`, `pinn` | That model reads the source as an input, in training or when serving. Listed in this order |
+| `labels` | The source supplies the supervision targets |
+| `verification` | The source is kept for verifying forecasts and is never a model input |
+
+An empty list means the source is registered, and may be read as its role
+allows, but nothing uses it yet.
+
+`verification` is a designation, not proof of a reader. On `besttrack_final`
+it is both: validation metrics and the promotion gates score forecasts
+against it. On `dropsonde` and `ndbc` it is only the designation
+(`docs/input_sources_plan.md`, "Not model inputs"): they won't become model
+inputs, and no verification code reads them yet.
+
+The mapping is written once, next to the registry in `data/sources.py`
+(`MODEL_INPUTS`, `LABEL_SOURCES`, `VERIFICATION_SOURCES`). The console's
+Sources page and system graph read this field instead of keeping their own
+copy, so a model that gains an input changes `used_by` in the same change.
+
 ## The one mutating route
 
 `POST /v1/storms/{id}/cycles` is the only endpoint in v1 that writes anything,

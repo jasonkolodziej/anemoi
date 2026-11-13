@@ -5,6 +5,10 @@ Scope v2.1 §4.1. Each source carries an explicit real-time latency and a
 is what the inference scheduler is allowed to read, and
 :func:`assert_not_operational` is the guard that keeps reanalysis out of the
 production path.
+
+A role is permission, not use. Which models read a source today is a separate
+table, :data:`MODEL_INPUTS`, and :func:`used_by` is the per-source answer the
+API serves.
 """
 
 from __future__ import annotations
@@ -17,7 +21,8 @@ from enum import Enum
 class Role(str, Enum):
     """What a source is permitted to be used for."""
 
-    #: Read live during a forecast cycle, and used for Stage B fine-tuning.
+    #: May be read live during a forecast cycle, and used for Stage B
+    #: fine-tuning. Whether anything reads it yet is :func:`used_by`.
     OPERATIONAL = "operational"
     #: Stage A pretraining only. Never read during a forecast cycle.
     PRETRAIN_ONLY = "pretrain_only"
@@ -247,6 +252,90 @@ def operational_sources() -> list[DataSource]:
 
 def pretrain_only_sources() -> list[DataSource]:
     return [s for s in REGISTRY.values() if s.role is Role.PRETRAIN_ONLY]
+
+
+# --- Who uses each source ----------------------------------------------------
+#
+# The three tables below are the one place this is written down. The API serves
+# them (``GET /v1/sources``, ``used_by``) and the console's Sources page and
+# system graph draw from that, so a model gaining an input is one edit here.
+
+#: The registry sources each Group 1 model's input is built from, in training
+#: and when serving. Models are in catalogue order
+#: (``tracking.registry.GROUP1_MODELS``, held equal by tests/test_sources.py).
+#:
+#: Read from the code (``training.real_run*`` for training,
+#: ``training.real_inference_live`` for a live cycle), not from what a model
+#: was designed for:
+#:
+#: * ``lstm`` reads the storm's working-quality track and nothing gridded.
+#: * ``cnn``, ``transformer`` and ``gnn`` read the storm-centred field crop:
+#:   ERA5 in Stage A, GDAS/GFS in Stage B and in a live cycle. The crop is
+#:   centred on the working fix, but no track value is in what they read.
+#: * ``pinn`` reads both: an environment vector from the same crop, and the
+#:   forecast of its own candidate LSTM, which reads the track.
+#:
+#: In training the working-quality track is emulated from HURDAT2
+#: (``besttrack.augment_track``). That is still ``besttrack_working``, the
+#: quality a model is trained to see; ``besttrack_final`` is the label. The
+#: one place final fixes reach a model is flagged rather than listed: a cycle
+#: run on an archive storm, whose vitals were never kept, is marked
+#: ``input:final_best_track`` (``api.real_state``).
+#:
+#: ``diffusion`` and ``fusion`` are not here: they read the Group 1 models'
+#: latents and forecasts, not a source of their own. Fusion also takes a
+#: context vector computed from the working track
+#: (``training.real_latents.CONTEXT_FEATURE_NAMES``).
+MODEL_INPUTS: dict[str, tuple[str, ...]] = {
+    "lstm": ("besttrack_working",),
+    "cnn": ("gdas_gfs", "era5"),
+    "transformer": ("gdas_gfs", "era5"),
+    "gnn": ("gdas_gfs", "era5"),
+    "pinn": ("besttrack_working", "gdas_gfs", "era5"),
+}
+
+#: Sources whose values are the supervision targets.
+LABEL_SOURCES: tuple[str, ...] = ("besttrack_final",)
+
+#: Sources kept for verifying forecasts and never fed to a model.
+#:
+#: Only ``besttrack_final`` is read by verification code today: validation
+#: metrics, the promotion gates and the spread backtest all score forecasts
+#: against it. For ``dropsonde`` and ``ndbc`` this is a designation
+#: (docs/input_sources_plan.md, "Not model inputs"): they will not become model
+#: inputs and are meant for checking intensity near landfall, but no
+#: verification code reads them yet. Their adapters fetch and decode, and
+#: nothing imports them; tests/test_sources.py fails the day something does.
+VERIFICATION_SOURCES: tuple[str, ...] = ("besttrack_final", "dropsonde", "ndbc")
+
+#: The :func:`used_by` entries that are not model names.
+LABELS = "labels"
+VERIFICATION = "verification"
+
+
+def used_by(key: str) -> tuple[str, ...]:
+    """Who uses source ``key`` today.
+
+    In a fixed order: the models that read it as an input, in
+    :data:`MODEL_INPUTS` order; then ``"labels"`` if it supplies supervision
+    targets; then ``"verification"`` if it is kept for verifying forecasts and
+    is never a model input. Empty means the source is registered, and may be
+    read as its role allows, but nothing uses it yet.
+
+    ``"verification"`` marks a source that is not a model input, so it is not
+    the whole list of what verification reads: the served-product calibration
+    monitor (``monitoring.calibration_audit``) scores a served cone against
+    the storm's later working fixes, and ``besttrack_working`` is listed by
+    its models only. Nor is every ``"verification"`` read yet: see
+    :data:`VERIFICATION_SOURCES`.
+    """
+    get(key)  # an unknown key is a typo, not a source nothing uses
+    users = [model for model, inputs in MODEL_INPUTS.items() if key in inputs]
+    if key in LABEL_SOURCES:
+        users.append(LABELS)
+    if key in VERIFICATION_SOURCES:
+        users.append(VERIFICATION)
+    return tuple(users)
 
 
 class OperationalUseError(RuntimeError):

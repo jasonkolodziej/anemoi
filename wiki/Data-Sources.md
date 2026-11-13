@@ -49,6 +49,29 @@ Given the undocumented retention, the project does not depend on NOAA's live buc
 
 ---
 
+## Who uses each source
+
+A role is permission, not use: eight of the ten sources are `OPERATIONAL`, and two of them feed a model. Who uses each source today is a separate mapping next to the registry (`MODEL_INPUTS`, `LABEL_SOURCES` and `VERIFICATION_SOURCES` in `data/sources.py`). `sources.used_by(key)` reads it, `GET /v1/sources` serves it as `used_by` ([API](API)), and the console's Sources page and system graph draw from that.
+
+| Source | `used_by` | In the code |
+|---|---|---|
+| `besttrack_working` | `lstm`, `pinn` | The LSTM's track history, and the track PINN's candidate LSTM reads. In training the working-quality track is emulated from HURDAT2 (`besttrack.augment_track`) |
+| `besttrack_final` | `labels`, `verification` | Every model's training targets, and what validation metrics, the promotion gates and the spread backtest score against |
+| `gdas_gfs` | `cnn`, `transformer`, `gnn`, `pinn` | The storm-centred field crop in Stage B and in a live cycle. PINN reads it as an environment vector |
+| `era5` | `cnn`, `transformer`, `gnn`, `pinn` | The same crop in Stage A pretraining |
+| `dropsonde`, `ndbc` | `verification` | Designated verification-only. No verification code reads them yet |
+| `goes`, `microwave`, `sst_ohc`, `ensemble_perturbations` | *(empty)* | Nothing reads them yet |
+
+The order is fixed: models in catalogue order (`lstm`, `cnn`, `transformer`, `gnn`, `pinn`), then `labels`, then `verification`.
+
+- **`verification`** means kept for verifying forecasts and never a model input. On `dropsonde` and `ndbc` it is a designation from `docs/input_sources_plan.md` ("Not model inputs"), ahead of the code that will use them.
+- **The gridded three read no track value.** Their crop is centred on the working fix, but only the crop's fields are in what CNN, transformer and GNN read.
+- **Diffusion and fusion are not listed.** They read the Group 1 models' latents and forecasts, not a source of their own. Fusion also takes a context vector computed from the working track (`real_latents.CONTEXT_FEATURE_NAMES`).
+
+**Enforced by** `tests/test_sources.py`: every name in the mapping is a registry key or a Group 1 model, a model input is never a `LABELS_ONLY` source, every required cycle input has a model consumer, and no module imports the adapter of a source nothing reads yet (the four unused ones, plus `dropsonde` and `ndbc`). That last test fails when an adapter is wired in, until `used_by` says so.
+
+---
+
 ## Implementation status
 
 Being in the registry above means a source is *declared* -- role, latency, format all real -- not that it's *fetched* for real. As of 2026-09-22:

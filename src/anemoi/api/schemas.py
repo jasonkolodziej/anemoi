@@ -43,6 +43,17 @@ class SourceOut(BaseModel):
     fmt: str
     retention: str
     notes: str = ""
+    used_by: list[str] = Field(
+        description=(
+            "Who uses the source today, in a fixed order: the models that read "
+            "it as an input (`lstm`, `cnn`, `transformer`, `gnn`, `pinn`), then "
+            "`labels` (supervision targets), then `verification` (kept for "
+            "verifying forecasts, never a model input). Empty: registered, but "
+            "nothing uses it yet. `role` says what a source may be used for; "
+            "this says what uses it. On `dropsonde` and `ndbc`, `verification` "
+            "is a designation: no verification code reads them yet."
+        ),
+    )
 
 
 class StageOut(BaseModel):
