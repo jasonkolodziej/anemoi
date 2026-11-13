@@ -32,12 +32,15 @@ records the second fact too: `data.sources.used_by`, served as `used_by` by
 
 These answer the questions every later phase depends on, and each takes hours, not days.
 
-- [ ] **Check the OHC training archive.** Look for `na`/`np` files for 2021–2022 (Stage B years) in CoastWatch THREDDS or NCEI. The `na14/` tree lists only 2024–2026, and the old `na/2025` and `na/2026` folders were empty. If the files aren't there, OHC either waits for Phase 3 or trains from SHIPS predictors.
+- [x] **Check the OHC training archive.** Look for `na`/`np` files for 2021–2022 (Stage B years) in CoastWatch THREDDS or NCEI. The `na14/` tree lists only 2024–2026, and the old `na/2025` and `na/2026` folders were empty. If the files aren't there, OHC either waits for Phase 3 or trains from SHIPS predictors.
+  - The files are there. The older chain covers the training years in full: `na/` and `np/` hold 365 daily files for 2021, 365 for 2022 and 363 for 2023 (listings, 2026-11-13). The older chain runs from 2020 day 121 to 2024 day 18; `na14`/`np14` take over from 2024 day 15. So every Stage B season (2021–2023 train, 2024 val, 2025 test; see Phase 3) has OHC, and the SHIPS fallback isn't needed.
+  - f481ff1 recorded the opposite ("OHC still waits on the 2021–2022 training archive") in `data/sources.py`, wiki Data-Sources and Decision Log #30. Those three get corrected after the in-progress `sources.py` change lands.
 - [ ] **Compare the `na` and `na14` versions.** Diff one overlapping day for grid, units and value range before training across the switch.
 - [x] **Correct the stale OHC claim.** Update the `sst_ohc` provider/notes in `data/sources.py`, Decision-Log #30 and wiki Data-Sources. The "stops 2026-01-26" result came from AOML's HDB ERDDAP. OSPO's CoastWatch `na14/2026/` has day 316 (Nov 12) posted Nov 13, with no gaps since Jul 17.
   - Done. `data/sources.py` `sst_ohc` provider/notes now name the OSPO CoastWatch feed and the AOML endpoint mix-up; wiki Data-Sources (the status row, the registry row and the prose note) and Decision-Log #30 carry the correction.
 - [x] **Set the OHC date rule.** Files post about 11:30 the day after their valid date (about 36 h latency), so a live cycle uses the file from D−2. Put that rule in `data.availability`.
   - Done as `OHC_VALID_LAG` (2 days) in `data.availability`, documented beside `_valid_time_for`. The combined `sst_ohc` source still resolves on the SST D−1 rule, because OHC isn't a model input yet; the D−2 rule applies when OHC is wired (Phase 2b).
+  - Measured from the `na14/2026/` listing: for days 198–316, files posted a median 35.5 h after 00 UTC of their name day, the earliest at 33.3 h and the latest at 47.8 h (day 313, posted 23:47 UTC the next day). Across 2026, 264 of 315 files posted between 11:00 and 11:59 UTC. So D−2 is available to every cycle, and D−1 is never available to 00 and 06 UTC cycles and not reliably to 12 and 18 UTC ones.
 - [ ] **Ship the Sources page fix** (input_sources_plan step 0). Rename the column to **Role** and add **Used by** from `/v1/sources`.
   - API half done (`b672fca`): `/v1/sources` returns `used_by` per source, from one mapping in `data/sources.py` that was read from the training and live-cycle code. A test fails once any module imports the adapter of a source still listed as unused.
   - Console half in progress: the Sources page column, and the system graph drawn from the same field. The column is already headed **Role**; what's left there is the subtitle, which reads the role as a status.
@@ -82,7 +85,7 @@ This replaces the two constants with real ocean data, in two separate PRs and re
 
 ## Phase 3: More training data (desk research, start now)
 
-Stage B trains on just 21 Atlantic storms (2021–2022), because `GDAS_ARCHIVE_START` is 2021-01-01. That limits how much any new input can show. This research needs no GPU time, so it runs from day one.
+Stage B trains on 2021–2023 (116 storms: 58 Atlantic, 58 Eastern Pacific), validates on 2024 (33 storms) and tests on 2025 (33), because `GDAS_ARCHIVE_START` is 2021-01-01 and the splits move with the newest HURDAT2 season (`data.splits.season_boundaries`, N = 2025). The plan first said 21 Atlantic storms from 2021–2022, copied from `docs/multi_basin.md`, which predates the 2025 season. That still limits how much any new input can show. This research needs no GPU time, so it runs from day one.
 
 | Dataset | What it gives | Covers | Constraint | First step |
 | --- | --- | --- | --- | --- |
@@ -135,7 +138,7 @@ The critical path is Phase 1: its week 2 result decides whether weeks 3–4 go t
 
 ## Risks and open questions
 
-- **No OHC for 2021–2022.** Fallback: train with SHIPS OHC predictors, or keep OHC masked until Stage B reaches 2024+.
+- ~~**No OHC for 2021–2022.**~~ Not a risk: CoastWatch's older `na`/`np` chain covers 2021–2023 in full (Phase 0).
 - **The forecast-lead input breaks train/serve parity.** Training must use GFS leads from the t−6 cycle, the same as serving. AWS `noaa-gfs-bdp-pds` holds 2021 onward, so this is covered.
 - **Version switch.** If `na` → `na14` changed the grid or algorithm, training across it adds a distribution shift.
 - **Small samples.** With 21 AL storms, per-basin gains can be noise. Report them per lead, with storm-level bootstrap intervals, before promoting.
@@ -157,6 +160,10 @@ The critical path is Phase 1: its week 2 result decides whether weeks 3–4 go t
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-13.** OHC archive checked (Phase 0): 2021–2023 are complete in
+  CoastWatch's older `na`/`np` chain, so OHC doesn't wait on a training
+  archive. Posting delay measured: the D−2 rule holds for every cycle.
+  Stage B corrected to 2021–2023, 116 storms (Phase 3).
 - **2026-11-13.** OHC claim corrected and the date rule set (Phase 0). The
   "stops 2026-01-26" finding was AOML's HDB ERDDAP, not the state of the
   product; `data/sources.py` `sst_ohc`, wiki Data-Sources and Decision-Log #30
