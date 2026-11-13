@@ -22,7 +22,7 @@ records the second fact too: `data.sources.used_by`, served as `used_by` by
 | `besttrack_working` / `besttrack_final` | `live_atcf`, `hurdat2` | LSTM and PINN input; labels for all models | Keep |
 | `gdas_gfs` (ERA5 in Stage A) | `real_gridded` | CNN, Transformer, GNN, PINN, but SST is a 28 °C constant | Add GFS forecast leads (Phase 1) |
 | `sst_ohc`: SST half | `real_sst` (OISST v2.1) | Nothing | Phase 2a |
-| `sst_ohc`: OHC half | None; 60 kJ/cm² placeholder in every stage | Nothing | Phase 2b, using OSPO's CoastWatch feed (archive from 2020) |
+| `sst_ohc`: OHC half | `real_ohc` (CoastWatch, fetch + decode; review fixes open); 60 kJ/cm² placeholder in every stage | Nothing | Phase 2b, using OSPO's CoastWatch feed (archive from 2020) |
 | `goes` | `real_goes` | Nothing (matches CNN input shape) | Phase 4 |
 | `ensemble_perturbations` | `real_ensemble` (GEFS) | Nothing. The spread backtest measures the diffusion ensemble's own spread and reads no GEFS | Phase 4, only if spread is too narrow |
 | `microwave` | `real_microwave` | Nothing | Phase 4, as an optional masked input |
@@ -98,7 +98,13 @@ This replaces the two constants with real ocean data, in two separate PRs and re
 **2b. OSPO OHC into `GriddedFields.ohc`** (Phase 0 confirmed the archive and compared the versions)
 
 - [ ] Write a `real_ohc` adapter for `ohc_{na,np}QG3_{yyyy}_{ddd}.nc` (2020–2024) and `ohc_{na,np}14QG3_{yyyy}_{ddd}.nc` (2024 on), with the D−2 date rule. It must read NetCDF-3 and HDF5 (add scipy to the `gridded` extra), index v1r1 files by creation day, reject blank files, place NP then NA on the global grid, and mask the 2022 outage days (Phase 0, version comparison).
-- [ ] Regression-test it against SHIPS' SOHC: on 557 open-ocean Atlantic cases of 2021–2022, SOHC equals the bilinear value at the best-track centre of the file named for the day before, within 0.5 kJ/cm² (Phase 3).
+  - **Built; review fixes open** (`267b8ca`–`2004e3e`). `data/real_ohc.py` is fetch + decode only. Nothing imports it, and `tests/test_sources.py`'s `ADAPTERS` map enforces that.
+  - It reads the newest file created on or before date(t)−2. It steps back at most 3 days over a 404, a rejected file or the 2025-03-26 switch gap, and records each step-back.
+  - Format is sniffed from the first bytes. It rejects files whose coordinates, units, fill or `date_created` are wrong. It places NP then NA on the 721×1440 lattice. `ohc_at` is bilinear and needs all four corners. It flags a file degraded when its median `sshaE` exceeds 0.32.
+  - 36 offline tests and 4 network tests. A data review reproduced the decode bit for bit on 20 real files across all three chains.
+  - Two reviews found 2 major and 12 minor issues. The fixes are handed to a local agent (see Handoff, item 4); the main open problem is that a cut-off download silently falls back to an older file.
+- [x] Regression-test it against SHIPS' SOHC: on 557 open-ocean Atlantic cases of 2021–2022, SOHC equals the bilinear value at the best-track centre of the file named for the day before, within 0.5 kJ/cm² (Phase 3).
+  - Done (`1e480ad`, `354a109`): it matches at all 555 cases whose cell doesn't touch 80.0W (max |d| 0.498), using the real files. Two of the 557 sit where NA and NP meet: one, Lisa, reads 85.10 against SOHC 33 from NA but 33.45 from NP. So the test excludes cells touching 80.0W.
 - [ ] Stage A has no OHC before 2012, so mask OHC in Stage A or feed it in Stage B only.
 - [ ] SH, NI and WP-west storms fall outside the products' coverage: mask them and flag `missing:sst_ohc`.
 - [ ] Retrain and compare against 2a's run. PI's `ohc_bonus` and `apply_cold_wake` start using real values here.
@@ -111,9 +117,9 @@ Stage B trains on 2021–2023 (116 storms: 58 Atlantic, 58 Eastern Pacific), val
 
 | Dataset | What it gives | Covers | Constraint | First step |
 | --- | --- | --- | --- | --- |
-| Older GFS/GDAS analyses (NCAR RDA, NCEI) | A longer Stage B, same flavor as serving | To confirm | Check it's the same 0.25° pgrb2 fields | Find the earliest year with matching messages |
+| Older GFS/GDAS analyses | A longer Stage B, same flavor as serving | `noaa-gfs-bdp-pds` `gdas.*`: 0.25° f006 from 2015-06-22 12Z, `.idx` from 2017-07-01, FV3 usable from 2019-06-15 00Z | The GDAS cycle on GFS v15 (64 levels), not serving's GFS cycle on v16 (127 levels). Needs a gdas URL builder: prefix `gdas1.` until 2017-07-19 06Z, and no `atmos/` before 2021-03-22 12Z. Its training floor must be kept apart from `GDAS_ARCHIVE_START` | **Done (research, verified).** The `.idx` files carry all 8 messages Stage B reads, under the same labels, on the same 1440×721 grid. 2019–2020 adds 91 AL+EP storms (39 + 52) whose t−6 h f006 and `.idx` exist (2,237 of 2,242 fixes), taking Stage B training from 116 to 207 storms (208 with CP012019). The bucket has no f006 from 2019-04-25 06Z to 2019-06-14 18Z. July 2017–2018 (spectral v14): 72 storms in the window, 70 with indexed fields; at most an ablation. 2015–2016 has no `.idx`. NCEI holds only 0.5° and 1°; NCAR GDEX is unreachable from here (TLS). Using it is a retrain decision, not taken here. Side fix: `GDAS_ARCHIVE_START` was 11 weeks early (`8e5d9d3`) |
 | [SHIPS developmental data](https://rammb2.cira.colostate.edu/?p=8297) | Per-fix intensity predictors incl. ocean heat content | AL, CP, EP 1982–2025 (7-day files, posted 2026-10) | Predictors come from the operational analysis used at the time; no forecasts in the files | **Done.** Not needed as an OHC fallback. Its SOHC is the same CoastWatch product, so it becomes the OHC adapter's regression test (2b). It joins on (storm, synoptic time): 407 of 583 Atlantic fixes in 2021, 295 of 449 in 2022; every miss is EX/LO/DB. NOHC ends 2024-09-17. The DSHP/LGEM baseline is in the a-decks (SHIP, DSHP, LGEM every cycle, 0–168 h) and RI probabilities in the e-decks, so the intensity baseline reads those |
-| [TC PRIMED](https://rammb2.cira.colostate.edu/research/ai/tcprimed) | Storm-centred microwave, IR and ERA5 diagnostics | Final 1987–2024 all basins, 2025 AL and CP; 3,657 storms | ERA5-based diagnostics; no OHC | **Done.** ERA5 diagnostics and IR: go for Stage A. Microwave: no-go for now, because `real_microwave` serves RSS's retrieved wind, vapour, cloud and rain on a daily grid, while TC PRIMED has calibrated brightness temperatures and GPROF on swaths; only SSMIS F16–F18 are in both. Its preliminary files can't be a live feed. Verification: go for final seasons. 2022 is 73 GB for all basins |
+| [TC PRIMED](https://rammb2.cira.colostate.edu/research/ai/tcprimed) | Storm-centred microwave, IR and ERA5 diagnostics | Final v01r01 files: AL, EP, IO and WP 1987–2024; SH from the 1988 season; CP in 25 seasons (2024 CP is preliminary only); plus 2025 AL and CP. 3,657 storms | ERA5 diagnostics along the post-season best track; no OHC; nothing before 1987 | **Done (verified).** ERA5 diagnostics are a go for Stage A for 1987–2019 of its 1980–2019 window, with conditions: mask 1980–1986. Drop `intensity_change`, which looks up to 24 h ahead and is future truth. Pair each cycle with the latest pass at or before it: nearest-synoptic pairing puts 46.7% of passes after the cycle, median 90 min. Pad the SST diagnostic to `diagnostics/time`, since AL032022 has no SST records. IR comes only attached to a pass (within 3 h), not at synoptic times. Microwave is a no-go. `real_microwave` only fetches RSS's daily 0.25° SSMIS F16–F18 retrievals, while TC PRIMED has 1C XCAL and GPROF V07A on swaths. NASA moved to V08 on 2026-02-28, and CIRA stopped preliminary files on 2026-03-01. Verification: go for final seasons. Size: 73.3 GB for 2022 across all basins; 96.5 GB for AL+EP+CP 2021–2023 |
 | AIFS forecast archive | Track baseline (Phase 1, step 3) | Experimental from 2024-02-28, operational from 2025-02-25 | Nothing for 2021–2023 | **Done.** A baseline now (EAIO/EAII in NHC's 2025 decks), not a trained input |
 
 ## Phase 4: Later, each gated on evidence
@@ -160,7 +166,7 @@ The critical path is Phase 1: its week 2 result decides whether weeks 3–4 go t
 
 ## Handoff to a local agent
 
-The cloud session can't do these three tasks: two need the training machine and one needs write access to the wiki repository. A local agent with `gcloud` and wiki access takes them. Both training-machine jobs load existing checkpoints only: they don't train, register or promote anything.
+The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the same list. Items 1–3 need the training machine or write access to the wiki repository, so a local agent with `gcloud` and wiki access takes them. Both training-machine jobs load existing checkpoints only: they don't train, register or promote anything.
 
 1. **Fusion's per-case forecasts** (Phase 1, step 1).
    - Needs: this branch merged to `main` (for `5ccaf90`) and the training image rebuilt by CI.
@@ -175,6 +181,23 @@ The cloud session can't do these three tasks: two need the training machine and 
 3. **Unblock the wiki.**
    - Needs: this branch merged to `main`.
    - In the wiki repository, revert `af8e4ac` through `2717b8f`, then run *Publish wiki*. The full reasoning is in the wiki entry under Risks.
+4. **Finish `real_ohc`'s review fixes** (Phase 2b). This is code only: no model and no wiring into `GriddedFields`.
+   - **Major: truncated downloads.**
+     - The bug: `http_get` uses a bounded `resp.read()`, which in CPython returns a short body without raising when Content-Length isn't met. `decode_ohc` then rejects the file and `select_file` silently reads an older day.
+     - The fix: raise `OhcFetchError` when Content-Length exceeds `MAX_DOWNLOAD_BYTES` or `len(body)` differs from it. Also catch `http.client.HTTPException`, which covers `IncompleteRead`.
+   - **Major: no offline test of `http_get`.** Test it against a local `http.server` thread. Assert `OhcNotPublished` only on a 404, `OhcFetchError` on a 503 and on an oversize body, and that the User-Agent is sent.
+   - **Degraded flag.** The fixed 0.32 `sshaE` threshold flags 2026's live files (0.31–0.32) and some normal-period files (0.33–0.36, for example 2025 day 084). Recalibrate it before anything acts on it, for example against a trailing 30-day median. Also correct the docstring's "normal days sit near 0.29" and its claim about January 2024.
+   - **Blank files.** na14 2025 days 197–201 and 2026 day 007 are blank, not only day 199. The five-day run is longer than `MAX_STEP_BACK_DAYS`. Say so in the docstring, the `MAX_STEP_BACK_DAYS` comment, `wiki/Data-Sources.md` and the test.
+   - **Synoptic UTC times.** Call `time_utils.require_synoptic` in `select_file`, `ohc_global` and `target_creation_day`. Today they accept naive and off-synoptic times.
+   - **Seam artefact.** `place()` leaves a spurious 0.0 at 8.0N 80.0W, where NA is fill and NP's 80.0W column holds its artefact zero.
+   - **Tests.**
+     - Put fill in the synthetic `sshaE` arrays and assert a degraded `OhcField`.
+     - Test the north and east edge clamp in `ohc_at`.
+     - Have the SHIPS test find the 7-day file from the directory listing, or skip on a 404, instead of hard-coding the 2025 edition.
+   - **Docs.**
+     - `real_sst` and `real_gridded` docstrings still say OHC isn't implemented.
+     - Give the posting-latency median for each chain.
+     - Make the late-file check use the file's time variable so it covers the old chain.
 
 ## Risks and open questions
 
@@ -202,6 +225,14 @@ The cloud session can't do these three tasks: two need the training machine and 
 ## Progress log
 
 Newest first. Each entry names the commit or PR that carries the work.
+
+- **2026-11-13.** Cloud session stopped; open work handed to a local agent
+  (Handoff, and a comment on PR #243). Older GFS and TC PRIMED research
+  checked by independent skeptics: conclusions hold, details corrected
+  (Phase 3). `GDAS_ARCHIVE_START` moved to 2021-03-22 18Z, the first valid
+  time whose f006 `gfs_url` can fetch; no training fix changes (`8e5d9d3`).
+  `real_ohc` built and matched to SHIPS SOHC at 555 cases
+  (`267b8ca`–`2004e3e`); its review fixes are open.
 
 - **2026-11-13.** Desk research verified (Phase 0 version comparison,
   Phase 1 step 3, Phase 3): `na` and `na14` are one product; SHIPS becomes
