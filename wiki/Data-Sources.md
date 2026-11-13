@@ -12,7 +12,7 @@ The role is load-bearing, not documentation. `operational_sources()` is what the
 
 | Role | Meaning |
 |---|---|
-| `OPERATIONAL` | Read live during a forecast cycle, and used for Stage B fine-tuning |
+| `OPERATIONAL` | May be read live during a forecast cycle, and used for Stage B fine-tuning. Whether anything reads it is `used_by` ([below](#who-uses-each-source)) |
 | `PRETRAIN_ONLY` | Stage A pretraining only. **Never** read during a cycle |
 | `LABELS_ONLY` | Supervision targets and verification. **Never** a model input |
 
@@ -51,22 +51,24 @@ Given the undocumented retention, the project does not depend on NOAA's live buc
 
 ## Who uses each source
 
-A role is permission, not use: eight of the ten sources are `OPERATIONAL`, and two of them feed a model. Who uses each source today is a separate mapping next to the registry (`MODEL_INPUTS`, `LABEL_SOURCES` and `VERIFICATION_SOURCES` in `data/sources.py`). `sources.used_by(key)` reads it, `GET /v1/sources` serves it as `used_by` ([API](API)), and the console's Sources page and system graph draw from that.
+A role is permission, not use: eight of the ten sources are `OPERATIONAL`, and two of them feed a model. Who uses each source today is a separate mapping next to the registry (`MODEL_INPUTS`, `LABEL_SOURCES`, `VERIFICATION_SOURCES` and `VERIFICATION_NOT_READ_YET` in `data/sources.py`). `sources.used_by(key)` reads it and `GET /v1/sources` serves it as `used_by` ([API](API)). The console's Sources page and system graph are being moved onto that field from their own copy.
 
 | Source | `used_by` | In the code |
 |---|---|---|
 | `besttrack_working` | `lstm`, `pinn` | The LSTM's track history, and the track PINN's candidate LSTM reads. In training the working-quality track is emulated from HURDAT2 (`besttrack.augment_track`) |
 | `besttrack_final` | `labels`, `verification` | Every model's training targets, and what validation metrics, the promotion gates and the spread backtest score against |
 | `gdas_gfs` | `cnn`, `transformer`, `gnn`, `pinn` | The storm-centred field crop in Stage B and in a live cycle. PINN reads it as an environment vector |
-| `era5` | `cnn`, `transformer`, `gnn`, `pinn` | The same crop in Stage A pretraining |
+| `era5` | `cnn`, `transformer`, `gnn`, `pinn` | The same crop in Stage A pretraining, and in the ERA5T skew-audit replay after a cycle (`monitoring.skew_audit`). Never read during a cycle |
 | `dropsonde`, `ndbc` | `verification` | Designated verification-only. No verification code reads them yet |
-| `goes`, `microwave`, `sst_ohc`, `ensemble_perturbations` | *(empty)* | Nothing reads them yet |
+| `goes`, `microwave`, `sst_ohc`, `ensemble_perturbations` | *(empty)* | No model, label or verification code reads them yet |
 
-The order is fixed: models in catalogue order (`lstm`, `cnn`, `transformer`, `gnn`, `pinn`), then `labels`, then `verification`.
+The order is fixed: models in registry order (`tracking.registry.GROUP1_MODELS`: `lstm`, `cnn`, `transformer`, `gnn`, `pinn`, which is not the order `GET /v1/models` lists them in), then `labels`, then `verification`. A model is listed whether it reads the source in training, in a cycle or both; the role tells those apart.
 
-- **`verification`** means kept for verifying forecasts and never a model input. On `dropsonde` and `ndbc` it is a designation from `docs/input_sources_plan.md` ("Not model inputs"), ahead of the code that will use them.
-- **The gridded three read no track value.** Their crop is centred on the working fix, but only the crop's fields are in what CNN, transformer and GNN read.
-- **Diffusion and fusion are not listed.** They read the Group 1 models' latents and forecasts, not a source of their own. Fusion also takes a context vector computed from the working track (`real_latents.CONTEXT_FEATURE_NAMES`).
+- **`verification`** means kept for verifying forecasts and not a model input. On `dropsonde` and `ndbc` it is a designation from `docs/input_sources_plan.md` ("Not model inputs"), ahead of the code that will use them; `anemoi sources` says so under its table.
+- **The gridded three read no track value, but the track places them.** CNN, transformer and GNN read the crop's fields plus a basin one-hot taken from the storm id (`training.basin_input`), and their forecast is a displacement from the current fix. In a live cycle the crop is centred on the working fix. In training it is centred on the HURDAT2 final fix: the caches are fetched at HURDAT2 positions and keyed by storm and time only (`gridded_cache.cache_path`).
+- **Final fixes reach the models in three ways, none of them a listed input.** The emulated training track is the final one with measured working-track noise added; the training crop is centred on the final fix (above); and a cycle run on an archive storm, whose vitals were never kept, takes the final fixes as its track and is flagged `input:final_best_track`.
+- **Diffusion and fusion are not listed.** The vocabulary is the five Group 1 models. Both read those models' latents and forecasts; fusion also reads the working track directly, as its context vector (`real_latents.CONTEXT_FEATURE_NAMES`). The served-product calibration monitor (`monitoring.calibration_audit`) scores cones against the storm's later working fixes. Neither shows in `used_by`.
+- **The planner's tiers and the curriculum's `input_sources` are not use.** `goes`, `ndbc`, `sst_ohc` and `ensemble_perturbations` are in the cycle planner's optional tier ([below](#operational-vs-opportunistic)), so a cycle that finds one late is flagged `missing:{source}` and marked degraded, though no model would have read it. `curriculum.yaml`'s Stage B lists `goes` and `sst_ohc` among its `input_sources`, which are checked for role only.
 
 **Enforced by** `tests/test_sources.py`. Against the registry: every name in the mapping is a registry key or a Group 1 model, in registry order; a model input is never `LABELS_ONLY`; every model reads a source it can be served from; every required cycle input has a model consumer. Against the code, by reading the package's source:
 
@@ -225,6 +227,8 @@ Availability distinguishes three tiers, because collapsing them destroys the mea
 | **Opportunistic** | `dropsonde`, `microwave` | Normal. **No flag** |
 
 Aircraft reconnaissance only flies for threatening storms, and a microwave overpass either happened in the window or did not. Flagging their routine absence would mark every cycle degraded and the flag would stop carrying information. `InputStatus.opportunistic` separates "normally missing" from "unexpectedly missing".
+
+The tiers decide what a cycle waits for and which absences it flags, not what a model reads: no model reads any optional-tier source today ([Who uses each source](#who-uses-each-source)), so a late one can mark a cycle degraded for a source nothing would have used. Whether it should is an open question for `data.availability`.
 
 ---
 

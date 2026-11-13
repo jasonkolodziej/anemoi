@@ -55,13 +55,23 @@ class SourceOut(BaseModel):
     notes: str = ""
     used_by: list[str] = Field(
         description=(
-            "Who uses the source today, in a fixed order: the models that read "
-            "it as an input (`lstm`, `cnn`, `transformer`, `gnn`, `pinn`), then "
-            "`labels` (supervision targets), then `verification` (kept for "
-            "verifying forecasts, never a model input). Empty: registered, but "
-            "nothing uses it yet. `role` says what a source may be used for; "
-            "this says what uses it. On `dropsonde` and `ndbc`, `verification` "
-            "is a designation: no verification code reads them yet."
+            "Who uses the source today, in a fixed order: the Group 1 models "
+            "that read it as an input (`lstm`, `cnn`, `transformer`, `gnn`, "
+            "`pinn`), then `labels` (it supplies the supervision targets), then "
+            "`verification` (kept for verifying forecasts, not a model input). "
+            "A model is listed whether it reads the source in training, in a "
+            "forecast cycle or both; `role` tells them apart, and no cycle "
+            "reads a `pretrain_only` source. Empty: no model, label or "
+            "verification code reads the source yet, though the cycle planner "
+            "may still track it and flag a late one `missing:{source}`. These "
+            "are the uses the list names, not every reader: fusion also reads "
+            "`besttrack_working`, every model's forecast is placed from the "
+            "current working fix, the calibration monitor scores served cones "
+            "against later working fixes, and a cycle on an archive storm "
+            "takes `besttrack_final` as its track, flagged "
+            "`input:final_best_track`. On `dropsonde` and `ndbc`, "
+            "`verification` is a designation: no verification code reads them "
+            "yet."
         ),
     )
 

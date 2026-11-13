@@ -73,9 +73,11 @@ def test_sources_marks_operational_role(client):
 
 def test_sources_say_who_uses_each_one(client):
     """The contract the console's Sources page and system graph are built
-    against: models in catalogue order, then `labels`, then `verification`;
-    `[]` for a source nothing uses yet. A role alone can't say this -- eight
-    of these ten are `operational`, and two of the eight feed a model."""
+    against: models in registry order (`tracking.registry.GROUP1_MODELS`,
+    not the order of /v1/models), then `labels`, then `verification`; `[]`
+    for a source no model, label or verification code reads yet. A role
+    alone can't say this -- eight of these ten are `operational`, and two of
+    the eight feed a model."""
     r = client.get("/v1/sources")
     assert r.status_code == 200
     assert {s["key"]: s["used_by"] for s in r.json()} == {

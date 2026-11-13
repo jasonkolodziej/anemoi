@@ -258,13 +258,22 @@ def pretrain_only_sources() -> list[DataSource]:
 
 # --- Who uses each source ----------------------------------------------------
 #
-# The three tables below are the one place this is written down. The API serves
-# them (``GET /v1/sources``, ``used_by``) and the console's Sources page and
-# system graph draw from that, so a model gaining an input is one edit here.
+# ``used_by`` is derived from the three tables below. The API serves it
+# (``GET /v1/sources``) so that a client, the console's Sources page and system
+# graph among them, has one record of use to read instead of a copy of its own.
+#
+# Two older lists also name sources, and neither says a model reads them:
+# ``curriculum.yaml``'s per-stage ``input_sources`` is checked for role only
+# (Stage B lists ``goes`` and ``sst_ohc``), and the tiers in
+# ``data.availability`` decide what a cycle waits for and which absences it
+# flags ``missing:{source}``. tests/test_sources.py holds both against these
+# tables: each stage must list what its models read, and what a stage or the
+# optional tier lists that no model reads is named there.
 
 #: The registry sources each Group 1 model's input is built from, in training
-#: and when serving. Models are in catalogue order
-#: (``tracking.registry.GROUP1_MODELS``, held equal by tests/test_sources.py).
+#: and when serving. Models are in registry order
+#: (``tracking.registry.GROUP1_MODELS``, held equal by tests/test_sources.py),
+#: which is not the order ``GET /v1/models`` lists them in.
 #:
 #: Read from the code (``training.real_run*`` for training,
 #: ``training.real_inference_live`` for a live cycle), not from what a model
@@ -272,22 +281,34 @@ def pretrain_only_sources() -> list[DataSource]:
 #:
 #: * ``lstm`` reads the storm's working-quality track and nothing gridded.
 #: * ``cnn``, ``transformer`` and ``gnn`` read the storm-centred field crop:
-#:   ERA5 in Stage A, GDAS/GFS in Stage B and in a live cycle. The crop is
-#:   centred on the working fix, but no track value is in what they read.
+#:   ERA5 in Stage A and in the ERA5T skew-audit replay
+#:   (``monitoring.skew_audit``), GDAS/GFS in Stage B and in a live cycle. No
+#:   track value is in what they read. The track still places the crop and
+#:   anchors the forecast, which is a displacement from the current fix, and
+#:   the storm id supplies the basin one-hot (``training.basin_input``).
 #: * ``pinn`` reads both: an environment vector from the same crop, and the
 #:   forecast of its own candidate LSTM, which reads the track.
 #:
 #: In training the working-quality track is emulated from HURDAT2
 #: (``besttrack.augment_track``). That is still ``besttrack_working``, the
-#: quality a model is trained to see; ``besttrack_final`` is the label. The
-#: one place final fixes reach a model is flagged rather than listed: a cycle
-#: run on an archive storm, whose vitals were never kept, is marked
-#: ``input:final_best_track`` (``api.real_state``).
+#: quality a model is trained to see; ``besttrack_final`` is the label. Final
+#: fixes still reach the models in three ways, none of them a listed input:
 #:
-#: ``diffusion`` and ``fusion`` are not here: they read the Group 1 models'
-#: latents and forecasts, not a source of their own. Fusion also takes a
-#: context vector computed from the working track
-#: (``training.real_latents.CONTEXT_FEATURE_NAMES``).
+#: * the emulated track is the final one with measured working-track noise
+#:   added;
+#: * a training crop is centred on the final fix, because the caches are
+#:   fetched at HURDAT2 positions and keyed by storm and time only
+#:   (``gridded_cache.cache_path``), where a live crop is centred on the
+#:   working fix;
+#: * a cycle run on an archive storm, whose vitals were never kept, takes the
+#:   final fixes as its track and is flagged ``input:final_best_track``
+#:   (``api.real_state``).
+#:
+#: ``diffusion`` and ``fusion`` are not here: the vocabulary is the five
+#: Group 1 models. Both read those models' latents and forecasts. Fusion also
+#: reads the working track directly, as its context vector
+#: (``training.real_latents.CONTEXT_FEATURE_NAMES``), so ``besttrack_working``
+#: has a reader that ``used_by`` does not name.
 MODEL_INPUTS: dict[str, tuple[str, ...]] = {
     "lstm": ("besttrack_working",),
     "cnn": ("gdas_gfs", "era5"),
@@ -324,8 +345,18 @@ def used_by(key: str) -> tuple[str, ...]:
     In a fixed order: the models that read it as an input, in
     :data:`MODEL_INPUTS` order; then ``"labels"`` if it supplies supervision
     targets; then ``"verification"`` if it is kept for verifying forecasts and
-    is never a model input. Empty means the source is registered, and may be
-    read as its role allows, but nothing uses it yet.
+    is no model's listed input.
+
+    A model is listed whether it reads the source in training, in a forecast
+    cycle or both. The source's role tells those apart: no cycle reads a
+    pretrain-only source.
+
+    Empty means no model, label or verification code reads the source yet.
+    The cycle planner may still track it: ``data.availability`` puts
+    ``goes``, ``sst_ohc`` and ``ensemble_perturbations`` in its optional
+    tier, with ``ndbc``, so a cycle that finds one late is flagged
+    ``missing:{source}`` and marked degraded, though no model would have read
+    it.
 
     ``"verification"`` marks a source that is not a model input, so it is not
     the whole list of what verification reads: the served-product calibration

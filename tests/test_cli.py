@@ -954,3 +954,17 @@ def test_cmd_sources_prints_who_uses_each_source(capsys):
         assert f"h  {users} " in line, key
     assert rows["gdas_gfs"].startswith("  ")
     assert rows["era5"].startswith("* ")
+
+
+def test_cmd_sources_says_which_verification_is_only_designated(capsys):
+    """The `verification` column on dropsonde and ndbc is a designation, not
+    a reader; the legend has to say so, as the API's field description
+    does."""
+    from anemoi.data import sources
+
+    assert cli.cmd_sources(argparse.Namespace()) == 0
+
+    out = capsys.readouterr().out
+    assert "not used yet: no model, label or verification code reads" in out
+    names = " and ".join(sources.VERIFICATION_NOT_READ_YET)
+    assert f"verification on {names} is a designation: nothing reads them yet" in out

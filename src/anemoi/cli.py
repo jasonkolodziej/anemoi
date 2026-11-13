@@ -17,7 +17,7 @@ from . import __version__
 from .data.atcf import storm_basin
 from .data.availability import LatencyOracle
 from .data.besttrack import TrackQuality
-from .data.sources import REGISTRY, Role, used_by
+from .data.sources import REGISTRY, VERIFICATION_NOT_READ_YET, Role, used_by
 from .data.splits import assign_splits
 from .data.synthetic import generate_archive
 from .inference.cycle import climatological_ensemble, run_cycle
@@ -82,9 +82,16 @@ def cmd_sources(args: argparse.Namespace) -> int:
         )
     print("\n* not readable during a forecast cycle (Scope v2.1 §4.6)")
     print(
-        "used by: the models that read the source as an input, then labels "
-        "and verification"
+        "used by: the models that read the source as an input, in training "
+        "or in a cycle, then labels and verification"
     )
+    print("not used yet: no model, label or verification code reads the source")
+    if VERIFICATION_NOT_READ_YET:
+        # Without this the column claims a use the code doesn't have yet.
+        print(
+            f"verification on {' and '.join(VERIFICATION_NOT_READ_YET)} is a "
+            "designation: nothing reads them yet"
+        )
     return 0
 
 
@@ -1248,7 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--worst-case", action="store_true", help="use max latencies")
     p.set_defaults(func=cmd_schedule)
 
-    p = sub.add_parser("sources", help="list data sources and their roles")
+    p = sub.add_parser("sources", help="list data sources, their roles and who uses them")
     p.set_defaults(func=cmd_sources)
 
     p = sub.add_parser("cycle", help="run one demo forecast cycle")
