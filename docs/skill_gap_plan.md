@@ -64,7 +64,7 @@ These answer the questions every later phase depends on, and each takes hours, n
     - Track, overall (spread/RMSE): 72 h 0.84 along / 0.86 cross, 96 h **0.76** / 0.83, 120 h 0.87 / 0.83. Recurving (n = 43–44): 72 h 1.10 / **0.77**, 96 h 0.80 / 0.81, 120 h 0.97 / **0.73**. Three long-lead track ratios are under the 0.8 gate, two of them cross-track on recurving storms: the case GEFS conditioning is meant for.
     - Intensity is under-dispersed from 48 h at every lead (wind 0.73 to 0.63 overall), which GEFS track conditioning doesn't address.
     - The served 120 h cone uses the ensemble on all 172 cases and misses the truth 45% of the time against the ~33% a calibrated 2/3 circle should.
-    - Not read: v12's `dropout` (the registry tag sits behind credentials this run didn't use). By this item's own rule the next step is a derived-only retrain with dropout 0.1, measured with this command, before GEFS; if v12 already has 0.1, GEFS is the live option. No retrain was run here.
+    - v12's `arch_params` (read 2026-11-13 from `GET /v1/registry/diffusion/architecture?version=12`): `dropout` 0.0, `extra_conditioning_dim` 0. v12 was trained without the dropout that closed September's long-lead under-dispersion (v7 → v8), so by this item's rule the next step is a derived-only retrain with `DIFFUSION_DROPOUT=0.1`, measured with this command, before GEFS. No retrain was run here.
   - The backtest has no per-basin split, and validation is now the 2024 season pooled across AL, EP and CP, so one basin can hide another. `calibrate()` already takes a `case_filter`; a per-basin breakdown is a small code change.
 
 ## Phase 1: Track experiment and baseline
@@ -186,7 +186,7 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
    - Check that the job reports the registered and recomputed metrics as consistent, and that `n_without_forecast` = 0.
    - Score it with `anemoi baseline-backtest ... --model-forecasts <file>`, using the decision rule in Decision Log 66: fusion − AVNI, Atlantic 48 h, samples B and C, storm-block bootstrap.
    - Commit the JSON under `docs/backtests/` and record the result in Phase 1, step 1 and the progress log.
-2. ~~**Spread-skill for diffusion v12** (Phase 0).~~ **Run** (2026-11-13, `anemoi-train-schedule-wf2d2`); results under Phase 0. v12's `dropout` is still unread.
+2. ~~**Spread-skill for diffusion v12** (Phase 0).~~ **Done** (2026-11-13, `anemoi-train-schedule-wf2d2`); results under Phase 0. v12's `dropout` is 0.0, so the dropout-0.1 retrain comes before GEFS.
    - First read `dropout` in v12's `arch_params` tag.
    - Run the 50-member `spread-backtest` command in Phase 0.
    - Copy the JSON into `docs/backtests/` and record the long-lead track ratios against the 0.8 gate.
@@ -230,6 +230,8 @@ Newest first. Each entry names the commit or PR that carries the work.
   48 h, +154 nm [112, 202] on B and +122 nm [89, 164] on C. The ML layer
   subtracts value against GFS's own track; the steering spike (step 2) is
   next. Wiki unblocked and published from `0f721c1` (Handoff, item 3).
+  Diffusion v12's `dropout` read: 0.0, so the spread fix to try first is a
+  derived-only retrain with dropout 0.1, not GEFS.
 - **2026-11-13.** Spread-skill for diffusion v12 measured (Phase 0): 50
   members, 607 windows. Under-dispersed at long lead (overall along-track
   96 h 0.76; recurving cross-track 72 h 0.77, 120 h 0.73) and in intensity
