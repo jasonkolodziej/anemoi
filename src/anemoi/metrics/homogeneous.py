@@ -55,7 +55,12 @@ QUANTITIES: tuple[str, ...] = (TRACK, INTENSITY)
 #: `metrics.track.diebold_mariano` puts on independent cases.
 MIN_STORMS = 8
 
-BOOTSTRAP_RESAMPLES = 2000
+#: An interval's endpoint is itself estimated from the resamples, and the
+#: decision rules read whether it excludes zero. At 2,000 the 97.5% point
+#: moved by about 0.2 nm between seeds on the 2024 Atlantic 48 h sample
+#: (15 storms), enough to put an endpoint on either side of zero; at 10,000
+#: it moves by under 0.1 nm, for a few milliseconds a comparison.
+BOOTSTRAP_RESAMPLES = 10_000
 BOOTSTRAP_SEED = 20260806
 
 

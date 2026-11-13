@@ -75,6 +75,7 @@ from ..data.storm_relative import displacement_nm
 from ..geo import haversine_nm
 from ..metrics.basin import PERSISTENCE_PREFIX, basin_key, per_basin_scores
 from ..metrics.homogeneous import (
+    BOOTSTRAP_RESAMPLES,
     INTENSITY,
     QUANTITIES,
     TRACK,
@@ -953,7 +954,8 @@ class BaselineReport:
             "statistics": {
                 "mean_error": "mean over cases (metrics.track.verify, the registry's statistic)",
                 "storm_mean_error": "mean of the storms' own means",
-                "ci95": "storm-block bootstrap of the paired mean difference",
+                "ci95": "storm-block bootstrap of the paired mean difference "
+                        f"({BOOTSTRAP_RESAMPLES} resamples, fixed seed)",
                 "dm_p_value": "Diebold-Mariano on absolute error, one case per storm",
                 "too_few_storms": "fewer than 8 storms: means only, no skill, beat rate, "
                                   "interval or p-value",
