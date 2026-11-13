@@ -30,24 +30,29 @@ What the files are (verified against real files, 2026-11-13):
   column with no NP cell west of it isn't written.
 * **Values.** ``ohc`` in ``kJ cm^-2``, fill -999 (static land/ice mask).
   0.0 is a real value: water below 26 C.
-* **Bad files.** na14 2025 day 199 is blank: every variable is 0.0, the
-  coordinates included. :func:`decode_ohc` rejects a file whose coordinates
-  aren't the expected arrays or that has no fill cell at all.
+* **Bad files.** na14 2025 days 197-201 and 2026 day 007 are blank (every
+  v1r1 file to 2026 day 316 was checked): every variable is 0.0, the
+  coordinates included. :func:`decode_ohc` rejects a file whose
+  coordinates aren't the expected arrays or that has no fill cell at all.
 * **Degraded days.** Altimetry outages raise the objective-analysis error
-  ``sshaE``: 2022 days 201-204 and 208-216 (median up to 0.65 against a
-  normal ~0.29) in both basins, and 2024 days 010-022 on the old chain.
+  ``sshaE``: 2022 days 201-204 and 208-216 in both basins (per-file median
+  0.35-0.65), and 2024 days 010-022 on the old chain, of which this reads
+  days 010-014 (0.33 rising to 0.51; na14's day 015 is 0.30).
   :attr:`OhcFile.degraded` flags a file whose median ``sshaE`` is above
-  :data:`DEGRADED_SSHAE_MEDIAN`. A degraded file is still returned, flagged.
+  :data:`DEGRADED_SSHAE_MEDIAN`, and the file is still returned. The flag
+  is a coarse screen, not an outage detector: see
+  :data:`DEGRADED_SSHAE_MEDIAN`.
 
-**Date rule** (:func:`select_file`). Files post a median 35.5 h and at most
-~48 h after 00Z of their name day, so a cycle at ``t`` reads the newest
-file whose creation day is on or before ``date(t) - OHC_VALID_LAG``
-(``data.availability``). That is leakage-safe for every posting seen and,
-because it counts creation days, gives the 2021-2023 (old chain), 2024
-(v1r0) and 2025+ (v1r1) splits inputs of the same age. A file that isn't
-published (404) or is rejected is stepped over, one creation day at a time
-and at most :data:`MAX_STEP_BACK_DAYS` times, and the age actually used is
-reported.
+**Date rule** (:func:`select_file`). Files post at most ~48 h after 00Z of
+their name day (47.93 h the latest seen; the median is 11.5 h on the old
+chain, 9.4 h for v1r0 and 35.5 h for v1r1, which is made a day later), so
+a cycle at ``t`` reads the newest file whose creation day is on or before
+``date(t) - OHC_VALID_LAG`` (``data.availability``). That is leakage-safe
+for every posting seen and, because it counts creation days, gives the
+2021-2023 (old chain), 2024 (v1r0) and 2025+ (v1r1) splits inputs of the
+same age. A file that isn't published (404) or is rejected is stepped
+over, one creation day at a time and at most :data:`MAX_STEP_BACK_DAYS`
+times, and the age actually used is reported.
 
 **Regression.** SHIPS' developmental SOHC is this product sampled from the
 file named for the day before the case: at open-ocean Atlantic cases of
@@ -90,12 +95,24 @@ V1R1_START = date(2025, 3, 26)
 
 #: How many creation days :func:`select_file` steps back past a missing or
 #: rejected file. Every missing file a 2021-2025 fix needs has the day
-#: before; np14 2024 days 321-340 are a longer gap, which this reports.
+#: before. Two runs are longer, and this reports the basin unavailable:
+#: np14 2024 days 321-340 (not published) and na14 2025 days 197-201
+#: (blank), which leaves the 2025-07-22 and 07-23 cycles with no NA field
+#: and gives 07-21 a five-day-old one. No Atlantic fix falls in that run.
 MAX_STEP_BACK_DAYS = 3
 
-#: A file whose median ``sshaE`` exceeds this is flagged degraded. Normal
-#: seasons sit at 0.287-0.289; 0.35 misses part of the January 2024 outage
-#: (0.332-0.343), 0.32 catches it and the July-August 2022 one.
+#: A file whose median ``sshaE`` exceeds this is flagged degraded. It
+#: catches every day of the 2022 outage (0.35-0.65) and the old-chain
+#: January 2024 days this reads (010-014, 0.33-0.51); 0.35 would miss 2024
+#: day 010 (0.332). It is coarse. Outside the outages per-file medians run
+#: 0.27-0.36 (median 0.287 in 2021-2025 samples), and about 1 file in 20 is
+#: flagged: 13 of 246 sampled every 4th day over days 135-331 of 2021-2025,
+#: among them 2022 day 179 (0.335), 2023 day 143 (0.343) and 2024 days
+#: 307-319. 2025 days 083-084, the last v1r0 files, sit at 0.36. The 2026
+#: product runs higher, with fewer altimeter tracks (52-55 against 62-70):
+#: sampled 2026 days sit at 0.31-0.32 and day 316 (0.320) is flagged, so
+#: for a live cycle the flag means little. Nothing reads it yet; recalibrate
+#: it before anything acts on it.
 DEGRADED_SSHAE_MEDIAN = 0.32
 
 UNITS = "kJ cm^-2"
@@ -408,6 +425,13 @@ def decode_ohc(body: bytes, basin: str, name_day: date, *, url: str = "") -> Ohc
         raise OhcRejected(f"{url}: can't be read as {file_format}: {exc}") from exc
     lat, lon, raw, is_fill, sshae_median, date_created = read
 
+    # Strict by design: v1r0's late runs are made ~23:45 on their name day
+    # and post up to 47.6 h after its 00Z, minutes before the first cycle
+    # that reads them, so one made after midnight could post after it.
+    # Refusing a file costs a day of freshness, not correctness. The old
+    # chain has no date_created, so there this checks nothing; its ``time``
+    # is 00Z of the name day, not when the file was made (and on v1r0/v1r1
+    # ``time`` is float32 seconds, up to ~90 s past date_created).
     made = _created_date(date_created)
     if made is not None and made > creation_day(name_day):
         raise OhcRejected(

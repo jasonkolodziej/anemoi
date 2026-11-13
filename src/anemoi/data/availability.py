@@ -195,11 +195,13 @@ def resolve_cycle_inputs(
     return CycleInputs(target_time=t, as_of=as_of, nwp=nwp, statuses=tuple(statuses))
 
 
-#: Ocean-heat-content files (NOAA OSPO CoastWatch na/np, na14/np14) post a
-#: median 35.5h and at most ~48h after 00Z of the day they are named for
-#: (CoastWatch listings, 2021-2026). The lag is counted on the day a file is
-#: made, its creation day: a cycle at t reads the newest file made on or
-#: before date(t) - OHC_VALID_LAG. Up to 2025 day 084 (old chain and v1r0)
+#: Ocean-heat-content files (NOAA OSPO CoastWatch na/np, na14/np14) post at
+#: most ~48h after 00Z of the day they are named for (47.93h the latest in
+#: CoastWatch listings, 2021-2026; the median is 11.5h on the old chain,
+#: 9.4h for v1r0 and 35.5h for v1r1, which is made a day after its name
+#: day). The lag is counted on the day a file is made, its creation day: a
+#: cycle at t reads the newest file made on or before
+#: date(t) - OHC_VALID_LAG. Up to 2025 day 084 (old chain and v1r0)
 #: the creation day is the name day, so that is the file named D-2; v1r1
 #: files, from 2025 day 085, are made the day after their name day, so a
 #: cycle reads the one named D-3. Counting creation days keeps every split's
