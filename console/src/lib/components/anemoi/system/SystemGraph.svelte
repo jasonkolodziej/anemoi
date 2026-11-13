@@ -63,6 +63,8 @@
 	}
 
 	const SRC = 'src:';
+	// For the ids each source node's clip path needs.
+	const uid = $props.id();
 
 	// Every registered source, and who reads it, comes from /v1/sources
 	// (`used_by`): the mapping is written once, on the API.
@@ -350,7 +352,7 @@
 				{/if}
 			{/each}
 
-			{#each nodes as n (n.id)}
+			{#each nodes as n, i (n.id)}
 				{@const x = n.cx - n.w / 2}
 				{@const y = n.cy - n.h / 2}
 				{@const dim = !nodeOnPath(n.id)}
@@ -423,21 +425,29 @@
 					{@const quiet = n.use === 'unused' || n.use === 'unknown'}
 					{@const marked = n.use !== 'unknown'}
 					{@const read = n.use === 'input'}
+					{@const clip = `${uid}-source-${i}`}
 					<!-- Hovering a source a model reads lights those models. It
 					     isn't a button: there is nothing more to open, and its
 					     second line says the same in words. A source nothing
 					     reads doesn't answer the pointer, or crossing the column
-					     would dim the whole graph. -->
+					     would dim the whole graph.
+					     The text is clipped to the box: a source read by all five
+					     models, or a key the console has no name for, is longer
+					     than it. The <title> is the node's accessible name and,
+					     on hover, shows what a clipped line leaves out. -->
 					<g
 						data-source-node={n.id.slice(SRC.length)}
 						data-use={n.use}
 						role="img"
-						aria-label={n.spoken}
 						class="transition-opacity duration-300"
 						opacity={dim ? 0.45 : 1}
 						onmouseenter={read ? () => (hovered = n.id) : undefined}
 						onmouseleave={read ? () => (hovered = null) : undefined}
 					>
+						<title>{n.spoken}</title>
+						<clipPath id={clip}>
+							<rect x={x} y={y} width={n.w - 8} height={n.h} />
+						</clipPath>
 						<rect
 							x={x} y={y} width={n.w} height={n.h} rx="8"
 							class={`fill-bg ${hovered === n.id ? 'stroke-text-faint' : 'stroke-border-strong'}`}
@@ -447,11 +457,14 @@
 						{#if marked}
 							<g transform={`translate(${x + 21} ${y + 19})`}>{@render mark(n.use)}</g>
 						{/if}
-						<text x={x + (marked ? 36 : 14)} y={y + 24} class={`text-[15px] ${quiet ? 'fill-text-muted' : 'fill-text'}`}>{n.title}</text>
-						<text x={x + 14} y={y + 43} class="fill-text-muted text-[14px]">{n.sub}</text>
-						{#if n.tag}
-							<text x={x + n.w - 12} y={y + 24} text-anchor="end" class="fill-text-muted text-[14px]">{n.tag}</text>
-						{/if}
+						<!-- The tag follows the title rather than sitting in the
+						     corner, so a long title can't run under it. -->
+						<g clip-path={`url(#${clip})`} data-source-text>
+							<text x={x + (marked ? 36 : 14)} y={y + 24} class={`text-[15px] ${quiet ? 'fill-text-muted' : 'fill-text'}`}
+								>{n.title}{#if n.tag}<tspan dx="8" class="fill-text-muted text-[14px]">{n.tag}</tspan>{/if}</text
+							>
+							<text x={x + 14} y={y + 43} class="fill-text-muted text-[14px]">{n.sub}</text>
+						</g>
 					</g>
 				{:else}
 					<g class="transition-opacity duration-300" opacity={dim ? 0.45 : 1}>

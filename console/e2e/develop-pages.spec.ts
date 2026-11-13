@@ -183,7 +183,7 @@ test.describe('signed in', () => {
 		// outline and edge, one nothing reads yet a dashed outline and edge,
 		// and labels or verification no edge into the pipeline at all.
 		const edgeFrom = (key: string) => graph.locator(`[data-edge="src:${key}>prep"]`);
-		const outline = (key: string) => source(key).locator('rect').first();
+		const outline = (key: string) => source(key).locator(':scope > rect');
 		await expect(edgeFrom('besttrack_working')).not.toHaveAttribute('stroke-dasharray');
 		await expect(outline('besttrack_working')).not.toHaveAttribute('stroke-dasharray');
 		await expect(edgeFrom('goes')).toHaveAttribute('stroke-dasharray');
@@ -346,6 +346,31 @@ test.describe('signed in', () => {
 		await expect(page.locator('[data-model-node="lstm"]')).toHaveAttribute('opacity', '0.45');
 	});
 
+	test('architecture keeps a source line longer than its box inside the box', async ({ page }) => {
+		const all = ['lstm', 'cnn', 'transformer', 'gnn', 'pinn'];
+		await serveInstead(page, '/v1/sources', { json: sourcesWith({ goes: all }) });
+		await page.goto('/architecture');
+		const goes = page.locator('[data-source-node="goes"]');
+		await expect(goes).toContainText('LSTM · CNN · Transformer · GNN · PINN');
+
+		// The line is wider than the box, and drawn clipped to it.
+		const fit = await goes.evaluate((node) => {
+			const box = node.querySelector(':scope > rect')!.getBBox();
+			const line = node.querySelectorAll<SVGTextElement>('[data-source-text] text')[1];
+			const clipId = node.querySelector('[data-source-text]')!.getAttribute('clip-path')!.slice(5, -1);
+			const clip = document.getElementById(clipId)!.querySelector('rect')!.getBBox();
+			return {
+				overflows: line.getBBox().x + line.getComputedTextLength() > box.x + box.width,
+				clipInside: clip.x >= box.x && clip.x + clip.width <= box.x + box.width,
+			};
+		});
+		expect(fit).toEqual({ overflows: true, clipInside: true });
+		// What the clip cuts off is still in its name.
+		await expect(
+			page.getByRole('img', { name: 'GOES imagery: read by LSTM, CNN, Transformer, GNN and PINN', exact: true }),
+		).toHaveCount(1);
+	});
+
 	// A newer API may name a use this console doesn't know. It may not be a
 	// model, so it must not be drawn as feeding one.
 	test('architecture draws a use it does not know without claiming it feeds a model', async ({ page }) => {
@@ -361,7 +386,7 @@ test.describe('signed in', () => {
 		).toHaveCount(1);
 		await expect(graph.locator('[data-edge="src:goes>prep"]')).toHaveAttribute('stroke-dasharray');
 		await expect(graph.locator('.beam')).toHaveCount(2 + 11); // the same beams as always
-		await expect(page.getByText("A use this console doesn't know")).toBeVisible();
+		await expect(page.getByText("A use this console doesn't know is named as the API sends it")).toBeVisible();
 		await expect(page.getByText("This API doesn't say what uses each source")).toHaveCount(0);
 	});
 
