@@ -32,7 +32,7 @@ rather than `test_select_nwp_cycle_2`. When one fails, the name should tell you 
 | File | Covers |
 |---|---|
 | `test_time_utils.py` | Synoptic arithmetic; `t−6` selection; `t−12` fallback |
-| `test_sources.py` | Role assignment; operational guard |
+| `test_sources.py` | Role assignment; operational guard; who uses each source (`used_by`) held to the code: adapter scan, runner and live-builder signatures, curriculum and planner tiers |
 | `test_besttrack.py` | Working/final separation; emulator statistics; recalibration |
 | `test_hurdat2.py` | HURDAT2 parsing; synoptic-hour filtering; missing-field handling; each kept fix's status |
 | `test_atcf.py` | b-deck/TC-Vitals parsing; unit conversion; working/final pairing + recalibration |

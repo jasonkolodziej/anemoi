@@ -807,7 +807,7 @@ The API job in `deploy.yml` runs it, since the cycle's product maths is what the
 **Decided:** the console's **Develop → Architecture** page draws the system from the registry and the models themselves; the Mermaid diagram on Home stays as the plain overview. Architecture, Registry, Monitoring and Retraining are signed-in only, grouped under a **Develop** menu.
 
 - **What a model is made of.** `GET /v1/registry/{model}/architecture` builds the served version from its `arch_params` tag (#79) -- the same rebuild serving does -- runs one input of the shape training feeds it (a `SEQUENCE_LENGTH` fix history, the 41×41 storm-centred crop, that crop as an 11×11 lattice for the GNN), and records each module's type, output shape and parameters (`models.architecture`, cached per version). A version from before `arch_params` is described from the builder's defaults and says so.
-- **The page.** A left-to-right graph of the pipeline: each model node is the pinned version, its stage, parameters, 48 h track error and basins (a version without `trained_basins` counts as Atlantic-only, as the registry does, decision 56); edges carry the real tensor shapes. Beams show data flow; selecting a model mutes every edge off its path, from the sources it really reads (GOES and in-situ observations feed no model yet, and are drawn so). The layer view draws each module as a block sized by its output shape, containers opened into their members, identical runs merged as ×N; on large screens it's a popover over the graph sized to its contents, with a scrolling module list under a pinned header.
+- **The page.** A left-to-right graph of the pipeline: each model node is the pinned version, its stage, parameters, 48 h track error and basins (a version without `trained_basins` counts as Atlantic-only, as the registry does, decision 56); edges carry the real tensor shapes. Beams show data flow; selecting a model mutes every edge off its path, from the sources it really reads. Since decision 67 every registered source is drawn from `/v1/sources`' `used_by`. The layer view draws each module as a block sized by its output shape, containers opened into their members, identical runs merged as ×N; on large screens it's a popover over the graph sized to its contents, with a scrolling module list under a pinned header.
 - **Access.** Each Develop page has a `-guard.ts` (`$lib/server/require-sign-in`) that sends a signed-out visitor to sign in and back. anemoi-api-real's Worker refuses the reads only those pages make without a user or API key (`requiresSignedInUser`); the reads the public storm page makes stay open. The architecture endpoint also builds models on the container, another reason not to leave it open.
 
 **Enforced by** `tests/test_model_architecture.py` (every model described; a version's `arch_params` used; the GNN fed its real lattice), `docker/api/test/routing.test.ts` (which reads need a user, decoded paths included), `console/e2e/develop-pages.spec.ts` (redirects, the Develop menu, the system and layer views, muted beams; the registry and monitoring tests moved here, as those pages now need sign-in).
@@ -872,6 +872,40 @@ Phase 1 of docs/multi_basin.md after its first training run (decision 57), track
 **Decided:** `_run_latents` uses each Group 1 model's champion after this run's promotions: this run's version only if it was promoted, otherwise the champion loaded from the registry, as `seed_from_champions` does. A derived-only re-sync also skips copying the ERA5 cache, since latents read GDAS alone.
 
 **Enforced by** `tests/test_real_orchestrator.py` (a subset run's latents use the other models' champions; a trained but unpromoted model is replaced by its champion; the recorded `group1_versions` are the champions).
+
+---
+
+### 66. Guidance is scored on the registry's own validation windows, with the decision rule fixed first — *evaluation*
+
+**Question** (docs/skill_gap_plan.md, Phase 1): does the ML layer add skill over the guidance it could have read? The registry's 48 h numbers (fusion v12: AL 231, EP 136, CP 69 nm) are means over every validation window, against a noisy persistence, so they can't be set beside NHC's or GFS's.
+
+**Decided:** `anemoi baseline-backtest` (`training.baseline_backtest`, `metrics.homogeneous`, `data.adeck_source`, `data.nhc_verification`) scores NHC's a-deck techniques on exactly the registry's 2024 validation windows. No model is trained, built or run by it.
+
+- **Same cases.** The case list comes from `real_latents.joint_stage_windows`, the function training uses (seed 20260806, `n_augment=1`): 607 windows (AL 352, EP 219, CP 36). Its persistence reproduces the registry's 335 / 253 / 186 nm.
+- **Three samples.** A is every window (what the registry reports). B is the windows every member has. C adds NHC's rule that the storm is tropical or subtropical at both times. Only C is commensurable with NHC's published errors and the 70 nm gate.
+- **Members.** OFCL; AVNI, the GFS track a cycle has; AVNO-6, the raw GFS run whose fields the models read; AVNO, late guidance, context only; EMXI/EMX2, the ECMWF track available at the cycle (EMXI at 06/18Z, EMX2 at 00/12Z, so not NHC's EMXI); OCD5 (CLIPER5); XTRP. The registry's "persistence" is noisy linear extrapolation, not CLIPER: 330 nm against OCD5's 248 on AL B at 48 h.
+- **Decision rule, fixed before any model was scored:** fusion minus AVNI, Atlantic 48 h, on B and C, with a storm-block bootstrap interval (10,000 resamples). An interval that excludes zero on both decides; an endpoint within resampling error of zero does not exclude it.
+- **The a-decks are not a registry source.** A technique's row for cycle t is written after t, so it is verification only, never an input.
+- **The join is checked against NHC.** OFCL reproduces NHC's own per-forecast 2024 errors case for case: Atlantic 48 h, 214 of 214 cases, 45.44 nm against NHC's 45.41 (the residual is the Earth radius).
+
+**Result** (`docs/backtests/2026-11-13-homogeneous-baseline-val2024.json`): Atlantic 48 h on B (242 cases, 15 storms) OFCL 57, AVNI 66, AVNO 58, EMXI/EMX2 59, OCD5 248 nm. Fusion's registered mean already bounds the answer: to tie AVNI on AL B, the 13 windows B leaves out would need a mean error of 3,304 nm, where persistence scores 434. So fusion v12 is behind GFS's own track on Atlantic B, and very likely on C (752 nm needed on 65 windows; persistence 470). East Pacific B is unlikely (359 needed; persistence 283), EP C is open, CP is one storm. The pre-registered test itself waits for the per-case forecast file from `anemoi validation-forecasts`, an inference-only job on the training machine.
+
+**Enforced by** `tests/test_adeck.py`, `tests/test_nhc_verification.py`, `tests/test_homogeneous.py` (east-west distance against a hand value; the storm-block interval), `tests/test_baseline_backtest.py` (the windows are `joint_stage_windows`'; samples B and C; the break-even bound).
+
+---
+
+### 67. Who uses each source is served as data, and the console draws it instead of keeping a copy — *data, api, console*
+
+**Found:** `Role.OPERATIONAL` means a source may be read in a live cycle, not that a model reads it. Eight of ten sources are operational and two feed a model, but the Sources page showed role as if it were status, and the system graph kept its own hand-written list of feeds.
+
+**Decided:** `data/sources.py` holds the mapping next to the registry (`MODEL_INPUTS`, `LABEL_SOURCES`, `VERIFICATION_SOURCES`, `VERIFICATION_NOT_READ_YET`). `sources.used_by(key)` reads it, `GET /v1/sources` serves it as `used_by` (with `role` typed as the `Role` enum), and `anemoi sources` prints it.
+
+- **Vocabulary.** The five Group 1 models in registry order, then `labels`, then `verification`. An empty list means no model, label or verification code reads the source. `verification` on dropsonde and NDBC is a designation: nothing reads them yet.
+- **What it leaves out, on purpose.** Fusion's context vector from the working track, the calibration monitor's working-fix scoring, and an archive-storm cycle's `input:final_best_track` fallback. The docs list these.
+- **Console.** The Sources page shows Role and Used by. The Architecture graph draws every registered source in three states that don't rely on colour: feeds a model (solid dot, solid edge), labels or verification only (open square, no edge into the pipeline), not used yet (dashed). Beams show a forecast cycle's data flow, so ERA5 (pretraining only) has a solid edge and no beam. An API without `used_by`, or an entry outside the vocabulary, draws the source as unknown and says why: the console claims neither model input nor reference.
+- **Found along the way, left open:** the cycle planner's optional tier flags `missing:sst_ohc` and marks a cycle degraded although nothing reads `sst_ohc`; training crops are centred on the HURDAT2 final fix while live crops are centred on the working fix (`gridded_cache.cache_path` keys on storm and time only); `curriculum.yaml`'s Stage B `input_sources` lists `goes` and `sst_ohc`, which is permission, not use.
+
+**Enforced by** `tests/test_sources.py` (an adapter imported outside its own file must be in `used_by`; each model's entry matches its training runner's and live builder's signature; `LABEL_SOURCES` matches the curriculum), `tests/test_api_smoke.py`, `tests/test_api_docs.py`, `console/e2e/develop-pages.spec.ts` (both pages fed a `used_by` rewired from today's, an unknown entry, a missing field).
 
 ---
 

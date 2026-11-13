@@ -47,6 +47,8 @@ Recurrent architectures learn smooth, physics-constrained temporal evolution fro
 - **Output:** eye-feature detection, convective burst identification, initial-condition corrections
 - **In pipeline:** encoder front-end feeding the Transformer and GNN backbones
 
+> Inputs listed here are the design. What each model reads today is `used_by` on `GET /v1/sources` ([Data Sources](Data-Sources#who-uses-each-source)): the gridded models read GDAS/GFS (ERA5 in Stage A), and none reads GOES, buoys or microwave yet.
+
 Global average pooling at the end makes the encoder resolution-agnostic, which matters because GOES crop sizes differ between the 512 and 1024 pixel datasets.
 
 > **What it reads today (2026-11-12):** the 10 cached gridded fields (ERA5 in Stage A, GDAS f006 in Stage B) as its channel stack, plus one constant channel per training basin (`training.real_run_cnn`). `data.real_goes` fetches real GOES-18/19 crops in exactly this shape, but no training or serving path reads it yet -- that is step 2 of `docs/input_sources_plan.md` (Stage B only: the archive starts in 2017). Served champion: cnn v8, trained and verified in AL and EP.
@@ -74,6 +76,8 @@ Self-attention captures long-range dependencies — a trough over the Great Plai
 - **Input:** icosahedral or unstructured mesh, station networks, buoy arrays; node features plus edge features (geodesic distance, pressure gradient)
 - **Output:** fine-scale wind/pressure fields, storm-environment interaction, landfall point refinement
 - **In pipeline:** critical for rapid intensification, where inner-core processes are localised and non-Euclidean
+
+> Inputs listed here are the design. What each model reads today is `used_by` on `GET /v1/sources` ([Data Sources](Data-Sources#who-uses-each-source)): the gridded models read GDAS/GFS (ERA5 in Stage A), and none reads GOES, buoys or microwave yet.
 
 Implemented as an interaction network with `index_add_` scatter rather than a PyTorch Geometric dependency, so the reference implementation installs with plain torch. The message/update decomposition is the standard one; swapping in PyG later is a local change.
 

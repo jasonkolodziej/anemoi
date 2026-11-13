@@ -14,14 +14,14 @@ feed the models today:
 
 | Source | Adapter | Used by |
 |---|---|---|
-| Best track (HURDAT2, TC-Vitals) | `hurdat2`, `live_atcf` | LSTM input; labels for every model |
+| Best track (HURDAT2, TC-Vitals) | `hurdat2`, `live_atcf` | LSTM and PINN input; labels for every model |
 | GDAS/GFS f006 (ERA5 in Stage A) | `real_gridded`, `gdas_cache`, `era5_cache` | CNN, transformer, GNN, PINN |
 | OISST v2.1 (SST) | `real_sst` | nothing |
 | GOES-18/19 imagery | `real_goes` | nothing |
 | GEFS perturbations | `real_ensemble` | nothing |
 | SSMIS microwave | `real_microwave` | nothing |
-| Dropsonde | `real_dropsonde` | nothing |
-| NDBC buoys | `real_ndbc` | nothing |
+| Dropsonde | `real_dropsonde` | nothing yet (verification by designation) |
+| NDBC buoys | `real_ndbc` | nothing yet (verification by designation) |
 
 `Role.OPERATIONAL` in `data/sources.py` means a source is *allowed* to be read
 during a forecast cycle. It doesn't mean a model reads it, and the console's
@@ -55,10 +55,13 @@ stage.
 
 ### 0. Make the console say what's used (small, any time)
 
-Partly done in #239 (2026-11-12): the storm badge reads "not verified" with
-a title saying what verified means, and the storm list filters by basin.
-Still open: the Sources page's Role / Used-by columns, the Architecture
-page listing every unused source, and the phone layout.
+Done. #239 (2026-11-12) made the storm badge read "not verified" and added
+the basin filter. On `claude/document-progress-tracking-dd99yg`
+(2026-11-13): `GET /v1/sources` serves `used_by` from `data/sources.py`,
+the Sources page shows Role and Used by, and the Architecture page draws
+every registered source from `used_by` in three states (feeds a model,
+labels or verification only, not used yet). The graph scrolls sideways
+inside its card on a phone and below about 1146 px.
 
 - **Sources page.** Label the column **Role** and add **Used by**, served by
   `/v1/sources` from the same input mapping the system view draws (e.g.
