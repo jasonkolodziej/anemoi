@@ -178,7 +178,7 @@ At the time of writing it holds about 5,900 nodes and 15,000 edges, and `graph.j
 | `GriddedFields`, `FeatureSet` | `data.features` | Flavor-tagged fields and derived scalars |
 | `FetchTask`, `FetchCacheReport`, `run_fetch_cache()`, `SyncReport`, `sync_cache_to_archive()` | `data.gridded_cache` | Source-agnostic concurrent fetch + disk cache engine, plus durable-archive sync (#22) |
 | `run_fetch_cache()` | `data.era5_cache` | ERA5/Stage A fetch fn over `data.gridded_cache` |
-| `run_fetch_cache()`, `GDAS_ARCHIVE_START` | `data.gdas_cache` | GDAS/Stage B fetch fn over `data.gridded_cache`; filters fixes before the real archive's verified 2021-01-01 start |
+| `run_fetch_cache()`, `GDAS_ARCHIVE_START` | `data.gdas_cache` | GDAS/Stage B fetch fn over `data.gridded_cache`; filters fixes before 2021-03-22 18Z, the first valid time whose f006 the reader can fetch |
 | `Normalizer` | `data.features` | Flavor-locked standardisation |
 | `Split`, `SplitAssignment` | `data.splits` | Storm-wise split membership |
 | `storm_relative_sequence()`, `displacement_nm()` | `data.storm_relative` | Storm-relative coordinate transform for track sequences |

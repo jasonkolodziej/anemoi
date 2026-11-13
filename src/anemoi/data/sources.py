@@ -95,8 +95,12 @@ REGISTRY: dict[str, DataSource] = {
             typical_latency=int(3.5 * 60) * _M,
             max_latency=4 * _H,
             fmt="GRIB2",
-            retention="2021-01-01-present in noaa-gfs-bdp-pds (verified via direct S3 "
-            "listing, 2026-09-16); no documented retention policy for this bucket "
+            retention="2021-03-22 18Z-present for this reader in noaa-gfs-bdp-pds: gfs.* "
+            "starts 2021-01-01 (verified via direct S3 listing, 2026-09-16), but "
+            "data.real_gridded.gfs_url reads the atmos/ directory GFS v16 added at "
+            "2021-03-22 12Z, and a valid time reads the f006 of the cycle 6 h earlier "
+            "(HEAD-checked 2026-11-13; data.gdas_cache.GDAS_ARCHIVE_START); "
+            "no documented retention policy for this bucket "
             "either way -- see data.gridded_cache's archive-sync path, which backfills "
             "this into permanent storage rather than depending on NOAA's bucket as the "
             "system of record",

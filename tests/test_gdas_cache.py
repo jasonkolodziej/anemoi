@@ -106,8 +106,47 @@ def test_run_fetch_cache_records_failures_without_aborting_the_run(tmp_path):
     assert "simulated NOAA range-request failure" in report.failures[0][1]
 
 
+def test_gdas_archive_start_is_the_first_valid_time_with_an_atmos_f006():
+    """`gfs_url`'s gfs.YYYYMMDD/HH/atmos/ path exists from the GFS v16 cycle
+    2021-03-22 12Z on (a 404 for every earlier cycle, though gfs.* starts
+    2021-01-01). A valid time reads the f006 of the cycle 6 h earlier, so the
+    floor is 18Z: there the f006 is under atmos/, 6 h earlier it is not."""
+    from anemoi.data.gdas_cache import GFS_ATMOS_FIRST_CYCLE, STAGE_B_NWP_LEAD_HOURS
+    from anemoi.data.real_gridded import gfs_url
+    from anemoi.time_utils import NWP_LAG_HOURS
+
+    assert GFS_ATMOS_FIRST_CYCLE == datetime(2021, 3, 22, 12, tzinfo=UTC)
+    assert GDAS_ARCHIVE_START == datetime(2021, 3, 22, 18, tzinfo=UTC)
+    base = "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.20210322"
+    assert gfs_url(GDAS_ARCHIVE_START, 6) == f"{base}/12/atmos/gfs.t12z.pgrb2.0p25.f006"
+    # The 404 the floor avoids: 06Z's files are flat under gfs.20210322/06/.
+    before = GDAS_ARCHIVE_START - timedelta(hours=6)
+    assert gfs_url(before, 6) == f"{base}/06/atmos/gfs.t06z.pgrb2.0p25.f006"
+    # Both leads that read the f006 -- live's t-6 rule and Stage B's -- land
+    # on or after the first atmos/ cycle at the floor.
+    for lead in (NWP_LAG_HOURS, STAGE_B_NWP_LEAD_HOURS):
+        assert GDAS_ARCHIVE_START - timedelta(hours=lead) >= GFS_ATMOS_FIRST_CYCLE
+
+
+def test_run_fetch_cache_floor_drops_the_fix_just_before_and_keeps_the_one_at_it(tmp_path):
+    """The default ``min_valid_time`` is inclusive: a fix at
+    GDAS_ARCHIVE_START is fetched, the fix 6 h before it never is."""
+    track = make_track("AL01", 3, start=GDAS_ARCHIVE_START - timedelta(hours=6))
+    calls = []
+
+    def fake_fetch(valid_time, lat, lon):
+        calls.append(valid_time)
+        return make_fields()
+
+    report = run_fetch_cache([track], tmp_path, fetch_fn=fake_fetch, progress_every=0)
+
+    assert report.n_total == 2
+    assert sorted(calls) == [GDAS_ARCHIVE_START, GDAS_ARCHIVE_START + timedelta(hours=6)]
+
+
 def test_run_fetch_cache_drops_fixes_before_the_real_archive_start_by_default(tmp_path):
-    """GDAS's real archive (noaa-gfs-bdp-pds) starts 2021-01-01 -- a fix
+    """The GFS reader's real coverage starts 2021-03-22 18Z (the first valid
+    time whose t-6 f006 is under the atmos/ path `gfs_url` builds) -- a fix
     dated earlier is a guaranteed 404, not a transient failure, so it should
     never reach fetch_fn at all (see gdas_cache.GDAS_ARCHIVE_START)."""
     pre_archive = make_track("AL01", 2, start=datetime(2015, 8, 1, tzinfo=UTC))

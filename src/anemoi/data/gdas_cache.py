@@ -24,11 +24,11 @@ fine (the eccodes import is deferred into the fetch call, same as
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .. import config
-from ..time_utils import MAX_NWP_LAG_HOURS
+from ..time_utils import MAX_NWP_LAG_HOURS, NWP_LAG_HOURS
 from .besttrack import Track
 from .features import GriddedFields
 from .gridded_cache import FetchCacheReport, FieldsFetcher, filter_tracks_by_min_valid_time
@@ -36,6 +36,7 @@ from .gridded_cache import run_fetch_cache as _run_fetch_cache
 
 __all__ = [
     "GDAS_ARCHIVE_START",
+    "GFS_ATMOS_FIRST_CYCLE",
     "STAGE_B_NWP_LEAD_HOURS",
     "CacheLeadMismatch",
     "cache_nwp_lead_hours",
@@ -43,14 +44,29 @@ __all__ = [
     "run_fetch_cache",
 ]
 
-#: Earliest date with real data in noaa-gfs-bdp-pds, verified via direct S3
-#: `list-type=2` listing (2026-09-16) -- the bucket has no documented
+#: The first GFS cycle `real_gridded.gfs_url` can read. noaa-gfs-bdp-pds
+#: holds `gfs.*` from 2021-01-01 (direct S3 `list-type=2` listing,
+#: 2026-09-16), but until GFS v16 (implemented 2021-03-22 12Z) a cycle's
+#: files sit flat under `gfs.YYYYMMDD/HH/`. `gfs_url` builds v16's
+#: `gfs.YYYYMMDD/HH/atmos/` path, which 404s, file and `.idx` alike, for
+#: every earlier cycle (HEAD requests, 2026-11-13).
+GFS_ATMOS_FIRST_CYCLE = datetime(2021, 3, 22, 12, tzinfo=UTC)
+
+#: The earliest valid time this reader can fetch fields for: 2021-03-22 18Z.
+#: Callers compare a fix's valid time with it, but the file read is the
+#: f006 of the cycle 6 h earlier (the live t-6 rule, `time_utils
+#: .NWP_LAG_HOURS`, which Stage B's `nwp_lead_hours` matches), so the floor
+#: is the first `atmos/` cycle plus that lag: a fix at 2021-03-22 12Z would
+#: read the flat-layout 06Z cycle and 404. No HURDAT2 fix in any basin falls
+#: between 2021-01-01 and this floor (the first 2021 fix is 2021-05-08 12Z),
+#: so the later floor drops no Stage B sample; a layout-aware `gfs_url`
+#: would be needed to read that window. The bucket has no documented
 #: retention policy, so this is an observed floor, not a guaranteed one.
 #: `data.splits`' season boundaries predate this by decades (Stage A/ERA5
 #: needs them to); `run_fetch_cache` filters against this separately so
 #: fetching an early split doesn't spend a request per fix on a guaranteed
 #: 404. See docs/train_infrastructure.md and data.sources's gdas_gfs entry.
-GDAS_ARCHIVE_START = datetime(2021, 1, 1, tzinfo=UTC)
+GDAS_ARCHIVE_START = GFS_ATMOS_FIRST_CYCLE + timedelta(hours=NWP_LAG_HOURS)
 
 #: Forecast hour of the GFS fields Stage B trains on (#215,
 #: configs/curriculum.yaml `stage_b.nwp_lead_hours`). Live cycles read the

@@ -292,9 +292,14 @@ NOAA's AWS Open Data bucket (`noaa-gfs-bdp-pds`). Verified wrong (direct S3
 **2021-01-01**, not 2015 -- `configs/curriculum.yaml`'s old `stage_b.
 season_range: [2015, 2019]` covered a period with zero real GDAS data, which
 is why an early `anemoi gdas-cache --split train` run 404'd on every single
-fix. No retention policy is documented for this bucket either way (a
-different, older bucket, `noaa-gfs-pds`, documents a rolling 4-week window --
-don't confuse the two).
+fix. What `data.real_gridded.gfs_url` can read starts later still, at
+**2021-03-22 18Z** (HEAD requests, 2026-11-13): it builds the
+`gfs.YYYYMMDD/HH/atmos/` path GFS v16 introduced with the 2021-03-22 12Z
+cycle (earlier cycles sit flat under `gfs.YYYYMMDD/HH/` and 404 at that
+path), and a fix valid at t reads the t-6 cycle's f006. No HURDAT2 fix falls
+between the two dates (the first 2021 fix is 2021-05-08 12Z). No retention
+policy is documented for this bucket either way (a different, older bucket,
+`noaa-gfs-pds`, documents a rolling 4-week window -- don't confuse the two).
 
 Given that, the decision for long-term production is to **not** depend on
 NOAA's bucket as the system of record: back-fill what's currently available
@@ -304,7 +309,7 @@ training set from a live bucket whose retention could change at any time.
 Concretely:
 
 - `data.gdas_cache.run_fetch_cache` now defaults to dropping any fix earlier
-  than `GDAS_ARCHIVE_START` (2021-01-01) before fetching -- `data.splits`'
+  than `GDAS_ARCHIVE_START` (2021-03-22 18Z) before fetching -- `data.splits`'
   *default* season boundaries are shared with Stage A/ERA5 and go back to
   1980, so an unfiltered `--split train` run would otherwise spend one
   request per fix discovering each one is a guaranteed 404.

@@ -110,7 +110,8 @@ def fetch_live_nwp(
     climatology mode.
 
     Fetched fields are cached under ``cache_dir/live`` (`live_cache_path`).
-    Before `GDAS_ARCHIVE_START` there is nothing to fetch.
+    Before `GDAS_ARCHIVE_START` (2021-03-22 18Z) there is no t-6 f006 that
+    `data.real_gridded.gfs_url` can fetch, so nothing is requested.
     """
     from datetime import timedelta
 
