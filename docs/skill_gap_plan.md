@@ -72,10 +72,11 @@ These answer the questions every later phase depends on, and each takes hours, n
 This phase answers one question fast: is the 231 nm error a missing-input problem or a model problem? The models only see one GDAS f006 snapshot, so nothing tells them how the steering flow evolves over 48–120 h. SHIPS switched to forecast-model predictors in 1997 for the same reason.
 
 1. **Homogeneous baseline (do first).** Score fusion, the raw GFS track (AVNO) and NHC's official forecast (OFCL) on the same cases from the ATCF a-decks. If fusion can't beat GFS's own track, the ML layer is subtracting value.
-   - **Done for guidance; fusion's per-case run is open.** `anemoi baseline-backtest` (`5ccaf90` and the commits around it; Decision Log 66) scores NHC's a-deck techniques on exactly the registry's 2024 validation windows: 607 windows, whose persistence reproduces the registered 335 / 253 / 186 nm. The OFCL join reproduces NHC's own 2024 errors case for case (Atlantic 48 h: 214 of 214, 45.44 against 45.41 nm). Result: `docs/backtests/2026-11-13-homogeneous-baseline-val2024.json`.
+   - **Done: guidance and fusion's paired test.** `anemoi baseline-backtest` (`5ccaf90` and the commits around it; Decision Log 66) scores NHC's a-deck techniques on exactly the registry's 2024 validation windows: 607 windows, whose persistence reproduces the registered 335 / 253 / 186 nm. The OFCL join reproduces NHC's own 2024 errors case for case (Atlantic 48 h: 214 of 214, 45.44 against 45.41 nm). Result: `docs/backtests/2026-11-13-homogeneous-baseline-val2024.json`.
    - Atlantic, 48 h, on the cases every technique has (sample B: 242 cases, 15 storms): OFCL 57, AVNI (the GFS track a cycle has) 66, AVNO 58, EMXI/EMX2 59, CLIPER5 248 nm. On NHC's tropical-only sample C (190 cases): 44 / 53 / 48 / 48 / 206.
    - **Fusion's registered mean already answers most of it.** Fusion v12's 231 nm is a mean over all 255 Atlantic windows. To tie AVNI on sample B, the 13 windows B leaves out would need a mean error of 3,304 nm, where persistence scores 434. So on Atlantic B fusion is behind GFS's own track; its registered mean is 3.5× AVNI's. On C it would need 752 nm on 65 windows (persistence 470): very likely behind. East Pacific: 359 nm needed on 36 windows for B (persistence 283), so unlikely; C is open. Central Pacific is one storm (Hone) and decides nothing.
-   - **The pre-registered test hasn't run.** It is fusion minus AVNI, Atlantic 48 h, on B and C, with a storm-block interval, and it needs fusion's per-case forecasts. That is an inference-only job on the training machine: it loads fusion v12 and its five Group 1 checkpoints, and trains, registers and promotes nothing. Once `5ccaf90` is on `main` and CI has rebuilt the image:
+   - **The pre-registered test: decided, against fusion** (2026-11-13, `docs/backtests/2026-11-13-homogeneous-baseline-val2024-fusion-v12.json`). Fusion minus AVNI, Atlantic 48 h: sample B **+154 nm**, 95% storm-block interval [112, 202] (250 cases, 15 storms); sample C **+122 nm** [89, 164] (193 cases, 15 storms). Fusion beats AVNI on 12% of cases in both. Both intervals exclude zero on the positive side, so by Decision Log 66's rule the ML layer subtracts value against the GFS track it could have read. Fusion's own means: AL B 220 nm against AVNI 66, AVNO-6 67, OFCL 57, OCD5 248 (11% skill over CLIPER). East Pacific B points the same way: +64 nm [18, 119] (134 cases, 10 storms); EP C has 8 storms on the paired cases and no interval. Inputs: fusion v12 with lstm v12, cnn v8, transformer v8, gnn v7, pinn v7; all 607 windows forecast; the job's 115 recomputed metrics match the registry; same HURDAT2 bytes (sha256 `d1debf35…`).
+   - How it was run: it is fusion minus AVNI, Atlantic 48 h, on B and C, with a storm-block interval, and it needs fusion's per-case forecasts. That is an inference-only job on the training machine: it loads fusion v12 and its five Group 1 checkpoints, and trains, registers and promotes nothing. Once `5ccaf90` is on `main` and CI has rebuilt the image:
      `gcloud run jobs execute anemoi-train-schedule --region us-central1 --task-timeout 3600s --args=validation-forecasts,--hurdat2,/app/data/hurdat2-atl.txt,--gdas-cache-dir,/cache/gdas_cache_f006,--registry-root,/tmp/registry,--fusion-version,12,--out,/cache/backtests/validation-forecasts-fusion-v12-val2024.json`
      Then score it here with `anemoi baseline-backtest ... --model-forecasts <that file>` (docker/cloud-run-training/README.md, One-off commands). Check that the job reports the registered and recomputed metrics consistent and `n_without_forecast` = 0.
    - Also found: the training emulator's working track is noisier than NHC's real one. On these cases its 6 h motion error is 20.8 nm RMS against CARQ's 10.3, and its position is 13.0 nm from the best track against CARQ's 5.3. That is a case for re-calibrating `working_track_noise`, as a training decision of its own.
@@ -179,7 +180,7 @@ The critical path is Phase 1: its week 2 result decides whether weeks 3–4 go t
 
 The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the same list. Items 1–3 need the training machine or write access to the wiki repository, so a local agent with `gcloud` and wiki access takes them. Both training-machine jobs load existing checkpoints only: they don't train, register or promote anything.
 
-1. **Fusion's per-case forecasts** (Phase 1, step 1).
+1. ~~**Fusion's per-case forecasts** (Phase 1, step 1).~~ **Done** (2026-11-13, `anemoi-train-schedule-w2kr2`, image `0f721c18f899`): fusion behind AVNI on Atlantic B and C; see Phase 1, step 1.
    - Needs: this branch merged to `main` (for `5ccaf90`) and the training image rebuilt by CI.
    - Run the `validation-forecasts` command in Phase 1, step 1.
    - Check that the job reports the registered and recomputed metrics as consistent, and that `n_without_forecast` = 0.
@@ -189,7 +190,7 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
    - First read `dropout` in v12's `arch_params` tag.
    - Run the 50-member `spread-backtest` command in Phase 0.
    - Copy the JSON into `docs/backtests/` and record the long-lead track ratios against the 0.8 gate.
-3. **Unblock the wiki.**
+3. ~~**Unblock the wiki.**~~ **Done** (2026-11-13): wiki commit `8545d05` reverts `af8e4ac`…`2717b8f`; *Publish wiki* published `0f721c1` and the wiki now equals `wiki/`.
    - Needs: this branch merged to `main`.
    - In the wiki repository, revert `af8e4ac` through `2717b8f`, then run *Publish wiki*. The full reasoning is in the wiki entry under Risks.
 4. ~~**Close `real_ohc`'s last review items**~~ **Done** (local agent, 2026-11-13; see Phase 2b).
@@ -202,11 +203,11 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 - ~~**No OHC for 2021–2022.**~~ Not a risk: CoastWatch's older `na`/`np` chain covers 2021–2023 in full (Phase 0).
 - **The forecast-lead input breaks train/serve parity.** Training must use GFS leads from the t−6 cycle, the same as serving. AWS `noaa-gfs-bdp-pds` holds 2021 onward, so this is covered.
 - ~~**Version switch.**~~ The grid, units and values didn't change (Phase 0). What did: the file format (NetCDF-3 → HDF5) and, from 2025 day 85, the name's date, which makes test and live inputs a day fresher than training ones unless files are indexed by creation day.
-- **Fusion trails GFS's own track.** Its registered Atlantic 48 h error (231 nm) is about 3.5× AVNI's 66 nm on the same validation cases (Phase 1, step 1). The pre-registered paired test still needs fusion's per-case forecasts, an inference-only run on the training machine. If it confirms, the steering spike (step 2) is the next test and the architectures are the fallback, as the exit rule says.
+- **Fusion trails GFS's own track: confirmed.** The pre-registered paired test (Phase 1, step 1) puts fusion 154 nm [112, 202] behind AVNI on Atlantic B at 48 h and 122 nm [89, 164] on C. So the steering spike (step 2) is the next test and the architectures are the fallback, as the exit rule says.
 - **Training crops are centred on the final best track.** Live crops are centred on the working fix, so in serving the storm sits off the centre pixel by the working-fix error, which training never shows (Decision Log 67). Sizing it is inference-only: score the champions on validation crops re-centred on emulated positions.
 - **An OHC outage inside the training years.** 2022 days 201–204 and 208–216 have degraded altimetry and no replacement; 69 EP training fixes read them (Phase 0).
 - **Small samples.** With 58 Atlantic training storms and 18 in validation, per-basin gains can be noise. Report them per lead, with storm-level bootstrap intervals, before promoting.
-- **The wiki can't publish.** The GitHub wiki was edited directly after its last publish (from `3bae888`), and `publish-wiki.sh` compares the wiki with `wiki/` at that commit, so it refuses every publish, including after the edits are copied into `wiki/` (done in `e83ee7b`). To unblock: once this branch is on `main`, revert the five direct commits in the wiki repository (`af8e4ac` through `2717b8f`) so it matches `wiki/` at `3bae888`, then run *Publish wiki*. Nothing is lost, because `wiki/` contains every one of those edits. A lasting fix is for the script to accept a wiki whose edits are already contained in `wiki/`.
+- ~~**The wiki can't publish.**~~ Fixed 2026-11-13 (Handoff, item 3). Kept for the lasting fix below. The GitHub wiki was edited directly after its last publish (from `3bae888`), and `publish-wiki.sh` compares the wiki with `wiki/` at that commit, so it refuses every publish, including after the edits are copied into `wiki/` (done in `e83ee7b`). To unblock: once this branch is on `main`, revert the five direct commits in the wiki repository (`af8e4ac` through `2717b8f`) so it matches `wiki/` at `3bae888`, then run *Publish wiki*. Nothing is lost, because `wiki/` contains every one of those edits. A lasting fix is for the script to accept a wiki whose edits are already contained in `wiki/`.
 - ~~**Open:** How far back does the AIFS open-data archive go?~~ Experimental AIFS to 2024-02-28 on AWS, operational from 2025-02-25 (Phase 1, step 3).
 - **Open:** Is the CoastWatch latency stable during busy seasons? So far it's only been seen in Jul–Nov 2026.
 
@@ -224,6 +225,11 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-13.** Fusion's pre-registered paired test (Phase 1, step 1),
+  after #243 merged and CI rebuilt the image: fusion minus AVNI, Atlantic
+  48 h, +154 nm [112, 202] on B and +122 nm [89, 164] on C. The ML layer
+  subtracts value against GFS's own track; the steering spike (step 2) is
+  next. Wiki unblocked and published from `0f721c1` (Handoff, item 3).
 - **2026-11-13.** Spread-skill for diffusion v12 measured (Phase 0): 50
   members, 607 windows. Under-dispersed at long lead (overall along-track
   96 h 0.76; recurving cross-track 72 h 0.77, 120 h 0.73) and in intensity
