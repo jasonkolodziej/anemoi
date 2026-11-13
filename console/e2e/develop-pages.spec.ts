@@ -39,6 +39,14 @@ const SOURCES_BEFORE_USED_BY = SOURCES.map(({ used_by: _, ...row }) => row);
 /** /v1/sources with some rows' `used_by` replaced. */
 const sourcesWith = (usedBy: Record<string, string[]>) =>
 	SOURCES.map((row) => (row.key in usedBy ? { ...row, used_by: usedBy[row.key] } : row));
+/** /v1/sources wired unlike today: GOES feeds the GNN, nothing reads the
+ * working best-track any more, and a source the console has no name for
+ * feeds the LSTM. The specs on it fail if either page draws the mapping
+ * from anything but `used_by`. */
+const SOURCES_REWIRED = [
+	...sourcesWith({ goes: ['gnn'], besttrack_working: [] }),
+	{ ...SOURCES.find((row) => row.key === 'goes')!, key: 'new_feed', used_by: ['lstm'] },
+];
 
 const PHONE = { width: 390, height: 844 };
 
@@ -270,6 +278,61 @@ test.describe('signed in', () => {
 		await expect(page.getByText("This API doesn't say what uses each source")).toBeVisible();
 	});
 
+	test('architecture draws whatever used_by says, not a mapping of its own', async ({ page }) => {
+		await serveInstead(page, '/v1/sources', { json: SOURCES_REWIRED });
+		await page.goto('/architecture');
+		const graph = page.locator('svg[aria-label="Anemoi system"]');
+		const source = (key: string) => graph.locator(`[data-source-node="${key}"]`);
+		const edgeFrom = (key: string) => graph.locator(`[data-edge="src:${key}>prep"]`);
+		const beamFrom = (key: string) => graph.locator(`[data-beam="src:${key}>prep"]`);
+
+		// One node per row, all inside the drawing: eleven sources make
+		// the graph taller than the ten it is sized for.
+		await expect(graph.locator('[data-source-node]')).toHaveCount(SOURCES_REWIRED.length);
+		const svg = (await graph.boundingBox())!;
+		for (const node of await graph.locator('[data-source-node]').all()) {
+			const box = (await node.boundingBox())!;
+			expect(box.y).toBeGreaterThanOrEqual(svg.y);
+			expect(box.y + box.height).toBeLessThanOrEqual(svg.y + svg.height);
+		}
+
+		await expect(source('goes')).toHaveAttribute('data-use', 'input');
+		await expect(source('goes')).toContainText('GNN');
+		await expect(edgeFrom('goes')).not.toHaveAttribute('stroke-dasharray');
+		await expect(beamFrom('goes')).toHaveCount(1);
+
+		await expect(source('besttrack_working')).toHaveAttribute('data-use', 'unused');
+		await expect(source('besttrack_working')).toContainText('not used yet');
+		await expect(edgeFrom('besttrack_working')).toHaveAttribute('stroke-dasharray');
+		await expect(beamFrom('besttrack_working')).toHaveCount(0);
+
+		await expect(source('new_feed')).toHaveAttribute('data-use', 'input');
+		await expect(source('new_feed')).toContainText('new_feed'); // no name for it: its key
+		await expect(source('new_feed')).toContainText('LSTM');
+		await expect(beamFrom('new_feed')).toHaveCount(1);
+
+		// GOES, GDAS/GFS and the new feed, then the eleven edges from
+		// preprocessing on.
+		const muted = graph.locator('.beam-muted');
+		await expect(graph.locator('.beam')).toHaveCount(3 + 11);
+
+		// The LSTM now reads the new feed and nothing else. Muted: GDAS/GFS
+		// and GOES, and the other three models' edges in and out.
+		await page.getByRole('button', { name: /\(lstm\)/ }).hover();
+		await expect(muted).toHaveCount(2 + 3 + 3);
+		await expect(source('new_feed')).toHaveAttribute('opacity', '1');
+		await expect(source('goes')).toHaveAttribute('opacity', '0.45');
+		await expect(source('besttrack_working')).toHaveAttribute('opacity', '0.45');
+
+		// GOES lights the GNN alone. Muted: the other two sources' beams,
+		// and the other three models' edges in and out.
+		await source('goes').hover();
+		await expect(muted).toHaveCount(2 + 3 + 3);
+		await expect(page.locator('[data-model-node="gnn"]')).toHaveAttribute('opacity', '1');
+		await expect(page.locator('[data-model-node="cnn"]')).toHaveAttribute('opacity', '0.45');
+		await expect(page.locator('[data-model-node="lstm"]')).toHaveAttribute('opacity', '0.45');
+	});
+
 	// A newer API may name a use this console doesn't know. It may not be a
 	// model, so it must not be drawn as feeding one.
 	test('architecture draws a use it does not know without claiming it feeds a model', async ({ page }) => {
@@ -389,6 +452,15 @@ test.describe('signed in', () => {
 			.getByRole('table')
 			.evaluate((el) => el.parentElement!.scrollWidth - el.parentElement!.clientWidth);
 		expect(hidden).toBe(0);
+	});
+
+	test('sources says whatever used_by says, not a mapping of its own', async ({ page }) => {
+		await serveInstead(page, '/v1/sources', { json: SOURCES_REWIRED });
+		await page.goto('/sources');
+		await expect(await sourceCell(page, 'goes', 'Used by')).toHaveText('GNN');
+		await expect(await sourceCell(page, 'besttrack_working', 'Used by')).toHaveText('not used yet');
+		await expect(await sourceCell(page, 'new_feed', 'Used by')).toHaveText('LSTM');
+		await expect(page.getByRole('row')).toHaveCount(1 + SOURCES_REWIRED.length);
 	});
 
 	test('sources shows a dash, not "not used yet", when the API predates used_by', async ({ page }) => {
