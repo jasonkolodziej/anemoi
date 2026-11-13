@@ -10,9 +10,11 @@ ANEMOI_RUN_NETWORK_TESTS=1, and they send urllib's default User-Agent.
 from __future__ import annotations
 
 import functools
+import http.server
 import json
 import math
 import os
+import threading
 import urllib.request
 from collections import defaultdict
 from dataclasses import dataclass
@@ -512,6 +514,96 @@ def test_the_date_rule_uses_the_availability_lag():
     assert OHC_VALID_LAG == timedelta(days=2)
     t = datetime(2023, 9, 10, 6, tzinfo=UTC)
     assert real_ohc.target_creation_day(t) == t.date() - OHC_VALID_LAG
+
+
+# --- http_get against a local server -------------------------------------------
+
+
+class _Handler(http.server.BaseHTTPRequestHandler):
+    """Answers on the first path segment and ignores the rest, so a
+    CoastWatch URL can be pointed here with its own path kept: a status
+    code, ``ua`` (echoes the User-Agent), ``file`` (the served file with its
+    Content-Length) or ``unsized`` (the file, ended by closing)."""
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        pass
+
+    def do_GET(self) -> None:  # noqa: N802
+        mode = self.path.strip("/").split("/", 1)[0]
+        body: bytes = self.server.body  # type: ignore[attr-defined]
+        if mode.isdigit():
+            self.send_error(int(mode))
+            return
+        if mode == "ua":
+            body = self.headers.get("User-Agent", "").encode()
+        self.send_response(200)
+        if mode != "unsized":
+            self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@pytest.fixture(scope="module")
+def server(files):
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    srv.body = files["na3"]  # type: ignore[attr-defined]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_address[1]}"
+    srv.shutdown()
+    srv.server_close()
+
+
+@pytest.fixture
+def local(server, monkeypatch) -> str:
+    """The local server's base URL, with any configured proxy bypassed."""
+    for name in ("no_proxy", "NO_PROXY"):
+        monkeypatch.setenv(name, "127.0.0.1")
+    return server
+
+
+def _via(local: str, mode: str) -> real_ohc.Fetch:
+    """``http_get`` with every CoastWatch URL sent to the local server's
+    ``mode``."""
+    return lambda url: real_ohc.http_get(url.replace(real_ohc.BASE_URL, f"{local}/{mode}"))
+
+
+def test_http_get_returns_the_body(local, files):
+    assert real_ohc.http_get(f"{local}/file/x.nc") == files["na3"]
+    assert real_ohc.http_get(f"{local}/unsized/x.nc") == files["na3"]
+
+
+def test_only_a_404_is_not_published(local):
+    with pytest.raises(OhcNotPublished):
+        real_ohc.http_get(f"{local}/404/x.nc")
+    for code in (403, 429, 500, 503):
+        with pytest.raises(OhcFetchError, match=f"HTTP {code}") as err:
+            real_ohc.http_get(f"{local}/{code}/x.nc")
+        assert type(err.value) is OhcFetchError
+
+
+def test_http_get_caps_the_download(local, files, monkeypatch):
+    monkeypatch.setattr(real_ohc, "MAX_DOWNLOAD_BYTES", len(files["na3"]) - 1)
+    for mode in ("file", "unsized"):
+        with pytest.raises(OhcFetchError, match="more than"):
+            real_ohc.http_get(f"{local}/{mode}/x.nc")
+
+
+def test_http_get_sends_the_adapters_user_agent_unless_told_not_to(local):
+    assert real_ohc.http_get(f"{local}/ua/x.nc") == b"anemoi-api/1.0"
+    assert real_ohc.http_get(f"{local}/ua/x.nc", user_agent=None).startswith(b"Python-urllib/")
+
+
+def test_over_http_only_a_404_is_stepped_over(local):
+    t = datetime(2021, 9, 1, tzinfo=UTC)
+    choice = real_ohc.select_file("na", t, fetch=_via(local, "file"))
+    assert choice.file is not None and choice.age_days == 2
+    choice = real_ohc.select_file("na", t, fetch=_via(local, "404"))
+    assert choice.file is None
+    assert [s.reason for s in choice.step_backs] == ["not published (404)"] * 4
+    for code in (403, 429, 503):
+        with pytest.raises(OhcFetchError, match=f"HTTP {code}") as err:
+            real_ohc.select_file("na", t, fetch=_via(local, str(code)))
+        assert type(err.value) is OhcFetchError
 
 
 # --- network: real files ----------------------------------------------------
