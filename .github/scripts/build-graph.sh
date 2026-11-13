@@ -61,7 +61,11 @@ graphify cluster-only . --no-label --no-viz
 report=graphify-out/GRAPH_REPORT.md
 if [[ -f "$report" ]]; then
   advice='- Run `GRAPHIFY_VERSION='"${GRAPHIFY_VERSION}"' .github/scripts/build-graph.sh` after code changes (no API cost; not `graphify update .`, see AGENTS.md).'
-  sed 's#^- Run `graphify update \.` after code changes.*#'"${advice}"'#' \
+  # Likewise its staleness test ("compare to HEAD") misleads here: CI commits
+  # the graph only on a structural change, so the stamp normally lags HEAD.
+  stale='- The stamp normally lags `HEAD`: CI commits the graph only when code structure changes. It is stale only if code changed since this commit (see AGENTS.md).'
+  sed -e 's#^- Run `graphify update \.` after code changes.*#'"${advice}"'#' \
+      -e 's#^- Run `git rev-parse HEAD` and compare to check if the graph is stale\.#'"${stale}"'#' \
     "$report" > "$report.tmp" && mv "$report.tmp" "$report"
 fi
 

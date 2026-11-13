@@ -4,7 +4,7 @@ Instructions for coding agents (Claude Code, Copilot, Codex and others) working 
 
 ## Code knowledge graph (`graphify-out/`)
 
-`graphify-out/graph.json` is a graph of the code in this repo: every module, class, function and Svelte component, with the calls, imports and uses between them (Python, TypeScript, Svelte, shell, YAML). CI rebuilds it on every push to `main` ([`.github/workflows/graphify.yml`](.github/workflows/graphify.yml)), so it describes `main` as of the commit in its `built_at_commit` field.
+`graphify-out/graph.json` is a graph of the code in this repo: every module, class, function and Svelte component, with the calls, imports and uses between them (Python, TypeScript, Svelte, shell, YAML). CI rebuilds it on every push to `main` ([`.github/workflows/graphify.yml`](.github/workflows/graphify.yml)) but commits it only when the code's structure changed. So `built_at_commit` is normally older than `HEAD`, and that does not mean the graph is stale. It is stale only if code (not docs) changed since that commit: `git diff --stat <built_at_commit> HEAD -- src console docker tests configs .github`.
 
 **Use it before broad searching.** For "where is X used", "what depends on Y", "how does A reach B", or orienting in an unfamiliar area, query the graph first, then read the files it points to. It is faster and cheaper than grepping the tree.
 
