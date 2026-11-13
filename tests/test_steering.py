@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from datetime import UTC, datetime, timedelta
 
@@ -191,3 +192,67 @@ def test_shards_partition_the_times():
     assert sorted(t for s in shards for t in s) == times
     with pytest.raises(ValueError):
         steering.shard_times(times, 3, 3)
+
+
+def test_meta_lost_race_waits_for_the_winners_file(tmp_path, monkeypatch):
+    """Parallel tasks race to write the meta; on GCS FUSE the losers fail
+    with ESTALE or find the file exists, and the winner's file can take a
+    few seconds to become visible (the first steering-cache run lost 5 of
+    20 tasks). A loser waits for it, and never overwrites it."""
+    from pathlib import Path
+
+    meta = tmp_path / steering.CACHE_META_NAME
+    real_open = Path.open
+    looks = {"n": 0}
+
+    def racing_open(self, mode="r", *a, **k):
+        if self == meta and mode == "x":
+            raise OSError(116, "Stale file handle")
+        return real_open(self, mode, *a, **k)
+
+    real_exists = Path.exists
+
+    def slow_exists(self, *a, **k):
+        if self == meta:
+            looks["n"] += 1
+            if looks["n"] == 3:  # the winner's file shows up on the third look
+                steering_meta = _expected_meta(tmp_path / "ref")
+                real_open(meta, "w").write(json.dumps(steering_meta, indent=1) + "\n")
+        return real_exists(self, *a, **k)
+
+    monkeypatch.setattr(Path, "open", racing_open)
+    monkeypatch.setattr(Path, "exists", slow_exists)
+    monkeypatch.setattr(steering, "META_POLL_S", 0.0)
+    steering.write_meta(tmp_path)
+    assert looks["n"] >= 3
+
+
+def test_meta_with_other_settings_is_never_overwritten(tmp_path):
+    meta = tmp_path / steering.CACHE_META_NAME
+    meta.write_text(json.dumps({**_expected_meta(tmp_path / "ref"), "disc_radius_deg": 4.0}))
+    with pytest.raises(ValueError, match="other settings"):
+        steering.write_meta(tmp_path)
+    assert json.loads(meta.read_text())["disc_radius_deg"] == 4.0
+
+
+def test_a_lost_race_with_no_file_appearing_raises_the_write_error(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    real_open = Path.open
+
+    def failing_open(self, mode="r", *a, **k):
+        if mode == "x":
+            raise OSError(5, "I/O error")
+        return real_open(self, mode, *a, **k)
+
+    monkeypatch.setattr(Path, "open", failing_open)
+    monkeypatch.setattr(steering, "META_WAIT_S", 0.05)
+    monkeypatch.setattr(steering, "META_POLL_S", 0.01)
+    with pytest.raises(OSError, match="I/O error"):
+        steering.write_meta(tmp_path)
+
+
+def _expected_meta(where) -> dict:
+    """The meta this code writes, written into its own directory ``where``."""
+    steering.write_meta(where)
+    return json.loads((where / steering.CACHE_META_NAME).read_text())

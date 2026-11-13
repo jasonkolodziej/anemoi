@@ -220,12 +220,47 @@ def write_meta(cache_dir: Path | str) -> None:
     }
     path = Path(cache_dir) / CACHE_META_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
+
+    def check() -> bool:
+        if not path.exists():
+            return False
         old = json.loads(path.read_text())
         if old != meta:
             raise ValueError(f"{path} was written with other settings: {old}")
+        return True
+
+    if check():
         return
-    path.write_text(json.dumps(meta, indent=1) + "\n")
+    # Parallel Cloud Run tasks all start here at once, on GCS FUSE. Create the
+    # file exclusively, so a task never overwrites meta another task already
+    # published (with other settings, it would mix incompatible entries).
+    # A task that loses (the file exists, or the mount refuses the write with
+    # a stale file handle) waits for the winner's file to become visible:
+    # the mount caches "not found" for a few seconds (gcsfuse's negative stat
+    # TTL is 5 s by default), so one read straight away isn't enough.
+    text = json.dumps(meta, indent=1) + "\n"
+    try:
+        with path.open("x") as fh:
+            fh.write(text)
+        return
+    except OSError as exc:
+        error = exc
+    deadline = time.monotonic() + META_WAIT_S
+    while True:
+        try:
+            if check():
+                return
+        except (OSError, json.JSONDecodeError):
+            pass  # not visible or not complete yet
+        if time.monotonic() >= deadline:
+            raise error
+        time.sleep(META_POLL_S)
+
+
+#: How long a task that lost the race to write the meta waits for the
+#: winner's file, and how often it looks.
+META_WAIT_S = 30.0
+META_POLL_S = 1.0
 
 
 FlowFetcher = Callable[[datetime, int], LeadFlow]
