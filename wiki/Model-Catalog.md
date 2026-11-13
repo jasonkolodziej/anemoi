@@ -81,7 +81,7 @@ Self-attention captures long-range dependencies — a trough over the Great Plai
 
 Implemented as an interaction network with `index_add_` scatter rather than a PyTorch Geometric dependency, so the reference implementation installs with plain torch. The message/update decomposition is the standard one; swapping in PyG later is a local change.
 
-> **What it reads today (2026-11-12):** the cached 41×41 gridded crop as a regular lattice (every 4th cell a node, `training.real_run_gnn`), not a station or buoy mesh. Buoy, dropsonde and microwave data have fetch adapters (`data.real_ndbc`, `data.real_dropsonde`, `data.real_microwave`) but are kept for verification rather than model input in `docs/input_sources_plan.md`: too sparse and too biased by where recon flies to train on. Served champion: gnn v7, trained and verified in AL and EP.
+> **What it reads today (2026-11-12):** the cached 41×41 gridded crop as a regular lattice (every 4th cell a node, `training.real_run_gnn`), not a station or buoy mesh. Buoy and dropsonde data have fetch adapters (`data.real_ndbc`, `data.real_dropsonde`) but are kept for verification rather than model input in `docs/input_sources_plan.md`: too sparse and too biased by where recon flies to train on. Microwave (`data.real_microwave`) is different: the plan keeps it as a later, masked optional input with a trained missing-data path (`docs/input_sources_plan.md` step 4, Phase 4 of `docs/skill_gap_plan.md`), not verification-only. Served champion: gnn v7, trained and verified in AL and EP.
 
 ### Kaikias — PINN / Neural ODE — `models/pinn.py`
 
