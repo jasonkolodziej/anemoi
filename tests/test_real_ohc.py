@@ -15,7 +15,9 @@ import http.server
 import json
 import math
 import os
+import re
 import threading
+import urllib.error
 import urllib.request
 from collections import defaultdict
 from dataclasses import dataclass
@@ -277,17 +279,14 @@ def test_a_file_made_later_than_its_name_says_is_rejected(tmp):
         real_ohc.decode_ohc(v1r0_late, "na", date(2024, 8, 27))
 
 
-def test_sshae_median_flags_a_degraded_file(tmp, files):
+def test_sshae_median_counts_only_valid_cells(tmp, files):
     clean = _decode(files["na3"])
     assert clean.sshae_median == pytest.approx(0.29, abs=1e-3)  # fill and 5.0s don't count
-    assert not clean.degraded
     bad = _decode(_write(tmp, "na", sshae=0.33))
     assert bad.sshae_median == pytest.approx(0.33, abs=1e-3)  # counting fill would give ~0.30
-    assert bad.degraded
-    assert bad.metadata()["degraded"] is True
+    assert bad.metadata()["sshae_median"] == bad.sshae_median
     none = _decode(_write(tmp, "na", sshae=None))
     assert none.sshae_median is None
-    assert not none.degraded
 
 
 # --- placement on real_gridded's lattice ---------------------------------------
@@ -549,9 +548,54 @@ def test_no_file_in_either_basin_raises():
         real_ohc.ohc_global(datetime(2022, 8, 1, tzinfo=UTC), fetch=Archive())
 
 
+def test_the_baseline_reads_six_earlier_files_and_nothing_newer(files):
+    archive = _full_archive(files, date(2022, 6, 1), date(2022, 8, 31))
+    made = date(2022, 8, 1)  # old chain: name day = creation day
+    assert real_ohc.sshae_baseline("na", made, fetch=archive) == pytest.approx(0.29, abs=1e-3)
+    days = sorted(int(u.rsplit("_", 1)[1][:3]) for u in archive.requested)
+    assert days == [183, 188, 193, 198, 203, 208]  # 2022-08-01 is day 213
+    assert all(real_ohc.ohc_url("na", made) != u for u in archive.requested)
+
+
+def test_the_baseline_skips_missing_and_rejected_days_and_needs_three(files, tmp):
+    archive = _full_archive(files, date(2022, 7, 1), date(2022, 8, 31))
+    made = date(2022, 8, 1)
+    archive.put("na", date(2022, 7, 27), _write(tmp, "na", sshae=0.29, ohc=np.zeros((241, 401))))
+    for back in (10, 15, 20, 25, 30):
+        archive.files.pop(real_ohc.ohc_url("na", made - timedelta(days=back)), None)
+    assert real_ohc.sshae_baseline("na", made, fetch=archive) is None  # 1 rejected, 5 missing
+    archive.put("na", date(2022, 7, 22), files["na3"])
+    archive.put("na", date(2022, 7, 17), _write(tmp, "na", sshae=None))  # no sshaE: skipped
+    archive.put("na", date(2022, 7, 12), files["na3"])
+    assert real_ohc.sshae_baseline("na", made, fetch=archive) is None  # two usable
+    archive.put("na", date(2022, 7, 7), _write(tmp, "na", sshae=0.35))
+    assert real_ohc.sshae_baseline("na", made, fetch=archive) == pytest.approx(0.29, abs=1e-3)
+
+
+def test_the_flag_is_relative_to_the_baseline(files, tmp):
+    t = datetime(2022, 8, 3, 12, tzinfo=UTC)  # reads the files named 2022-08-01
+    # A product whose normal level is 0.32, as in 2026: the old fixed 0.32
+    # screen flagged a third of such files; relative to its own baseline
+    # a 0.33 file is normal and a 0.37 one stands out.
+    high = _write(tmp, "na", sshae=0.32)
+    archive = _full_archive(files, date(2022, 6, 25), date(2022, 8, 5))
+    for d in range(1, 32):
+        archive.put("na", date(2022, 7, d), high)
+    archive.put("na", date(2022, 8, 1), _write(tmp, "na", sshae=0.33))
+    choice = real_ohc.select_file("na", t, fetch=archive, baseline=True)
+    assert choice.sshae_baseline == pytest.approx(0.32, abs=1e-3)
+    assert choice.degraded is False
+    archive.put("na", date(2022, 8, 1), _write(tmp, "na", sshae=0.37))
+    assert real_ohc.select_file("na", t, fetch=archive, baseline=True).degraded is True
+    # Without a baseline the flag is unknown, not False.
+    plain = real_ohc.select_file("na", t, fetch=archive)
+    assert plain.sshae_baseline is None and plain.degraded is None
+    assert plain.metadata()["degraded"] is None
+
+
 def test_a_degraded_basin_flags_the_field(files, tmp):
     t = datetime(2022, 8, 3, 12, tzinfo=UTC)  # reads the files named 2022-08-01
-    archive = _full_archive(files, date(2022, 7, 25), date(2022, 8, 5))
+    archive = _full_archive(files, date(2022, 6, 25), date(2022, 8, 5))
     clean = real_ohc.ohc_global(t, fetch=archive)
     assert clean.degraded is False
     assert clean.metadata()["degraded"] is False
@@ -561,6 +605,23 @@ def test_a_degraded_basin_flags_the_field(files, tmp):
     meta = field.metadata()
     assert meta["degraded"] is True
     assert [(b["basin"], b["degraded"]) for b in meta["basins"]] == [("np", True), ("na", False)]
+
+
+def test_an_unknown_basin_leaves_the_field_unknown_unless_another_is_degraded(files, tmp):
+    t = datetime(2022, 8, 3, 12, tzinfo=UTC)
+    archive = _full_archive(files, date(2022, 7, 30), date(2022, 8, 5))  # too short for baselines
+    field = real_ohc.ohc_global(t, fetch=archive)
+    assert [b.degraded for b in field.basins] == [None, None]
+    assert field.degraded is None
+    assert real_ohc.ohc_global(t, fetch=archive, baseline=False).degraded is None
+    archive = _full_archive(files, date(2022, 6, 25), date(2022, 8, 5))
+    for d in range(1, 32):
+        archive.files.pop(real_ohc.ohc_url("na", date(2022, 7, d)), None)
+    archive.put("na", date(2022, 8, 1), files["na3"])
+    archive.put("np", date(2022, 8, 1), _write(tmp, "np", sshae=0.40))
+    field = real_ohc.ohc_global(t, fetch=archive)
+    assert [b.degraded for b in field.basins] == [True, None]
+    assert field.degraded is True
 
 
 def test_a_fetch_failure_that_is_not_a_404_is_not_stepped_over(files):
@@ -772,10 +833,27 @@ def test_a_real_file_from_each_chain(basin, name_day, file_format, shape, fill_c
     assert float(np.nanmin(f.ohc)) == 0.0
     assert float(np.nanmax(f.ohc)) < 300.0
     assert f.creation_day == real_ohc.creation_day(name_day)
-    assert not f.degraded
     lat, lon, i, j = (25.0, -90.0, 100, 40) if basin == "na" else (20.0, 150.0, 80, 200)
     assert np.isfinite(f.ohc[i, j])
     assert real_ohc.place([f])[_row_col(lat, lon)] == f.ohc[i, j]
+
+
+@pytest.mark.network
+@pytest.mark.parametrize(
+    ("basin", "name_day", "degraded"),
+    [
+        ("na", date(2022, 7, 29), True),  # 2022 outage, day 210: 0.458 against 0.317
+        ("np", date(2024, 1, 10), True),  # first day of the January 2024 run: 1.14
+        ("na", date(2026, 9, 21), True),  # 2026 days 262-268: 0.408 against 0.310
+        ("na", date(2026, 11, 12), False),  # 0.320: the fixed 0.32 screen's edge, normal for 2026
+    ],
+)
+def test_the_flag_on_real_files(basin, name_day, degraded):
+    f = real_ohc.fetch_ohc_file(basin, name_day, fetch=_plain_get)
+    level = real_ohc.sshae_baseline(basin, f.creation_day, fetch=_plain_get)
+    assert level is not None
+    choice = real_ohc.BasinChoice(basin, f.creation_day + timedelta(days=2), f, (), level)
+    assert choice.degraded is degraded
 
 
 # --- network: SHIPS SOHC regression -------------------------------------------
@@ -791,15 +869,18 @@ def test_a_real_file_from_each_chain(basin, name_day, file_format, shape, fill_c
 # That leaves 555 of 702 cases (the Phase 0 count of 557 excluded only
 # 80.0-80.25W, and Lisa and Nicole's 79.8W case are the difference).
 
-SHIPS_AL_URL = (
-    "https://rammb-data.cira.colostate.edu/ships/data/AL/lsdiaga_1982_2025_sat_ts_7day.txt"
+#: CIRA's developmental-data page links the current editions; the data
+#: directory itself has no listing (403). Each new season's edition gets a
+#: new name (``lsdiaga_1982_<last year>_sat_ts_7day.txt``), so the test reads
+#: the newest from the page instead of hard-coding one.
+SHIPS_PAGE_URL = "https://rammb2.cira.colostate.edu/research/tropical-cyclones/ships/development_data/"
+SHIPS_AL_PATTERN = re.compile(
+    r"https://rammb-data\.cira\.colostate\.edu/ships/data/AL/lsdiaga_1982_(\d{4})_sat_ts_7day\.txt"
 )
 #: Every record of the 7-day file is 183 lines and 33,003 bytes.
 SHIPS_RECORD_BYTES = 33_003
-#: Records 13148-13849 are AL 2021-2022 in the 2025 edition (posted
-#: 2026-10-19); the window brackets them with room to spare, and the test
-#: checks it does.
-SHIPS_WINDOW = (13_100, 13_900)
+#: Bytes of a record's first line that hold its HEAD date (``yymmdd hh``).
+SHIPS_HEAD_BYTES = 160
 SHIPS_MISSING = 9999
 SOHC_TOLERANCE = 0.5
 #: Cases whose bilinear cell touches 80.0W (west longitude, exclusive).
@@ -852,12 +933,75 @@ def parse_ships(blob: bytes) -> list[ShipsCase]:
     return cases
 
 
+def _ships_get(url: str, byte_range: tuple[int, int] | None = None) -> bytes:
+    """A GET (``byte_range`` inclusive), skipping the test when CIRA has
+    moved or withdrawn the file rather than failing it."""
+    headers = {"Range": f"bytes={byte_range[0]}-{byte_range[1]}"} if byte_range else {}
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:  # noqa: S310
+            if byte_range:
+                assert resp.status == 206, resp.status
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            pytest.skip(f"SHIPS: {url} is gone (404); check {SHIPS_PAGE_URL}")
+        raise
+
+
+def ships_al_url() -> str:
+    """The newest AL 7-day edition linked from the developmental-data page."""
+    page = _ships_get(SHIPS_PAGE_URL).decode("utf-8", errors="replace")
+    editions = {int(m.group(1)): m.group(0) for m in SHIPS_AL_PATTERN.finditer(page)}
+    if not editions:
+        pytest.skip(f"SHIPS: no lsdiaga_1982_*_sat_ts_7day.txt link on {SHIPS_PAGE_URL}")
+    return editions[max(editions)]
+
+
+def ships_size(url: str) -> int:
+    req = urllib.request.Request(url, method="HEAD")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
+            size = int(resp.headers["Content-Length"])
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            pytest.skip(f"SHIPS: {url} is gone (404); check {SHIPS_PAGE_URL}")
+        raise
+    assert size % SHIPS_RECORD_BYTES == 0, f"{url}: records aren't {SHIPS_RECORD_BYTES} bytes"
+    return size
+
+
+def ships_record_year(url: str, n: int) -> int:
+    """The HEAD year of record ``n``, from its first line."""
+    start = n * SHIPS_RECORD_BYTES
+    line = _ships_get(url, (start, start + SHIPS_HEAD_BYTES - 1)).decode("ascii", errors="replace")
+    assert line[156:160] == "HEAD", f"record {n} of {url} doesn't start with a HEAD line"
+    yy = int(line[6:8])
+    return 2000 + yy if yy < 50 else 1900 + yy
+
+
+def first_record_of_year(url: str, n_records: int, year: int) -> int:
+    """The first record whose HEAD year is ``year`` or later (records run
+    in time order), by bisection: about 17 small range reads."""
+    lo, hi = 0, n_records
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if ships_record_year(url, mid) < year:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
 def ships_window() -> bytes:
-    start, end = (n * SHIPS_RECORD_BYTES for n in SHIPS_WINDOW)
-    req = urllib.request.Request(SHIPS_AL_URL, headers={"Range": f"bytes={start}-{end - 1}"})
-    with urllib.request.urlopen(req, timeout=300) as resp:  # noqa: S310
-        assert resp.status == 206, resp.status
-        return resp.read()
+    """AL 2021-2022 from the newest edition, with a record either side so
+    the window brackets them (``al_2021_2022`` checks it does)."""
+    url = ships_al_url()
+    n_records = ships_size(url) // SHIPS_RECORD_BYTES
+    first = first_record_of_year(url, n_records, 2021) - 1
+    last = first_record_of_year(url, n_records, 2023)  # the first 2023 record, inclusive
+    assert 0 <= first and last < n_records, f"{url} doesn't extend past 2022"
+    return _ships_get(url, (first * SHIPS_RECORD_BYTES, (last + 1) * SHIPS_RECORD_BYTES - 1))
 
 
 def al_2021_2022(cases: list[ShipsCase]) -> list[ShipsCase]:

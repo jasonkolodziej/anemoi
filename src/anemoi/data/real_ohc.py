@@ -38,10 +38,12 @@ What the files are (verified against real files, 2026-11-13):
   ``sshaE``: 2022 days 201-204 and 208-216 in both basins (per-file median
   0.35-0.65), and 2024 days 010-022 on the old chain, of which this reads
   days 010-014 (0.33 rising to 0.51; na14's day 015 is 0.30).
-  :attr:`OhcFile.degraded` flags a file whose median ``sshaE`` is above
-  :data:`DEGRADED_SSHAE_MEDIAN`, and the file is still returned. The flag
-  is a coarse screen, not an outage detector: see
-  :data:`DEGRADED_SSHAE_MEDIAN`.
+  The file is still returned. :attr:`BasinChoice.degraded` flags it when
+  its median ``sshaE`` is more than :data:`DEGRADED_SSHAE_RATIO` times the
+  median of the basin's files from the 30 days before
+  (:func:`sshae_baseline`). A fixed threshold can't do this: the normal
+  level moves with the altimeter constellation (0.29 in 2021-2024, 0.31-0.32
+  in 2026).
 
 **Date rule** (:func:`select_file`). Files post at most ~48 h after 00Z of
 their name day (47.93 h the latest seen; the median is 11.5 h on the old
@@ -101,19 +103,30 @@ V1R1_START = date(2025, 3, 26)
 #: and gives 07-21 a five-day-old one. No Atlantic fix falls in that run.
 MAX_STEP_BACK_DAYS = 3
 
-#: A file whose median ``sshaE`` exceeds this is flagged degraded. It
-#: catches every day of the 2022 outage (0.35-0.65) and the old-chain
-#: January 2024 days this reads (010-014, 0.33-0.51); 0.35 would miss 2024
-#: day 010 (0.332). It is coarse. Outside the outages per-file medians run
-#: 0.27-0.36 (median 0.287 in 2021-2025 samples), and about 1 file in 20 is
-#: flagged: 13 of 246 sampled every 4th day over days 135-331 of 2021-2025,
-#: among them 2022 day 179 (0.335), 2023 day 143 (0.343) and 2024 days
-#: 307-319. 2025 days 083-084, the last v1r0 files, sit at 0.36. The 2026
-#: product runs higher, with fewer altimeter tracks (52-55 against 62-70):
-#: sampled 2026 days sit at 0.31-0.32 and day 316 (0.320) is flagged, so
-#: for a live cycle the flag means little. Nothing reads it yet; recalibrate
-#: it before anything acts on it.
-DEGRADED_SSHAE_MEDIAN = 0.32
+#: A file is flagged degraded when its median ``sshaE`` is more than this
+#: many times its basin's trailing baseline (:func:`sshae_baseline`).
+#: Calibrated 2026-11-13 on 1,081 real files (both basins daily over the
+#: 2022 and January 2024 outages and 2026 days 1-316, NA every 1-3 days
+#: elsewhere in 2021-2025). Every documented outage day reads 1.13 or more:
+#: the lowest is 2024 day 010 (0.332 against 0.294, 1.128), the first day
+#: of its run; the 2022 days run 1.18-2.2. Outside them 1.12 flags 40 of
+#: 773 files with a baseline, and most are multi-day excursions of the same
+#: shape, in both basins on the same days: 2026 days 049-054, 120-123 and
+#: 262-268 (peak 0.41, above the 2022 outage's first days), 2024 days
+#: 312-318, 2025 days 082-084 (the last v1r0 files). The fixed 0.32 screen
+#: this replaced flagged 134 of 373 2026 files; this flags 27.
+DEGRADED_SSHAE_RATIO = 1.12
+
+#: The trailing baseline: the median of the per-file ``sshaE`` medians of
+#: files made every :data:`SSHAE_BASELINE_STRIDE_DAYS` days over the
+#: :data:`SSHAE_BASELINE_DAYS` before the file's own creation day (six
+#: extra files per basin). A 1-day stride costs 30 fetches for the same
+#: answer: on the calibration set it catches the same outage days and
+#: flags a similar share of the rest (39 of 1,015 against 40 of 773).
+SSHAE_BASELINE_DAYS = 30
+SSHAE_BASELINE_STRIDE_DAYS = 5
+#: Fewer usable files than this and the baseline (and the flag) is unknown.
+SSHAE_BASELINE_MIN_FILES = 3
 
 UNITS = "kJ cm^-2"
 FILL_VALUE = -999.0
@@ -309,10 +322,6 @@ class OhcFile:
         return creation_day(self.name_day)
 
     @property
-    def degraded(self) -> bool:
-        return self.sshae_median is not None and self.sshae_median > DEGRADED_SSHAE_MEDIAN
-
-    @property
     def valid_cells(self) -> int:
         return int(np.isfinite(self.ohc).sum())
 
@@ -325,7 +334,6 @@ class OhcFile:
             "format": self.file_format,
             "date_created": self.date_created,
             "sshae_median": self.sshae_median,
-            "degraded": self.degraded,
             "valid_cells": self.valid_cells,
         }
 
@@ -492,6 +500,17 @@ class BasinChoice:
     cycle_day: date
     file: OhcFile | None
     step_backs: tuple[StepBack, ...] = ()
+    #: :func:`sshae_baseline` for the file, when it was asked for and found.
+    sshae_baseline: float | None = None
+
+    @property
+    def degraded(self) -> bool | None:
+        """Whether the file's ``sshaE`` stands out from its basin's recent
+        files (:data:`DEGRADED_SSHAE_RATIO`); ``None`` when that can't be
+        told (no file, no ``sshaE``, or no baseline)."""
+        if self.file is None or self.file.sshae_median is None or self.sshae_baseline is None:
+            return None
+        return self.file.sshae_median > DEGRADED_SSHAE_RATIO * self.sshae_baseline
 
     @property
     def age_days(self) -> int | None:
@@ -503,8 +522,43 @@ class BasinChoice:
         if self.file is not None:
             out.update(self.file.metadata())
         out["age_days"] = self.age_days
+        out["sshae_baseline"] = self.sshae_baseline
+        out["degraded"] = self.degraded
         out["step_backs"] = [s.as_dict() for s in self.step_backs]
         return out
+
+
+def sshae_baseline(
+    basin: str,
+    made: date,
+    *,
+    fetch: Fetch | None = None,
+    days: int = SSHAE_BASELINE_DAYS,
+    stride_days: int = SSHAE_BASELINE_STRIDE_DAYS,
+    min_files: int = SSHAE_BASELINE_MIN_FILES,
+) -> float | None:
+    """The median ``sshaE`` level of ``basin``'s files made in the ``days``
+    before creation day ``made``, one every ``stride_days``: the median of
+    their per-file medians. Days with no file, a rejected file or no
+    ``sshaE`` are skipped; ``None`` if fewer than ``min_files`` remain.
+    Only files made before ``made`` are read, so a cycle's baseline uses
+    nothing newer than the file it flags."""
+    _check_basin(basin)
+    if days < 1 or stride_days < 1:
+        raise ValueError(f"days and stride_days must be >= 1, got {days} and {stride_days}")
+    fetch = fetch or http_get
+    medians: list[float] = []
+    for back in range(stride_days, days + 1, stride_days):
+        name_day = name_day_for_creation(made - timedelta(days=back))
+        if name_day is None or name_day < ARCHIVE_START:
+            continue
+        try:
+            f = fetch_ohc_file(basin, name_day, fetch=fetch)
+        except (OhcNotPublished, OhcRejected):
+            continue
+        if f.sshae_median is not None:
+            medians.append(f.sshae_median)
+    return float(np.median(medians)) if len(medians) >= min_files else None
 
 
 def select_file(
@@ -513,12 +567,16 @@ def select_file(
     *,
     fetch: Fetch | None = None,
     max_step_back_days: int = MAX_STEP_BACK_DAYS,
+    baseline: bool = False,
 ) -> BasinChoice:
     """The ``basin`` file a cycle at ``t`` (a synoptic UTC time) reads: the
     newest whose creation day is on or before ``date(t) - 2``. A creation
     day with no file (404, or v1r1's naming switch) or a rejected file is
     stepped over, at most ``max_step_back_days`` times. Other fetch failures
-    raise: a timeout is not a reason to read older data."""
+    raise: a timeout is not a reason to read older data.
+
+    ``baseline=True`` also reads :func:`sshae_baseline` for the chosen file
+    (six more fetches), which :attr:`BasinChoice.degraded` needs."""
     _check_basin(basin)
     if max_step_back_days < 0:
         raise ValueError(f"max_step_back_days must be >= 0, got {max_step_back_days}")
@@ -542,7 +600,8 @@ def select_file(
         except OhcRejected as exc:
             passed.append(StepBack(made, name_day, f"rejected: {exc}"))
             continue
-        return BasinChoice(basin, cycle_date(t), ohc, tuple(passed))
+        level = sshae_baseline(basin, ohc.creation_day, fetch=fetch) if baseline else None
+        return BasinChoice(basin, cycle_date(t), ohc, tuple(passed), level)
     return BasinChoice(basin, cycle_date(t), None, tuple(passed))
 
 
@@ -600,8 +659,13 @@ class OhcField:
     basins: tuple[BasinChoice, ...]
 
     @property
-    def degraded(self) -> bool:
-        return any(b.file is not None and b.file.degraded for b in self.basins)
+    def degraded(self) -> bool | None:
+        """True if any basin's file is degraded; ``None`` if none is and
+        some basin with a file couldn't be told."""
+        flags = [b.degraded for b in self.basins if b.file is not None]
+        if any(flags):
+            return True
+        return None if any(f is None for f in flags) else False
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -618,13 +682,17 @@ def ohc_global(
     *,
     fetch: Fetch | None = None,
     max_step_back_days: int = MAX_STEP_BACK_DAYS,
+    baseline: bool = True,
 ) -> OhcField:
     """Global OHC for a cycle at ``t`` (a synoptic UTC time) under the
-    date rule (:func:`select_file`, per basin). A basin with no usable file
+    date rule (:func:`select_file`, per basin), with each file's
+    :func:`sshae_baseline` unless ``baseline=False``. A basin with no usable file
     in the window stays NaN and is reported; raises :class:`OhcUnavailable`
     when neither basin has one."""
     choices = tuple(
-        select_file(basin, t, fetch=fetch, max_step_back_days=max_step_back_days)
+        select_file(
+            basin, t, fetch=fetch, max_step_back_days=max_step_back_days, baseline=baseline
+        )
         for basin in BASINS
     )
     if all(c.file is None for c in choices):

@@ -100,15 +100,15 @@ This replaces the two constants with real ocean data, in two separate PRs and re
 - [x] Write a `real_ohc` adapter for `ohc_{na,np}QG3_{yyyy}_{ddd}.nc` (2020–2024) and `ohc_{na,np}14QG3_{yyyy}_{ddd}.nc` (2024 on), with the D−2 date rule. It must read NetCDF-3 and HDF5 (add scipy to the `gridded` extra), index v1r1 files by creation day, reject blank files, place NP then NA on the global grid, and mask the 2022 outage days (Phase 0, version comparison).
   - **Built and reviewed** (`267b8ca`–`6763b70`). `data/real_ohc.py` is fetch + decode only. Nothing imports it, and `tests/test_sources.py`'s `ADAPTERS` map enforces that.
   - It reads the newest file created on or before date(t)−2. It steps back at most 3 days over a 404, a rejected file or the 2025-03-26 switch gap, and records each step-back.
-  - Format is sniffed from the first bytes. It rejects files whose coordinates, units, fill or `date_created` are wrong. It places NP then NA on the 721×1440 lattice. `ohc_at` is bilinear and needs all four corners. It flags a file degraded when its median `sshaE` exceeds 0.32.
-  - 36 offline tests and 4 network tests. A data review reproduced the decode bit for bit on 20 real files across all three chains.
+  - Format is sniffed from the first bytes. It rejects files whose coordinates, units, fill or `date_created` are wrong. It places NP then NA on the 721×1440 lattice. `ohc_at` is bilinear and needs all four corners. It flags a file degraded when its median `sshaE` is more than 1.12 times the median of its basin's files from the 30 days before (one every 5 days).
+  - 51 offline tests and 8 network tests. A data review reproduced the decode bit for bit on 20 real files across all three chains.
   - Two reviews (code, real data) found 2 major and 12 minor issues. Fixed in `4712f1e`–`6763b70`:
     - a cut-off download is now a fetch error instead of a silent fall-back to an older file;
     - `http_get` is tested against a local server;
     - cycle times must be synoptic UTC;
     - NP's lone 0.0 at 8.0N 80.0W is no longer placed;
     - test gaps and docs are closed.
-  - Still open: recalibrating the degraded flag and the SHIPS test's edition name (Handoff, item 4).
+  - The last two review items are closed (Handoff, item 4). The degraded flag is relative to a trailing 30-day baseline, calibrated on 1,081 real files: it catches every documented outage day (36 of 36) and flags 27 of 373 2026 files where the fixed 0.32 flagged 134. The SHIPS test finds the newest edition on CIRA's development-data page and the 2021–2022 records by bisection, and skips on a 404.
 - [x] Regression-test it against SHIPS' SOHC: on 557 open-ocean Atlantic cases of 2021–2022, SOHC equals the bilinear value at the best-track centre of the file named for the day before, within 0.5 kJ/cm² (Phase 3).
   - Done (`1e480ad`, `354a109`): it matches at all 555 cases whose cell doesn't touch 80.0W (max |d| 0.498), using the real files. Two of the 557 sit where NA and NP meet: one, Lisa, reads 85.10 against SOHC 33 from NA but 33.45 from NP. So the test excludes cells touching 80.0W.
 - [ ] Stage A has no OHC before 2012, so mask OHC in Stage A or feed it in Stage B only.
@@ -187,9 +187,9 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 3. **Unblock the wiki.**
    - Needs: this branch merged to `main`.
    - In the wiki repository, revert `af8e4ac` through `2717b8f`, then run *Publish wiki*. The full reasoning is in the wiki entry under Risks.
-4. **Close `real_ohc`'s last review items** (Phase 2b). This is code only: no model and no wiring into `GriddedFields`. The other review findings are fixed (`4712f1e`–`6763b70`).
-   - **Degraded flag.** The fixed 0.32 `sshaE` median is a coarse screen. Normal files run 0.27–0.36: 13 of 246 sampled 2021–2025 files are flagged, and 2025 days 083–084 sit at 0.36. The 2026 product runs at 0.31–0.32, so today's live file is flagged. Recalibrate it before anything acts on it, for example against a trailing 30-day median.
-   - **SHIPS regression.** The test hard-codes the 2025 edition's file (`lsdiaga_1982_2025_sat_ts_7day.txt`) and its record window, so it breaks when CIRA posts the next edition. Find the file from the directory listing, or skip with a clear message on a 404.
+4. ~~**Close `real_ohc`'s last review items**~~ **Done** (local agent, 2026-11-13; see Phase 2b).
+   - **Degraded flag.** Now relative: a file is degraded when its median `sshaE` is more than `DEGRADED_SSHAE_RATIO` (1.12) times the median of its basin's files made over the 30 days before it, one every 5 days (`sshae_baseline`, six extra fetches per basin). The flag is `None` when there's no baseline, not `False`. Calibrated on 1,081 real files: every documented outage day reads 1.13× or more; outside them most flagged files are multi-day excursions in both basins at once (2026 days 049–054, 120–123, 262–268; 2024 days 312–318), which look like outages the docs didn't list.
+   - **SHIPS regression.** The test reads the newest `lsdiaga_1982_*_sat_ts_7day.txt` linked from CIRA's development-data page (the data directory has no listing), finds AL 2021–2022 by bisecting record HEAD years, and skips with a message on a 404 or a missing link.
    - Not a fix, a choice to keep: the late-file check uses `date_created` and does nothing on the old chain, which has none. The reasons are in `decode_ohc`.
 
 ## Risks and open questions
@@ -219,6 +219,11 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-13.** Local agent: `real_ohc`'s last two review items closed
+  (Handoff, item 4). The degraded flag is relative to a trailing 30-day
+  `sshaE` baseline, calibrated on 1,081 real files; the SHIPS test finds its
+  edition and record window itself. Copilot's microwave finding on
+  wiki Model-Catalog fixed (`8d07396`).
 - **2026-11-13.** Cloud session stopped; open work handed to a local agent
   (Handoff, and a comment on PR #243). Older GFS and TC PRIMED research
   checked by independent skeptics: conclusions hold, details corrected
