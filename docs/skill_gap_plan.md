@@ -22,7 +22,7 @@ records the second fact too: `data.sources.used_by`, served as `used_by` by
 | `besttrack_working` / `besttrack_final` | `live_atcf`, `hurdat2` | LSTM and PINN input; labels for all models | Keep |
 | `gdas_gfs` (ERA5 in Stage A) | `real_gridded` | CNN, Transformer, GNN, PINN, but SST is a 28 °C constant | Add GFS forecast leads (Phase 1) |
 | `sst_ohc`: SST half | `real_sst` (OISST v2.1) | Nothing | Phase 2a |
-| `sst_ohc`: OHC half | `real_ohc` (CoastWatch, fetch + decode; review fixes open); 60 kJ/cm² placeholder in every stage | Nothing | Phase 2b, using OSPO's CoastWatch feed (archive from 2020) |
+| `sst_ohc`: OHC half | `real_ohc` (CoastWatch, fetch + decode, not yet wired); 60 kJ/cm² placeholder in every stage | Nothing | Phase 2b, using OSPO's CoastWatch feed (archive from 2020) |
 | `goes` | `real_goes` | Nothing (matches CNN input shape) | Phase 4 |
 | `ensemble_perturbations` | `real_ensemble` (GEFS) | Nothing. The spread backtest measures the diffusion ensemble's own spread and reads no GEFS | Phase 4, only if spread is too narrow |
 | `microwave` | `real_microwave` | Nothing | Phase 4, as an optional masked input |
@@ -97,12 +97,18 @@ This replaces the two constants with real ocean data, in two separate PRs and re
 
 **2b. OSPO OHC into `GriddedFields.ohc`** (Phase 0 confirmed the archive and compared the versions)
 
-- [ ] Write a `real_ohc` adapter for `ohc_{na,np}QG3_{yyyy}_{ddd}.nc` (2020–2024) and `ohc_{na,np}14QG3_{yyyy}_{ddd}.nc` (2024 on), with the D−2 date rule. It must read NetCDF-3 and HDF5 (add scipy to the `gridded` extra), index v1r1 files by creation day, reject blank files, place NP then NA on the global grid, and mask the 2022 outage days (Phase 0, version comparison).
-  - **Built; review fixes open** (`267b8ca`–`2004e3e`). `data/real_ohc.py` is fetch + decode only. Nothing imports it, and `tests/test_sources.py`'s `ADAPTERS` map enforces that.
+- [x] Write a `real_ohc` adapter for `ohc_{na,np}QG3_{yyyy}_{ddd}.nc` (2020–2024) and `ohc_{na,np}14QG3_{yyyy}_{ddd}.nc` (2024 on), with the D−2 date rule. It must read NetCDF-3 and HDF5 (add scipy to the `gridded` extra), index v1r1 files by creation day, reject blank files, place NP then NA on the global grid, and mask the 2022 outage days (Phase 0, version comparison).
+  - **Built and reviewed** (`267b8ca`–`6763b70`). `data/real_ohc.py` is fetch + decode only. Nothing imports it, and `tests/test_sources.py`'s `ADAPTERS` map enforces that.
   - It reads the newest file created on or before date(t)−2. It steps back at most 3 days over a 404, a rejected file or the 2025-03-26 switch gap, and records each step-back.
   - Format is sniffed from the first bytes. It rejects files whose coordinates, units, fill or `date_created` are wrong. It places NP then NA on the 721×1440 lattice. `ohc_at` is bilinear and needs all four corners. It flags a file degraded when its median `sshaE` exceeds 0.32.
   - 36 offline tests and 4 network tests. A data review reproduced the decode bit for bit on 20 real files across all three chains.
-  - Two reviews found 2 major and 12 minor issues. The fixes are handed to a local agent (see Handoff, item 4); the main open problem is that a cut-off download silently falls back to an older file.
+  - Two reviews (code, real data) found 2 major and 12 minor issues. Fixed in `4712f1e`–`6763b70`:
+    - a cut-off download is now a fetch error instead of a silent fall-back to an older file;
+    - `http_get` is tested against a local server;
+    - cycle times must be synoptic UTC;
+    - NP's lone 0.0 at 8.0N 80.0W is no longer placed;
+    - test gaps and docs are closed.
+  - Still open: recalibrating the degraded flag and the SHIPS test's edition name (Handoff, item 4).
 - [x] Regression-test it against SHIPS' SOHC: on 557 open-ocean Atlantic cases of 2021–2022, SOHC equals the bilinear value at the best-track centre of the file named for the day before, within 0.5 kJ/cm² (Phase 3).
   - Done (`1e480ad`, `354a109`): it matches at all 555 cases whose cell doesn't touch 80.0W (max |d| 0.498), using the real files. Two of the 557 sit where NA and NP meet: one, Lisa, reads 85.10 against SOHC 33 from NA but 33.45 from NP. So the test excludes cells touching 80.0W.
 - [ ] Stage A has no OHC before 2012, so mask OHC in Stage A or feed it in Stage B only.
@@ -181,23 +187,10 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 3. **Unblock the wiki.**
    - Needs: this branch merged to `main`.
    - In the wiki repository, revert `af8e4ac` through `2717b8f`, then run *Publish wiki*. The full reasoning is in the wiki entry under Risks.
-4. **Finish `real_ohc`'s review fixes** (Phase 2b). This is code only: no model and no wiring into `GriddedFields`.
-   - **Major: truncated downloads.**
-     - The bug: `http_get` uses a bounded `resp.read()`, which in CPython returns a short body without raising when Content-Length isn't met. `decode_ohc` then rejects the file and `select_file` silently reads an older day.
-     - The fix: raise `OhcFetchError` when Content-Length exceeds `MAX_DOWNLOAD_BYTES` or `len(body)` differs from it. Also catch `http.client.HTTPException`, which covers `IncompleteRead`.
-   - **Major: no offline test of `http_get`.** Test it against a local `http.server` thread. Assert `OhcNotPublished` only on a 404, `OhcFetchError` on a 503 and on an oversize body, and that the User-Agent is sent.
-   - **Degraded flag.** The fixed 0.32 `sshaE` threshold flags 2026's live files (0.31–0.32) and some normal-period files (0.33–0.36, for example 2025 day 084). Recalibrate it before anything acts on it, for example against a trailing 30-day median. Also correct the docstring's "normal days sit near 0.29" and its claim about January 2024.
-   - **Blank files.** na14 2025 days 197–201 and 2026 day 007 are blank, not only day 199. The five-day run is longer than `MAX_STEP_BACK_DAYS`. Say so in the docstring, the `MAX_STEP_BACK_DAYS` comment, `wiki/Data-Sources.md` and the test.
-   - **Synoptic UTC times.** Call `time_utils.require_synoptic` in `select_file`, `ohc_global` and `target_creation_day`. Today they accept naive and off-synoptic times.
-   - **Seam artefact.** `place()` leaves a spurious 0.0 at 8.0N 80.0W, where NA is fill and NP's 80.0W column holds its artefact zero.
-   - **Tests.**
-     - Put fill in the synthetic `sshaE` arrays and assert a degraded `OhcField`.
-     - Test the north and east edge clamp in `ohc_at`.
-     - Have the SHIPS test find the 7-day file from the directory listing, or skip on a 404, instead of hard-coding the 2025 edition.
-   - **Docs.**
-     - `real_sst` and `real_gridded` docstrings still say OHC isn't implemented.
-     - Give the posting-latency median for each chain.
-     - Make the late-file check use the file's time variable so it covers the old chain.
+4. **Close `real_ohc`'s last review items** (Phase 2b). This is code only: no model and no wiring into `GriddedFields`. The other review findings are fixed (`4712f1e`–`6763b70`).
+   - **Degraded flag.** The fixed 0.32 `sshaE` median is a coarse screen. Normal files run 0.27–0.36: 13 of 246 sampled 2021–2025 files are flagged, and 2025 days 083–084 sit at 0.36. The 2026 product runs at 0.31–0.32, so today's live file is flagged. Recalibrate it before anything acts on it, for example against a trailing 30-day median.
+   - **SHIPS regression.** The test hard-codes the 2025 edition's file (`lsdiaga_1982_2025_sat_ts_7day.txt`) and its record window, so it breaks when CIRA posts the next edition. Find the file from the directory listing, or skip with a clear message on a 404.
+   - Not a fix, a choice to keep: the late-file check uses `date_created` and does nothing on the old chain, which has none. The reasons are in `decode_ohc`.
 
 ## Risks and open questions
 
@@ -231,8 +224,9 @@ Newest first. Each entry names the commit or PR that carries the work.
   checked by independent skeptics: conclusions hold, details corrected
   (Phase 3). `GDAS_ARCHIVE_START` moved to 2021-03-22 18Z, the first valid
   time whose f006 `gfs_url` can fetch; no training fix changes (`8e5d9d3`).
-  `real_ohc` built and matched to SHIPS SOHC at 555 cases
-  (`267b8ca`–`2004e3e`); its review fixes are open.
+  `real_ohc` built, matched to SHIPS SOHC at 555 cases, reviewed twice
+  and fixed (`267b8ca`–`6763b70`); the degraded-flag calibration and the
+  SHIPS test's edition name are open.
 
 - **2026-11-13.** Desk research verified (Phase 0 version comparison,
   Phase 1 step 3, Phase 3): `na` and `na14` are one product; SHIPS becomes
