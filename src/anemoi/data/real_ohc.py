@@ -25,7 +25,9 @@ What the files are (verified against real files, 2026-11-13):
   of ``real_gridded``'s 721x1440 lattice, so :func:`place` flips latitude
   and wraps longitude; nothing is interpolated. The basins overlap in 81
   columns, and in the 80.0W column NP holds 0.0 where NA has real values,
-  so NP is written first and NA over it where NA is valid.
+  so NP is written first and NA over it where NA is valid. At 8.0N NP's
+  0.0 sits where NA is fill (the Panama coast), so an NP cell in that
+  column with no NP cell west of it isn't written.
 * **Values.** ``ohc`` in ``kJ cm^-2``, fill -999 (static land/ice mask).
   0.0 is a real value: water below 26 C.
 * **Bad files.** na14 2025 day 199 is blank: every variable is 0.0, the
@@ -540,7 +542,13 @@ def _lattice_index(lat: np.ndarray, lon: np.ndarray) -> tuple[np.ndarray, np.nda
 def place(files: Iterable[OhcFile]) -> np.ndarray:
     """``(721, 1440)`` float32 kJ/cm2 on ``real_gridded``'s lattice, NaN
     where no file has data. NP is written first and NA over it where NA is
-    finite, whatever order ``files`` come in."""
+    finite, whatever order ``files`` come in.
+
+    NP's last column (80.0W) holds 0.0, not fill, off NP's own domain; NA
+    covers it from 9.5N, but at 8.0N NA is fill and NP's 0.0 would stand
+    alone on the Panama coast. So an NP cell in that column is written
+    only where NP has a valid cell west of it, as its real Pacific values
+    (1.0-7.25N) do."""
     out = np.full((GRID_NLAT, GRID_NLON), np.nan, dtype=np.float32)
     by_basin = {f.basin: f for f in files}
     for basin in BASINS:
@@ -549,6 +557,8 @@ def place(files: Iterable[OhcFile]) -> np.ndarray:
             continue
         rows, cols = _lattice_index(ohc.lat, ohc.lon)
         valid = np.isfinite(ohc.ohc)
+        if basin == "np":
+            valid[:, -1] &= valid[:, -2]
         rr, cc = np.meshgrid(rows, cols, indexing="ij")
         out[rr[valid], cc[valid]] = ohc.ohc[valid]
     return out

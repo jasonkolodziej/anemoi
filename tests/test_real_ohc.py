@@ -9,6 +9,7 @@ ANEMOI_RUN_NETWORK_TESTS=1, and they send urllib's default User-Agent.
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import http.server
 import json
@@ -321,13 +322,35 @@ def test_np_is_written_first_and_na_wins_where_it_is_valid(files):
     row, col = _row_col(20.0, -80.0)
     assert np_.ohc[80, 720] == 0.0 and na.ohc[80, 80] > 0.0
     assert field[row, col] == na.ohc[80, 80]  # NA's value, not NP's 0.0
-    row, col = _row_col(32.0, -80.0)  # NA has fill (land) here, NP 0.0
-    assert np.isnan(na.ohc[128, 80])
-    assert field[row, col] == 0.0
+    row, col = _row_col(32.0, -80.0)  # NA has fill (land) here, NP 0.0 with NP west of it
+    assert np.isnan(na.ohc[128, 80]) and np.isfinite(np_.ohc[128, 719])
+    assert field[row, col] == 0.0  # 0.0 is a value
     row, col = _row_col(10.0, -95.0)  # both valid in the overlap: NA
     assert field[row, col] == na.ohc[40, 20]
     both = np.isfinite(real_ohc.place([na])) & np.isfinite(real_ohc.place([np_]))
     assert int(np.isfinite(field).sum()) == na.valid_cells + np_.valid_cells - int(both.sum())
+
+
+def test_nps_80w_placeholder_is_not_written_where_np_has_no_cell_west_of_it(files):
+    """Real NP files hold 0.0 down their 80.0W column off NP's own domain.
+    NA covers it from 9.5N; at 8.0N (the Panama coast) NA and NP's 80.25W
+    are both fill, and that 0.0 would stand alone. NP's real Pacific values
+    in the column (1.0-7.25N) have NP water west of them and are kept."""
+    na, np_ = _decode(files["na3"]), _decode(files["np3"], "np")
+    na_ohc, np_ohc = na.ohc.copy(), np_.ohc.copy()
+    na_ohc[:33, :81] = np.nan  # NA: fill on the Pacific side, 0-8N, 100W-80W
+    np_ohc[4:30, 720] = 40.0  # NP's own values at 80.0W, 1.0-7.25N
+    np_ohc[30:32, 720] = np.nan  # land at 7.5-7.75N
+    np_ohc[32, 719] = np.nan  # land at 8.0N 80.25W; NP's 80.0W stays 0.0
+    assert np_ohc[32, 720] == 0.0
+    field = real_ohc.place(
+        [dataclasses.replace(na, ohc=na_ohc), dataclasses.replace(np_, ohc=np_ohc)]
+    )
+    assert np.isnan(field[_row_col(8.0, -80.0)])
+    assert field[_row_col(5.0, -80.0)] == 40.0
+    assert field[_row_col(1.0, -80.0)] == 40.0
+    assert field[_row_col(20.0, -80.0)] == na.ohc[80, 80]  # NA over NP's 0.0
+    assert np.isnan(real_ohc.place([dataclasses.replace(np_, ohc=np_ohc)])[_row_col(8.0, -80.0)])
 
 
 # --- point values -------------------------------------------------------------
