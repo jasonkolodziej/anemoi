@@ -149,4 +149,48 @@ Two further consequences for the backtest:
 
 ---
 
+## Homogeneous baseline: guidance on the registry's own validation windows
+
+A registered `{basin}/track_error_{lead}h_nm` says neither how hard its windows were nor what the guidance a cycle already has scores on them. `anemoi baseline-backtest` (`training.baseline_backtest`, `metrics.homogeneous`) answers that from NHC's a-decks: it scores operational techniques on exactly the windows fusion and diffusion are validated on -- the Stage B validation season (2024 while the archive ends in 2025), the same storms, initial times, emulated working fixes, final best-track truth and mask, enumerated by the function training itself uses (`real_latents.joint_stage_windows`), with `metrics.track.verify`'s errors.
+
+**Three samples, no single headline.** A number is comparable only with another on the same sample.
+
+| Sample | Cases | Comparable with |
+|---|---|---|
+| A | every registry window | a registered model metric (fusion v12's 231 / 136 / 69 nm) |
+| B | A where every compared member has a forecast and the verifying fix is at init + lead | other members on B |
+| C | B, tropical or subtropical at both initial and verifying time (NHC's rule) | the 70 nm gate, NHC's 51 nm 2026 target, NHC's published errors |
+
+C still starts each storm 24 h after its first fix and assigns basin by storm id (EP rows include CPHC-issued forecasts west of 140W; CP is CPHC, with no NHC counterpart).
+
+**Members.** `OFCL` (the regular advisory: `OFCO` where a special advisory replaced it, as NHC verifies), `AVNI` (the previous GFS run shifted to the storm's position at `t`: the GFS track a cycle has), `AVNO-6` (the raw track of the `t−6` run whose fields the models read), `AVNO` (late: the `t` run arrives after NHC's `t+3` advisory, context only), `EMXI` (ECMWF interpolated: `EMXI` at 06/18Z, `EMX2` at 00/12Z, since ECMWF's full runs start at 00 and 12Z), `OCD5` (CLIPER5 track, Decay-SHIFOR5 intensity: NHC's skill baseline), `XTRP` (extrapolation from the working fixes), and the registry's `persistence` with the same rule on the un-noised best track. `--techniques` takes any a-deck technique (`TVCN`, `HCCA`, ...). Each row carries the storm count and the largest storm's share, case- and storm-weighted means, and against `AVNI` and `OFCL` the paired difference with a storm-block bootstrap interval, the beat rate and a Diebold–Mariano p-value on one case per storm; under 8 storms, means only.
+
+**Decision rule, fixed before any model number exists:** fusion minus AVNI, Atlantic, 48 h track, on B and C. Positive with a storm-block interval excluding zero on both: the ML layer subtracts value; negative and excluding zero on both: it adds value; otherwise the season does not decide. The registry's `nhc_consensus_beat_rate_48h` threshold is a different comparison (against NHC's consensus, `TVCN`); nothing computes it yet.
+
+**The join is checked against NHC.** OFCL scored under NHC's rules in full (every initial time, tropical at both times, NHC's initial-position domain) reproduces NHC's per-forecast file case for case: 2024 Atlantic 48 h, all 214 cases, 45.44 nm against NHC's 45.41, largest per-case difference 0.12 nm; East Pacific 89 of 89, 48.84 against 48.81. The residual is a near-constant ratio of 1.0007 at every lead, which is what 60 n mi per degree of arc gives against `geo.haversine_nm`'s 6371.0088 km sphere: a different Earth radius, not a different case.
+
+**2024**, 48 h track error in nm (`docs/backtests/2026-11-13-homogeneous-baseline-val2024.json`; * fewer than 8 storms):
+
+| Basin, sample | n (storms) | OFCL | AVNI | AVNO-6 | AVNO | EMXI | OCD5 | XTRP | persistence | un-noised |
+|---|---|---|---|---|---|---|---|---|---|---|
+| AL A | 255 (15) | | | | | | | | 335 | 287 |
+| AL B | 242 (15) | 57 | 66 | 67 | 58 | 59 | 248 | 297 | 330 | 285 |
+| AL C | 190 (15) | 44 | 53 | 54 | 48 | 48 | 206 | 248 | 289 | 237 |
+| EP A | 138 (10) | | | | | | | | 253 | 194 |
+| EP B | 102 (9) | 47 | 57 | 59 | 49 | 56 | 140 | 192 | 242 | 183 |
+| EP C | 70 (7*) | 45 | 57 | 58 | 49 | 50 | 130 | 169 | 232 | 161 |
+| CP A | 30 (1*) | | | | | | | | 186 | 101 |
+| CP B | 27 (1*) | 55 | 78 | 83 | 76 | 56 | 64 | 101 | 190 | 102 |
+| CP C | 26 (1*) | 54 | 75 | 79 | 71 | 54 | 61 | 97 | 188 | 99 |
+
+What this says before any model forecast is scored:
+
+- **The registry's persistence is not CLIPER.** It extrapolates the last 6 h of two independently perturbed fixes, so on B in the Atlantic it scores 330 nm at 48 h against OCD5's 248 and XTRP's 297. "Beats persistence" is a far lower bar than NHC's skill baseline.
+- **Fusion's registered error bounds it on B and C** (`sample_gap`). Fusion v12 scores 231 nm on Atlantic A. To match AVNI on B, its error on the 13 windows B leaves out would have to average 3,304 nm (persistence there: 434); on C, 752 nm on 65 windows (persistence: 470). East Pacific: 359 nm on 36 windows for B (persistence 283); C is not decided by the bound (218 nm on 68; persistence 275). Central Pacific is Hone alone: fusion's 69 nm on A is at most 76.7 nm on B, under AVNI's 77.8.
+- **The inputs differ even where the cases are the same.** The models read an emulated working fix 13.0 nm from the best track (Atlantic mean); the as-issued fix (CARQ) was 5.3 nm off, and its 6 h motion error 10.3 nm RMS against the emulator's 20.8.
+
+Fusion and the Group 1 models join the same samples through a per-case forecast file that `anemoi validation-forecasts` writes on the training machine (inference only; [Cloud Run README](https://github.com/jasonkolodziej/anemoi/blob/main/docker/cloud-run-training/README.md), "One-off commands"), passed as `--model-forecasts`. The a-decks are fetched once with `anemoi adeck-fetch`; `baseline-backtest` reads files only.
+
+---
+
 Related: [References](References) · [Experiment Tracking](Experiment-Tracking) · [Training Architecture](Training-Architecture) · [Inference Cycle](Inference-Cycle)

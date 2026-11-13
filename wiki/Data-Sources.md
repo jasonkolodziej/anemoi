@@ -51,12 +51,12 @@ Given the undocumented retention, the project does not depend on NOAA's live buc
 
 ## Who uses each source
 
-A role is permission, not use: eight of the ten sources are `OPERATIONAL`, and two of them feed a model. Who uses each source today is a separate mapping next to the registry (`MODEL_INPUTS`, `LABEL_SOURCES`, `VERIFICATION_SOURCES` and `VERIFICATION_NOT_READ_YET` in `data/sources.py`). `sources.used_by(key)` reads it and `GET /v1/sources` serves it as `used_by` ([API](API)). The console's Sources page and system graph are being moved onto that field from their own copy.
+A role is permission, not use: eight of the ten sources are `OPERATIONAL`, and two of them feed a model. Who uses each source today is a separate mapping next to the registry (`MODEL_INPUTS`, `LABEL_SOURCES`, `VERIFICATION_SOURCES` and `VERIFICATION_NOT_READ_YET` in `data/sources.py`). `sources.used_by(key)` reads it and `GET /v1/sources` serves it as `used_by` ([API](API)). The console's Sources page and system graph read that field and keep no copy of the mapping.
 
 | Source | `used_by` | In the code |
 |---|---|---|
 | `besttrack_working` | `lstm`, `pinn` | The LSTM's track history, and the track PINN's candidate LSTM reads. In training the working-quality track is emulated from HURDAT2 (`besttrack.augment_track`) |
-| `besttrack_final` | `labels`, `verification` | Every model's training targets, and what validation metrics, the promotion gates and the spread backtest score against |
+| `besttrack_final` | `labels`, `verification` | Every model's training targets, and what validation metrics, the promotion gates, the spread backtest and the homogeneous baseline score against |
 | `gdas_gfs` | `cnn`, `transformer`, `gnn`, `pinn` | The storm-centred field crop in Stage B and in a live cycle. PINN reads it as an environment vector |
 | `era5` | `cnn`, `transformer`, `gnn`, `pinn` | The same crop in Stage A pretraining, and in the ERA5T skew-audit replay after a cycle (`monitoring.skew_audit`). Never read during a cycle |
 | `dropsonde`, `ndbc` | `verification` | Designated verification-only. No verification code reads them yet |
@@ -69,6 +69,7 @@ The order is fixed: models in registry order (`tracking.registry.GROUP1_MODELS`:
 - **Final fixes reach the models in three ways, none of them a listed input.** The emulated training track is the final one with measured working-track noise added; the training crop is centred on the final fix (above); and a cycle run on an archive storm, whose vitals were never kept, takes the final fixes as its track and is flagged `input:final_best_track`.
 - **Diffusion and fusion are not listed.** The vocabulary is the five Group 1 models. Both read those models' latents and forecasts; fusion also reads the working track directly, as its context vector (`real_latents.CONTEXT_FEATURE_NAMES`). The served-product calibration monitor (`monitoring.calibration_audit`) scores cones against the storm's later working fixes. Neither shows in `used_by`.
 - **The planner's tiers and the curriculum's `input_sources` are not use.** `goes`, `ndbc`, `sst_ohc` and `ensemble_perturbations` are in the cycle planner's optional tier ([below](#operational-vs-opportunistic)), so a cycle that finds one late is flagged `missing:{source}` and marked degraded, though no model would have read it. `curriculum.yaml`'s Stage B lists `goes` and `sst_ohc` among its `input_sources`, which are checked for role only.
+- **Operational guidance is not a source.** NHC's a-decks (the official forecast, the GFS and ECMWF trackers, CLIPER) and NHC's per-forecast official errors are read by the homogeneous baseline (`data.adeck_source`, `training.baseline_backtest`) to verify against, and by nothing in a cycle. They are not in the registry: a technique's row for cycle `t` is written hours after `t`, so none may be a model input. See [Verification Metrics](Verification-Metrics#homogeneous-baseline-guidance-on-the-registrys-own-validation-windows).
 
 **Enforced by** `tests/test_sources.py`. Against the registry: every name in the mapping is a registry key or a Group 1 model, in registry order; a model input is never `LABELS_ONLY`; every model reads a source it can be served from; every required cycle input has a model consumer. Against the code, by reading the package's source:
 

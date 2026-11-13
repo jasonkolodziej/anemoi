@@ -448,6 +448,22 @@ gcloud run jobs execute anemoi-train-schedule --region us-central1 \
 
 Real runs 2026-09-23 (`DIFFUSION_DROPOUT=0.1`/`0.05`, `DIFFUSION_WEIGHT_DECAY=1e-4`, each ~9-13 minutes end to end including image pull): see "Common env knobs" below for the results and GitHub #166 for the full backtest output.
 
+Fusion's forecast for every validation window, for the homogeneous baseline (wiki [Verification Metrics](../../wiki/Verification-Metrics.md), "Homogeneous baseline"). Inference only: it loads fusion and the five Group 1 versions its latent signature names from the registry and runs them; it trains, registers and promotes nothing. CPU is enough, as for `spread-backtest`, and the image needs the commit that added the command (CI rebuilds it on `main`):
+
+```bash
+gcloud run jobs execute anemoi-train-schedule --region us-central1 \
+  --task-timeout 3600s \
+  --args=validation-forecasts,--hurdat2,/app/data/hurdat2-atl.txt,--gdas-cache-dir,/cache/gdas_cache_f006,--registry-root,/tmp/registry,--fusion-version,12,--out,/cache/backtests/validation-forecasts-fusion-v12-val2024.json
+```
+
+The file lands in the job's cache bucket under `backtests/`. Its log prints fusion's registered per-basin 48 h errors and sample counts beside the same numbers recomputed from the dumped forecasts, and the job exits 1 (file still written) if they disagree: a different HURDAT2, seed or GDAS cache gives other windows or other working fixes. `--seed` (20260806) and `--n-augment` (1, the latents task's, not `N_AUGMENT`) must be training's. Copy the file down and score it beside the guidance, with the same HURDAT2 bytes (`anemoi hurdat2-fetch`; the file records the sha256 it read, and the join refuses a case whose working fix differs):
+
+```bash
+anemoi baseline-backtest --hurdat2 hurdat2.txt --adeck-dir <the cache adeck-fetch filled> \
+  --model-forecasts validation-forecasts-fusion-v12-val2024.json --models fusion,lstm,cnn,transformer,gnn,pinn \
+  --out docs/backtests/<date>-homogeneous-baseline-val2024-fusion-v12.json
+```
+
 ## Common env knobs
 
 - `MODE=sequential|parallel`
