@@ -12,7 +12,13 @@ from datetime import UTC, datetime
 import pytest
 
 from anemoi.data.besttrack import TrackQuality
-from anemoi.data.hurdat2 import Hurdat2Error, parse_hurdat2, parse_hurdat2_file
+from anemoi.data.hurdat2 import (
+    TROPICAL_STATUSES,
+    Hurdat2Error,
+    parse_hurdat2,
+    parse_hurdat2_file,
+    parse_hurdat2_statuses,
+)
 
 RADII = ", ".join(["-999"] * 12)
 
@@ -152,3 +158,13 @@ AL011969,          TEST,     1,
     fix = tracks[0].fixes[0]
     assert fix.lon == pytest.approx(5.5)
     assert -180.0 <= fix.lon < 180.0
+
+
+def test_statuses_cover_exactly_the_fixes_the_tracks_keep():
+    text = STORM_ONE + STORM_TWO
+    statuses = parse_hurdat2_statuses(text)
+    fixes = {(t.storm_id, f.valid_time) for t in parse_hurdat2(text) for f in t.fixes}
+    assert set(statuses) == fixes  # the off-synoptic and -999 rows are in neither
+    assert statuses[("AL011999", datetime(1999, 8, 25, 18, tzinfo=UTC))] == "HU"
+    assert statuses[("AL022005", datetime(2005, 9, 1, 0, tzinfo=UTC))] == "TD"
+    assert {"TD", "TS", "HU", "SD", "SS"} == TROPICAL_STATUSES
