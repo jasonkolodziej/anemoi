@@ -1389,6 +1389,19 @@ def cmd_baseline_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _model_versions(specs: list[str]) -> dict[str, int]:
+    """``["transformer=9"]`` -> ``{"transformer": 9}``."""
+    out: dict[str, int] = {}
+    for spec in specs:
+        name, sep, version = spec.partition("=")
+        if not sep or not name or not version.isdigit():
+            raise ValueError(f"--also takes MODEL=VERSION, got {spec!r}")
+        if name in out:
+            raise ValueError(f"--also names {name} twice")
+        out[name] = int(version)
+    return out
+
+
 def cmd_validation_forecasts(args: argparse.Namespace) -> int:
     """Write fusion's forecast, and each of its Group 1 inputs', for every
     validation window to one file, for `baseline-backtest
@@ -1408,6 +1421,11 @@ def cmd_validation_forecasts(args: argparse.Namespace) -> int:
         format_forecast_check,
     )
 
+    try:
+        extra = _model_versions(getattr(args, "also", None) or [])
+    except ValueError as exc:
+        print(f"validation-forecasts: {exc}")
+        return 1
     store = CheckpointStore(S3Config.from_env())
     registry = ModelRegistry(args.registry_root, checkpoint_store=store)
     try:
@@ -1416,6 +1434,7 @@ def cmd_validation_forecasts(args: argparse.Namespace) -> int:
             parse_hurdat2_statuses(Path(args.hurdat2).read_text()),
             registry, store, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment, fusion_version=args.fusion_version,
+            extra_versions=extra, steering_cache_dir=getattr(args, "steering_cache_dir", None),
             hurdat2=describe(args.hurdat2), git_commit=git_sha(),
         )
     except BaselineBacktestError as exc:
@@ -1679,6 +1698,17 @@ def main(argv: list[str] | None = None) -> int:
         "--fusion-version", dest="fusion_version", type=int, default=None,
         help="dump this registered fusion version instead of the current champion "
              "(its Group 1 inputs are the versions its latent signature names)",
+    )
+    p.add_argument(
+        "--also", action="append", default=[], metavar="MODEL=VERSION",
+        help="also dump this registered Group 1 version on the same windows, as "
+             "MODEL_vVERSION (e.g. transformer=9), for a paired test of a version fusion "
+             "wasn't trained on; repeatable",
+    )
+    p.add_argument(
+        "--steering-cache-dir", dest="steering_cache_dir", default=None,
+        help="steering cache for an --also version that reads forecast-lead steering "
+             "(default: $ANEMOI_STEERING_CACHE_DIR)",
     )
     p.add_argument("--out", required=True, help="where to write the forecast file (JSON)")
     p.add_argument(
