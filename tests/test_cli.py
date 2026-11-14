@@ -1197,3 +1197,12 @@ def test_adeck_fetch_reads_the_split_and_keeps_cached_files(tmp_path, monkeypatc
         "--no-official-errors",
     ]) == 0
     assert "1 val storm(s), 1 file(s): 0 fetched, 1 already there" in capsys.readouterr().out
+
+
+def test_validation_forecasts_also_parses_model_versions():
+    from anemoi.cli import _model_versions
+
+    assert _model_versions(["transformer=9", "cnn=8"]) == {"transformer": 9, "cnn": 8}
+    for bad in (["transformer"], ["transformer=v9"], ["=9"], ["cnn=1", "cnn=2"]):
+        with pytest.raises(ValueError):
+            _model_versions(bad)
