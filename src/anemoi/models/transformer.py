@@ -21,12 +21,20 @@ def build_transformer(
     n_layers: int = 6,
     dropout: float = 0.1,
     lead_hours: tuple[int, ...] = DEFAULT_LEADS,
+    n_steering: int = 0,
 ):
     """Patch-embedding transformer over storm-centred atmospheric fields.
 
     Returns ``(module, spec)``. A learned CLS token carries the pooled state; it
     is the latent handed to Anemoi-Spread, so it must summarise the synoptic regime
     rather than any single grid point.
+
+    ``n_steering`` > 0 adds that many input channels after the ``n_variables``
+    field channels (forecast-lead steering, `data.steering`; Decision Log 68)
+    through their own zero-initialised, bias-free conv, ``patch.extra``
+    (`extra_channel_patch`). With 0 (the default, and every version from before
+    the steering input) the patch embedding is a plain conv, as before, so
+    older checkpoints load unchanged.
     """
     torch = require_torch()
     nn = torch.nn
@@ -37,13 +45,15 @@ def build_transformer(
     n_patches = (nlat // patch_size) * (nlon // patch_size)
 
     spec = ModelSpec(
-        name="transformer", input_dim=n_variables, latent_dim=d_model, lead_hours=lead_hours
+        name="transformer", input_dim=n_variables + n_steering, latent_dim=d_model,
+        lead_hours=lead_hours,
     )
 
     class FieldTransformer(nn.Module):
         def __init__(self) -> None:
             super().__init__()
-            self.patch = nn.Conv2d(n_variables, d_model, patch_size, stride=patch_size)
+            patch = nn.Conv2d(n_variables, d_model, patch_size, stride=patch_size)
+            self.patch = extra_channel_patch(patch, n_steering) if n_steering else patch
             self.cls = nn.Parameter(torch.zeros(1, 1, d_model))
             self.pos = nn.Parameter(torch.zeros(1, n_patches + 1, d_model))
             nn.init.trunc_normal_(self.pos, std=0.02)
@@ -82,3 +92,36 @@ def build_transformer(
             return track, self.regime(latent)
 
     return FieldTransformer(), spec
+
+
+#: Parameter-name prefix of the steering input path (``patch.extra``): the
+#: one part Stage B trains outside the head when the model reads steering.
+STEERING_PARAM_PREFIX = "patch.extra."
+
+
+def extra_channel_patch(base, n_extra: int):
+    """A patch embedding that takes ``n_extra`` more input channels than
+    ``base`` (an ``nn.Conv2d``), through a separate zero-initialised,
+    bias-free conv of the same geometry (``.extra``), added to ``base``'s
+    output. It computes ``base``'s function until ``.extra`` trains, so it
+    can be added to a pretrained model, and Stage B can train ``.extra``
+    alone while its freezing holds for ``.base`` (the steering spike,
+    `training.steering_spike`; the steering input, Decision Log 68)."""
+    torch = require_torch()
+    nn = torch.nn
+
+    class _ExtraChannelPatch(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.base = base
+            self.extra = nn.Conv2d(n_extra, base.out_channels, kernel_size=base.kernel_size,
+                                   stride=base.stride, bias=False)
+            nn.init.zeros_(self.extra.weight)
+            self.extra.to(base.weight.device)
+            self.in_channels = base.in_channels + n_extra
+
+        def forward(self, x):
+            c = self.base.in_channels
+            return self.base(x[:, :c]) + self.extra(x[:, c:])
+
+    return _ExtraChannelPatch()

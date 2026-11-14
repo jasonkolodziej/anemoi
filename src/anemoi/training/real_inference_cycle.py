@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from ..inference.scheduler import CyclePlan
     from ..tracking.checkpoint_store import CheckpointStore
     from ..tracking.registry import ModelRegistry
-    from .real_inference_live import FieldsFetcher
+    from .real_inference_live import FieldsFetcher, SteeringFetcher
 
 #: A model with no real recorded validation error (shouldn't happen for
 #: any version registered through the real training path, but a real
@@ -55,10 +55,12 @@ class InferenceCycleError(RuntimeError):
 def _build_live_x(
     name: str, track: Track, current: Fix, cache_dir: Path | str,
     *, fields_fetcher: FieldsFetcher | None = None, basins: Sequence[str] = (),
+    steering: np.ndarray | None = None,
 ):
     """``name``'s live input. ``basins`` is what the version being served
     was trained with (`tracking.experiment_tracking.basin_inputs`): its
-    input has to be built the same way."""
+    input has to be built the same way. ``steering`` (Transformer only):
+    the cycle's steering vector, for a version that reads it."""
     from .real_inference_live import (
         build_live_cnn_x,
         build_live_gnn_x,
@@ -72,7 +74,7 @@ def _build_live_x(
     if name == "cnn":
         return build_live_cnn_x(track, current, cache_dir, **gridded)
     if name == "transformer":
-        return build_live_transformer_x(track, current, cache_dir, **gridded)
+        return build_live_transformer_x(track, current, cache_dir, steering=steering, **gridded)
     if name == "gnn":
         return build_live_gnn_x(track, current, cache_dir, **gridded)
     raise InferenceCycleError(f"no real live feature builder for {name!r}")
@@ -240,6 +242,46 @@ def _build_live_context(track: Track, current: Fix) -> np.ndarray | None:
     return _context_features(sw)
 
 
+def _live_steering_for(
+    name: str, version, track: Track, current: Fix, cache_dir: Path | str,
+    steering_fetcher: SteeringFetcher | None,
+) -> tuple[np.ndarray | None, str | None]:
+    """``(steering, reason)`` for one served version: ``(None, None)`` when
+    it doesn't read steering (every model but a Transformer trained with
+    it; Decision Log 68); the vector when it does and the cycle has it; and
+    ``(None, reason)`` when it does and can't have it, in which case the
+    model skips the cycle (no stale fallback: training never saw one)."""
+    import json
+
+    from ..data.steering import steering_meta
+    from ..tracking.experiment_tracking import STEERING_INPUTS_TAG
+    from .real_inference_live import fetch_live_steering
+    from .real_run_transformer import n_steering_of
+
+    if name != "transformer":
+        return None, None
+    try:
+        n_steering = n_steering_of(json.loads(version.tags.get("arch_params", "{}")))
+    except ValueError:
+        return None, None  # an unreadable arch_params fails the model load, with its own reason
+    if not n_steering:
+        return None, None
+    trained = version.tags.get(STEERING_INPUTS_TAG)
+    if trained is None or json.loads(trained) != steering_meta():
+        return None, (
+            "reads forecast-lead steering computed with other settings than this build's "
+            "(data.steering.steering_meta); retrain or serve a matching build"
+        )
+    vec = (steering_fetcher or fetch_live_steering)(track, current, cache_dir)
+    if vec is None or vec.size != n_steering:
+        return None, (
+            "reads forecast-lead steering, and the t-6 GFS run's f006-f054 couldn't be "
+            "fetched for this cycle (not all published yet, or no finite flow); "
+            "no stale fallback, so it skips this cycle"
+        )
+    return vec, None
+
+
 def _real_fusion_forecast(
     registry: ModelRegistry, checkpoint_store: CheckpointStore,
     track: Track, current: Fix, per_model_abs: dict[str, np.ndarray],
@@ -312,6 +354,7 @@ def build_real_deterministic_fn(
     checkpoint_store: CheckpointStore,
     cache_dir: Path | str,
     *, fields_fetcher: FieldsFetcher | None = None,
+    steering_fetcher: SteeringFetcher | None = None,
 ) -> Callable[[CyclePlan, Fix], DeterministicForecast]:
     """A real `deterministic_fn` closure over ``track`` (the storm's real
     known history) -- `inference.cycle.run_cycle`'s own
@@ -328,6 +371,10 @@ def build_real_deterministic_fn(
     instead is what makes the §4.6.3 skew audit a real re-run of the
     deterministic stack rather than a separate parallel implementation of
     it that could quietly drift out of sync with what operationally runs.
+
+    ``steering_fetcher`` overrides the forecast-lead steering source for a
+    Transformer version that reads it (default
+    `real_inference_live.fetch_live_steering`; Decision Log 68).
 
     Raises `InferenceCycleError` if no real model could contribute at
     all (no registered version in staging/production, no cached field,
@@ -403,12 +450,19 @@ def build_real_deterministic_fn(
             else:
                 version = registry.production(name) or registry.in_stage(name, Stage.STAGING)
                 abs_pred = None
+                steering, steering_reason = (
+                    _live_steering_for(
+                        name, version, track, current, cache_dir, steering_fetcher,
+                    ) if version is not None else (None, None)
+                )
                 if version is None:
                     reasons[name] = "no registered staging/production version"
+                elif steering_reason is not None:
+                    reasons[name] = steering_reason
                 else:
                     raw = _build_live_x(
                         name, track, current, cache_dir, fields_fetcher=shared_fetcher,
-                        basins=basin_inputs(version.tags),
+                        basins=basin_inputs(version.tags), steering=steering,
                     )
                     if raw is None:
                         if _gdas_likely_unpublished(current.valid_time):

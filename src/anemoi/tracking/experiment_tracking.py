@@ -193,6 +193,32 @@ def basin_input_tags(artifacts: object) -> dict[str, str]:
     return tags
 
 
+#: A Transformer version that reads forecast-lead steering (Decision Log 68):
+#: the `data.steering.steering_meta` it was trained with, JSON. Serving
+#: refuses to feed it features computed with other settings.
+STEERING_INPUTS_TAG = "steering_inputs"
+
+
+def steering_input_tags(artifacts: object) -> dict[str, str]:
+    """``{STEERING_INPUTS_TAG: ...}`` for a run whose ``arch_params`` has
+    ``n_steering`` > 0 (the settings it trained with, ``steering_inputs``),
+    else nothing."""
+    arch = getattr(artifacts, "arch_params", None) or {}
+    if not int(arch.get("n_steering", 0)):
+        return {}
+    meta = getattr(artifacts, "steering_inputs", None)
+    if meta is None:
+        raise ValueError("a run that reads steering must record the settings it trained with")
+    return {STEERING_INPUTS_TAG: json.dumps(meta, sort_keys=True)}
+
+
+def steering_inputs(tags: dict[str, str]) -> dict | None:
+    """A version's recorded steering settings (`STEERING_INPUTS_TAG`), or
+    ``None``."""
+    raw = tags.get(STEERING_INPUTS_TAG)
+    return None if raw is None else json.loads(raw)
+
+
 def basin_inputs(tags: dict[str, str], tag: str = BASIN_INPUTS_TAG) -> tuple[str, ...]:
     """A registered version's basin input columns, from its tags, for
     building the inputs it is served with. ``()`` for a version without

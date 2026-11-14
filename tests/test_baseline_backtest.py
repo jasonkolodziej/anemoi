@@ -214,7 +214,7 @@ def test_the_latents_extraction_runs_the_models_on_joint_stage_windows_own_windo
     tracks, _ = archive
     seen: list[list] = []
 
-    def record(windows, trained_artifacts, gdas_cache_dir, device=None):
+    def record(windows, trained_artifacts, gdas_cache_dir, device=None, steering_cache_dir=None):
         seen.append(list(windows))
         return len(seen)
 

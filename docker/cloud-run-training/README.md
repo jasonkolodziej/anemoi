@@ -463,6 +463,16 @@ gcloud beta run jobs execute anemoi-train-gpu --region us-east4 --async \
   --args=steering-spike,--hurdat2,/app/data/hurdat2-atl.txt,--era5-cache-dir,/cache/era5_cache,--gdas-cache-dir,/cache/gdas_cache_f006,--steering-cache-dir,/cache/steering_f006,--seeds,20260806,20260807,--num-workers,7,--localize-to,/tmp/anemoi-cache,--out,/cache/backtests/steering-spike-transformer.json
 ```
 
+The steering Transformer (Decision Log 68), on the GPU job: the registry curriculum with the steering cache as an input. Stage A feeds zeros for the 54 steering channels (ERA5 years have no GFS forecasts); Stage B feeds each window's cached features and trains their conv besides the head. `--register-only` registers the version with `arch_params` `n_steering` and the `steering_inputs` tag, and never stages it: while no version is in production, staging is what serves, so staging is a decision taken after review. `--localize-to` copies the caches into `/tmp` first, as for the spike.
+
+```bash
+gcloud beta run jobs execute anemoi-train-gpu --region us-east4 --async \
+  --update-env-vars ANEMOI_FIELDS_MEMO=1 \
+  --args=train,--model,transformer,--hurdat2,/app/data/hurdat2-atl.txt,--era5-cache-dir,/cache/era5_cache,--gdas-cache-dir,/cache/gdas_cache_f006,--steering-cache-dir,/cache/steering_f006,--registry-root,/cache/registry,--streaming,--num-workers,7,--localize-to,/tmp/anemoi-cache,--register-only
+```
+
+Serving such a version fetches the t−6 GFS run's f006–f054 each cycle (`real_inference_live.fetch_live_steering`, cached under the cycle cache's `live_steering/`); if any lead is missing, the Transformer skips the cycle with a reason, with no stale fallback. Every job that rebuilds its input from the caches (latents, `spread-backtest`, `validation-forecasts`) reads the steering cache from `ANEMOI_STEERING_CACHE_DIR`, which the entrypoint sets to `/cache/steering_f006` (and localises, for training).
+
 Fusion's forecast for every validation window, for the homogeneous baseline (wiki [Verification Metrics](../../wiki/Verification-Metrics.md), "Homogeneous baseline"). Inference only: it loads fusion and the five Group 1 versions its latent signature names from the registry and runs them on the validation windows alone (the training windows, 2,733 with the 2025 HURDAT2, are enumerated for the noise draw but not run); it trains, registers and promotes nothing. CPU is enough, as for `spread-backtest`, and the image needs the commit that added the command (CI rebuilds it on `main`):
 
 ```bash

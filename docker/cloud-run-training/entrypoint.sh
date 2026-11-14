@@ -5,6 +5,10 @@ MODE="${MODE:-sequential}"
 HURDAT2_PATH="${HURDAT2_PATH:-/app/data/hurdat2-atl.txt}"
 ERA5_CACHE_DIR="${ERA5_CACHE_DIR:-/cache/era5}"
 GDAS_CACHE_DIR="${GDAS_CACHE_DIR:-/cache/gdas}"
+# Forecast-lead steering (anemoi steering-cache; Decision Log 68). Read only
+# for a Transformer version that was trained with it, by every job that
+# builds that Transformer's input from the caches (latents, backtests).
+export ANEMOI_STEERING_CACHE_DIR="${ANEMOI_STEERING_CACHE_DIR:-/cache/steering_f006}"
 REGISTRY_ROOT="${REGISTRY_ROOT:-/cache/registry}"
 SEED="${SEED:-20260806}"
 N_AUGMENT="${N_AUGMENT:-3}"
@@ -62,6 +66,10 @@ if [ "${LOCALIZE_CACHE:-1}" = "1" ]; then
   fi
   if anemoi cache-localize --src "${GDAS_CACHE_DIR}" --dst "${LOCAL_CACHE_ROOT}/gdas"; then
     GDAS_CACHE_DIR="${LOCAL_CACHE_ROOT}/gdas"
+  fi
+  if [ -d "${ANEMOI_STEERING_CACHE_DIR}" ] \
+    && anemoi cache-localize --src "${ANEMOI_STEERING_CACHE_DIR}" --dst "${LOCAL_CACHE_ROOT}/steering"; then
+    ANEMOI_STEERING_CACHE_DIR="${LOCAL_CACHE_ROOT}/steering"
   fi
 fi
 

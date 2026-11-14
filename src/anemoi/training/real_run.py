@@ -303,6 +303,10 @@ class RunArtifacts:
     #: PINN only: the same for its candidate-generator LSTM, which trains
     #: on the track archive rather than the field cache.
     candidate_basins: tuple[str, ...] = ()
+    #: Transformer only: the `data.steering.steering_meta` it was trained
+    #: with, for a version that reads forecast-lead steering (its
+    #: ``steering_inputs`` tag; Decision Log 68). None otherwise.
+    steering_inputs: dict | None = None
     #: PINN only: the candidate-generator LSTM's own `build_lstm(...)` kwargs.
     candidate_arch_params: dict = field(default_factory=dict)
     #: PINN only: where the candidate LSTM's checkpoint was uploaded (#78).

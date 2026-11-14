@@ -207,8 +207,12 @@ def steering_vector(
     return vec if np.isfinite(vec).all() else None
 
 
-def write_meta(cache_dir: Path | str) -> None:
-    meta = {
+def steering_meta() -> dict:
+    """The settings the features are computed with: written as the cache's
+    meta, and recorded on a model version that reads them (the
+    ``steering_inputs`` registry tag), so serving can refuse features that
+    differ from what the version was trained on."""
+    return {
         "feature_version": FEATURE_VERSION,
         "leads_h": list(STEERING_LEADS_H),
         "nwp_lag_h": NWP_LAG_H,
@@ -218,6 +222,36 @@ def write_meta(cache_dir: Path | str) -> None:
         "beta_drift_ms": list(BETA_DRIFT_MS),
         "feature_names": list(FEATURE_NAMES),
     }
+
+
+def steering_meta_digest(meta: dict | None = None) -> str:
+    """A short digest of :func:`steering_meta` (or ``meta``): names a cache
+    namespace, so features computed with other settings are never read."""
+    import hashlib
+
+    text = json.dumps(steering_meta() if meta is None else meta, sort_keys=True)
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+def require_meta(cache_dir: Path | str) -> None:
+    """Raise unless ``cache_dir`` has a ``_meta.json`` equal to this build's
+    :func:`steering_meta`. ``feature_version`` in each file only catches a
+    definition change someone remembered to version; the meta records every
+    setting, so a cache computed with other settings is refused before a
+    model trains on it or reads it."""
+    path = Path(cache_dir) / CACHE_META_NAME
+    try:
+        old = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"steering cache {cache_dir} has no readable {CACHE_META_NAME}: "
+                         f"{exc}") from exc
+    if old != steering_meta():
+        raise ValueError(f"steering cache {cache_dir} was computed with other settings "
+                         f"than this build's: {old}")
+
+
+def write_meta(cache_dir: Path | str) -> None:
+    meta = steering_meta()
     path = Path(cache_dir) / CACHE_META_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
 

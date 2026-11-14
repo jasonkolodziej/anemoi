@@ -192,7 +192,11 @@ def load_run_artifacts(name: str, version: ModelVersion, checkpoint_store: Check
 
     Raises `InferenceLoadError` for a version registered before #78.
     """
-    from ..tracking.experiment_tracking import CANDIDATE_BASIN_INPUTS_TAG, basin_inputs
+    from ..tracking.experiment_tracking import (
+        CANDIDATE_BASIN_INPUTS_TAG,
+        basin_inputs,
+        steering_inputs,
+    )
     from .real_run import RunArtifacts
 
     model, _spec = load_trained_model(name, version, checkpoint_store)
@@ -203,6 +207,7 @@ def load_run_artifacts(name: str, version: ModelVersion, checkpoint_store: Check
         # What its inputs must be built with (`basin_input`); none for a
         # version from before the basin input.
         "basins": basin_inputs(version.tags),
+        "steering_inputs": steering_inputs(version.tags),
         **{k: stats[k] for k in ("x_mean", "x_std", "y_mean", "y_std") if k in stats},
     }
     if name == "pinn":

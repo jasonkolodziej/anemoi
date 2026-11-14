@@ -103,6 +103,8 @@ This phase answers one question fast: is the 231 nm error a missing-input proble
 
 **Exit taken (2026-11-13): make forecast-lead steering a registry input** (Decision Log 68). Step 2 moved Atlantic 48 h error 77 nm toward the gate, replicated across seeds and far outside seed noise. Next: the `data.steering` features as a model input in training and serving (GFS f006–f054 from the t−6 cycle, as in the spike), which needs a live fetch path in inference, then retrain and re-run the paired test against AVNI.
 
+- **Built (2026-11-14), Transformer only:** the input in the model, training, serving and latent extraction (Decision Log 68, "Built"). A served steering Transformer skips a cycle whose leads aren't all published. Trained with `anemoi train --register-only`, so it isn't staged (staging serves) until its numbers are reviewed. Then: the paired test against AVNI on a Transformer-only forecast file, and CNN, GNN and PINN only if it holds.
+
 ## Phase 2: Ocean inputs (runs alongside Phase 1)
 
 This replaces the two constants with real ocean data, in two separate PRs and retrains so any intensity change traces back to one input.
@@ -238,6 +240,9 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-14.** Forecast-lead steering built as a Transformer input
+  (training, serving, latents; Decision Log 68). Training next, registered
+  but not staged.
 - **2026-11-13.** Steering spike result (Phase 1, step 2): Atlantic 48 h
   −77 nm [−106, −49] and −76 nm [−106, −46] on two seeds (248 → 171 nm);
   seed noise −0.7 nm [−3.0, 1.3]; EP −8 and −12 nm, intervals span zero.
