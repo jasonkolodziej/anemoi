@@ -38,6 +38,7 @@ from ..tracking.experiment_tracking import (
     gridded_input_tags,
     log_curriculum_stages,
     standardization_tags,
+    steering_input_tags,
     training_data_tags,
 )
 from ..tracking.registry import (
@@ -382,6 +383,7 @@ class RealOrchestratorRunner:
             tag_dict["arch_params"] = arch_params
         tag_dict.update(candidate_tags(artifacts))
         tag_dict.update(basin_input_tags(artifacts))
+        tag_dict.update(steering_input_tags(artifacts))
         tag_dict.update(standardization_tags(artifacts))
         tag_dict.update(gridded_input_tags(self.gdas_cache_dir))
         tag_dict.update(training_data_tags(self.hurdat2_path, self.tracks))

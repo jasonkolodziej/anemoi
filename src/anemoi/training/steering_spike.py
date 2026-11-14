@@ -41,6 +41,7 @@ from ..data.steering import STEERING_DIM, steering_vector
 from ..geo import haversine_nm
 from ..metrics.homogeneous import storm_block_interval
 from ..models.base import DEFAULT_LEADS, require_torch
+from ..models.transformer import STEERING_PARAM_PREFIX
 from .basin_input import DEFAULT_BASIN_INPUTS
 from .curriculum import Curriculum
 from .real_run import StageWindow, boundaries_for_tracks, displacements_to_absolute
@@ -59,7 +60,7 @@ MIN_STORMS_FOR_INTERVAL = 8
 
 #: Parameter prefix of the steering input path (`expand_patch_channels`),
 #: trained in Stage B while the stage's freezing policy holds elsewhere.
-STEERING_PARAMS = "patch.extra."
+STEERING_PARAMS = STEERING_PARAM_PREFIX
 
 
 def expand_patch_channels(model, n_extra: int):
@@ -70,25 +71,9 @@ def expand_patch_channels(model, n_extra: int):
     ``patch.extra`` trains, and Stage B's freezing of the original weights
     (everything outside ``head.``) is untouched: the caller unfreezes
     :data:`STEERING_PARAMS` alone."""
-    torch = require_torch()
-    nn = torch.nn
-    base = model.patch
+    from ..models.transformer import extra_channel_patch
 
-    class ExtraChannelPatch(nn.Module):
-        def __init__(self) -> None:
-            super().__init__()
-            self.base = base
-            self.extra = nn.Conv2d(n_extra, base.out_channels, kernel_size=base.kernel_size,
-                                   stride=base.stride, bias=False)
-            nn.init.zeros_(self.extra.weight)
-            self.extra.to(base.weight.device)
-            self.in_channels = base.in_channels + n_extra
-
-        def forward(self, x):
-            c = self.base.in_channels
-            return self.base(x[:, :c]) + self.extra(x[:, c:])
-
-    model.patch = ExtraChannelPatch()
+    model.patch = extra_channel_patch(model.patch, n_extra)
     return model
 
 

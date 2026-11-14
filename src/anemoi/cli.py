@@ -319,6 +319,29 @@ def cmd_steering_cache(args: argparse.Namespace) -> int:
     return 1 if report.n_failed and report.n_written == 0 else 0
 
 
+def _localize_caches(localize_to: str | None, caches: dict[str, str | None]) -> dict:
+    """Copy each named cache into ``localize_to/<name>`` (Decision Log 62)
+    and return the paths to read; on a failed copy, or with no
+    ``localize_to``, the original path. ``None`` entries pass through."""
+    from .data.cache_localize import localize_cache
+
+    out = dict(caches)
+    if not localize_to:
+        return out
+    for name, src in caches.items():
+        if not src:
+            continue
+        dst = Path(localize_to) / name
+        try:
+            rep = localize_cache(src, dst)
+            print(f"localized {name}: {rep.n_copied} copied, {rep.n_skipped} skipped, "
+                  f"{rep.n_bytes / 2**30:.2f} GiB, {rep.elapsed_s:.0f}s", flush=True)
+            out[name] = str(dst)
+        except Exception as exc:  # noqa: BLE001 -- fall back to reading in place
+            print(f"localize {name} failed ({exc}); reading {src} directly", flush=True)
+    return out
+
+
 def cmd_steering_spike(args: argparse.Namespace) -> int:
     """The steering-along-track spike (docs/skill_gap_plan.md Phase 1, step 2):
     Stage A once, then a baseline and a steering Stage B arm per seed, against
@@ -327,22 +350,13 @@ def cmd_steering_spike(args: argparse.Namespace) -> int:
     since a one-off command skips that step."""
     import json
 
-    from .data.cache_localize import localize_cache
     from .training.steering_spike import run_steering_spike
 
     os.environ.setdefault("ANEMOI_FIELDS_MEMO", "1")
-    caches = {"era5": args.era5_cache_dir, "gdas": args.gdas_cache_dir,
-              "steering": args.steering_cache_dir}
-    if args.localize_to:
-        for name, src in list(caches.items()):
-            dst = Path(args.localize_to) / name
-            try:
-                rep = localize_cache(src, dst)
-                print(f"localized {name}: {rep.n_copied} copied, {rep.n_skipped} skipped, "
-                      f"{rep.n_bytes / 2**30:.2f} GiB, {rep.elapsed_s:.0f}s", flush=True)
-                caches[name] = str(dst)
-            except Exception as exc:  # noqa: BLE001 -- fall back to reading in place
-                print(f"localize {name} failed ({exc}); reading {src} directly", flush=True)
+    caches = _localize_caches(args.localize_to, {
+        "era5": args.era5_cache_dir, "gdas": args.gdas_cache_dir,
+        "steering": args.steering_cache_dir,
+    })
 
     tracks = _training_tracks(args.hurdat2)
     report = run_steering_spike(
@@ -408,12 +422,29 @@ def cmd_train(args: argparse.Namespace) -> int:
         gridded_input_tags,
         log_curriculum_stages,
         standardization_tags,
+        steering_input_tags,
         training_data_tags,
     )
     from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ModelRegistry, Stage
     from .training.basin_gates import basin_tags, resolve_basin_inputs
     from .training.promotion import MetricSet, evaluate_promotion
+
+    # Absent on a Namespace built by hand (tests, other commands reusing this).
+    for name in ("steering_cache_dir", "localize_to"):
+        setattr(args, name, getattr(args, name, None))
+    args.register_only = getattr(args, "register_only", False)
+    if args.steering_cache_dir and args.model != "transformer":
+        print("--steering-cache-dir is a transformer input only (Decision Log 68)")
+        return 1
+    if args.localize_to:
+        os.environ.setdefault("ANEMOI_FIELDS_MEMO", "1")
+        caches = _localize_caches(args.localize_to, {
+            "era5": args.era5_cache_dir, "gdas": args.gdas_cache_dir,
+            "steering": args.steering_cache_dir,
+        })
+        args.era5_cache_dir, args.gdas_cache_dir = caches["era5"], caches["gdas"]
+        args.steering_cache_dir = caches["steering"]
 
     tracks = _training_tracks(args.hurdat2)
     store = CheckpointStore(S3Config.from_env())
@@ -447,7 +478,8 @@ def cmd_train(args: argparse.Namespace) -> int:
             return 1
         run, val_metrics, artifacts = run_transformer_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
-            seed=args.seed, n_augment=args.n_augment, **streaming_kwargs,
+            seed=args.seed, n_augment=args.n_augment,
+            steering_cache_dir=args.steering_cache_dir, **streaming_kwargs,
         )
     elif args.model == "gnn":
         from .training.real_run_gnn import run_gnn_curriculum
@@ -513,6 +545,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         tag_dict["arch_params"] = arch_params
     tag_dict.update(candidate_tags(artifacts))
     tag_dict.update(basin_input_tags(artifacts))
+    tag_dict.update(steering_input_tags(artifacts))
     tag_dict.update(standardization_tags(artifacts))
     tag_dict.update(gridded_input_tags(args.gdas_cache_dir))
     tag_dict.update(training_data_tags(args.hurdat2, tracks))
@@ -544,7 +577,9 @@ def cmd_train(args: argparse.Namespace) -> int:
     # promote_to_production is always False by construction; only an
     # explicit, human-run promotion should move a version to production
     # (Scope v2.1 SS5.3 Stage 6).
-    if decision.promote_to_staging:
+    if decision.promote_to_staging and args.register_only:
+        print(f"  -> left {args.model} v{version.version} unstaged (--register-only)")
+    elif decision.promote_to_staging:
         registry.transition(args.model, version.version, Stage.STAGING)
         print(f"  -> transitioned {args.model} v{version.version} to staging")
     return 0
@@ -1840,6 +1875,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--gdas-cache-dir", dest="gdas_cache_dir", default=None,
         help="cnn/transformer/gnn/pinn only: data.gdas_cache's --cache-dir",
+    )
+    p.add_argument(
+        "--steering-cache-dir", dest="steering_cache_dir", default=None,
+        help=("transformer only, with --streaming: also read forecast-lead GFS steering "
+              "(anemoi steering-cache's --cache-dir; Decision Log 68)"),
+    )
+    p.add_argument(
+        "--localize-to", dest="localize_to", default=None,
+        help="copy the caches here first and train from the copies (Decision Log 62)",
+    )
+    p.add_argument(
+        "--register-only", dest="register_only", action="store_true",
+        help=("register the version but never move it to staging, even if it passes: "
+              "staging is what serves while no version is in production"),
     )
     p.add_argument(
         "--registry-root", dest="registry_root",

@@ -199,6 +199,83 @@ def build_live_lstm_x(
     return track_input(window, track.storm_id, basins)
 
 
+#: A `(valid_time, lead_h) -> data.steering.LeadFlow` source: the t-6 GFS
+#: run's flow valid ``lead_h`` after the cycle time. Default
+#: `data.steering.fetch_lead_flow`; tests pass a stand-in.
+FlowFetcher = Callable[[datetime, int], object]
+
+#: A `(track, current, cache_dir) -> steering vector | None` source -- the
+#: live cycle's override hook for `fetch_live_steering`, as `FieldsFetcher`
+#: is for the fields.
+SteeringFetcher = Callable[["Track", "Fix", "Path | str"], "np.ndarray | None"]
+
+#: The flows of the last valid time fetched, shared by every storm in that
+#: cycle: each lead is a global grid, the same for all of them.
+_FLOW_MEMO: dict[tuple[datetime, int], object] = {}
+
+
+def live_steering_path(cache_dir: Path | str, storm_id: str, current: Fix) -> Path:
+    """Where a live cycle's steering features are kept: by storm, time and
+    position, as `live_cache_path` keys the fields."""
+    name = f"{current.valid_time:%Y%m%d%H}_{current.lat:+.2f}_{current.lon:+.2f}.npz"
+    return Path(cache_dir) / "live_steering" / storm_id / name
+
+
+def fetch_live_steering(
+    track: Track, current: Fix, cache_dir: Path | str,
+    *, flow_fetcher: FlowFetcher | None = None,
+) -> np.ndarray | None:
+    """The forecast-lead steering features (`data.steering`; Decision Log 68)
+    a live cycle at ``current`` feeds a Transformer that reads them: the
+    t-6 GFS run's f006-f054, along the beta-advection track from the
+    current fix, flattened to ``(STEERING_DIM,)``, exactly as
+    ``anemoi steering-cache`` computes them for training.
+
+    ``None`` when any lead can't be fetched or the flow isn't finite. There
+    is no stale fallback (no t-12 run): training never saw one, so a model
+    that reads steering skips the cycle instead. Cached under
+    ``cache_dir/live_steering`` (`live_steering_path`).
+    """
+    from ..data.gdas_cache import GDAS_ARCHIVE_START
+    from ..data.gridded_cache import FetchTask
+    from ..data.steering import (
+        STEERING_LEADS_H,
+        fetch_lead_flow,
+        load_steering,
+        save_steering,
+        steering_features,
+    )
+
+    if current.valid_time < GDAS_ARCHIVE_START:
+        return None
+    path = live_steering_path(cache_dir, track.storm_id, current)
+    feats = None
+    if path.exists():
+        try:
+            feats = load_steering(path)
+        except Exception:  # noqa: BLE001 - a corrupt or outdated entry is recomputed
+            feats = None
+    if feats is None:
+        fetcher = flow_fetcher or fetch_lead_flow
+        try:
+            flows = []
+            for lead in STEERING_LEADS_H:
+                key = (current.valid_time, lead)
+                if key not in _FLOW_MEMO:
+                    if any(t != current.valid_time for t, _ in _FLOW_MEMO):
+                        _FLOW_MEMO.clear()
+                    _FLOW_MEMO[key] = fetcher(current.valid_time, lead)
+                flows.append(_FLOW_MEMO[key])
+            feats = steering_features(flows, current.lat, current.lon)
+        except Exception:  # noqa: BLE001 - not published (yet), or no flow: skip the model
+            return None
+        save_steering(
+            path, feats, FetchTask(track.storm_id, current.valid_time, current.lat, current.lon),
+        )
+    vec = np.asarray(feats, dtype=np.float32).reshape(-1)
+    return vec if np.isfinite(vec).all() else None
+
+
 def build_live_cnn_x(
     track: Track, current: Fix, cache_dir: Path | str,
     *, fields_fetcher: FieldsFetcher | None = None, basins: Sequence[str] = (),
@@ -214,13 +291,18 @@ def build_live_cnn_x(
 def build_live_transformer_x(
     track: Track, current: Fix, cache_dir: Path | str,
     *, fields_fetcher: FieldsFetcher | None = None, basins: Sequence[str] = (),
+    steering: np.ndarray | None = None,
 ) -> np.ndarray | None:
+    """``steering``: the cycle's `fetch_live_steering` vector, for a
+    version that reads it (``arch_params``' ``n_steering``); ``None`` for
+    one that doesn't. The caller decides which, since a version that reads
+    steering can't run without it."""
     from .real_run_transformer import transformer_input
 
     fields = (fields_fetcher or _current_fields)(track, current, cache_dir)
     if fields is None:
         return None
-    return transformer_input(fields, track.storm_id, basins)
+    return transformer_input(fields, track.storm_id, basins, steering=steering)
 
 
 def build_live_pinn_x(

@@ -240,6 +240,66 @@ def test_cmd_train_actually_transitions_a_promotable_candidate_to_staging(
     assert registry.latest("lstm").stage is Stage.STAGING
 
 
+def test_cmd_train_register_only_leaves_a_promotable_candidate_unstaged(
+    tmp_path, monkeypatch
+):
+    """Champions serve from staging while no version is in production, so
+    staging a new version changes what is served: --register-only keeps a
+    candidate out until someone decides (Decision Log 68)."""
+    monkeypatch.setattr(
+        "anemoi.training.real_run.run_lstm_curriculum",
+        lambda *args, **kwargs: _fake_curriculum_run("lstm"),
+    )
+    _fake_checkpoint_store(monkeypatch)
+    monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [])
+
+    registry_root = tmp_path / "registry"
+    args = argparse.Namespace(
+        model="lstm", hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
+        era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
+        registry_root=str(registry_root), streaming=False, batch_size=None,
+        num_workers=0, register_only=True,
+    )
+    assert cli.cmd_train(args) == 0
+    assert ModelRegistry(registry_root).latest("lstm").stage is Stage.NONE
+
+
+def test_cmd_train_steering_is_a_transformer_input_only(tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        "anemoi.training.real_run_cnn.run_cnn_curriculum",
+        lambda *a, **k: called.append(1),
+    )
+    args = argparse.Namespace(
+        model="cnn", hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
+        era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
+        registry_root=str(tmp_path / "registry"), streaming=True, batch_size=None,
+        num_workers=0, steering_cache_dir=str(tmp_path),
+    )
+    assert cli.cmd_train(args) == 1
+    assert not called
+
+
+def test_cmd_train_passes_the_steering_cache_to_the_transformer(tmp_path, monkeypatch):
+    captured: dict = {}
+
+    def fake(*a, **k):
+        captured.update(k)
+        return _fake_curriculum_run("transformer")
+
+    monkeypatch.setattr("anemoi.training.real_run_transformer.run_transformer_curriculum", fake)
+    _fake_checkpoint_store(monkeypatch)
+    monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [])
+    args = argparse.Namespace(
+        model="transformer", hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
+        era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
+        registry_root=str(tmp_path / "registry"), streaming=True, batch_size=None,
+        num_workers=0, steering_cache_dir=str(tmp_path / "steer"), register_only=True,
+    )
+    assert cli.cmd_train(args) == 0
+    assert captured["steering_cache_dir"] == str(tmp_path / "steer")
+
+
 # --- cmd_train_schedule dispatch ---------------------------------------------
 
 

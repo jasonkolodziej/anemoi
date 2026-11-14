@@ -207,8 +207,12 @@ def steering_vector(
     return vec if np.isfinite(vec).all() else None
 
 
-def write_meta(cache_dir: Path | str) -> None:
-    meta = {
+def steering_meta() -> dict:
+    """The settings the features are computed with: written as the cache's
+    meta, and recorded on a model version that reads them (the
+    ``steering_inputs`` registry tag), so serving can refuse features that
+    differ from what the version was trained on."""
+    return {
         "feature_version": FEATURE_VERSION,
         "leads_h": list(STEERING_LEADS_H),
         "nwp_lag_h": NWP_LAG_H,
@@ -218,6 +222,10 @@ def write_meta(cache_dir: Path | str) -> None:
         "beta_drift_ms": list(BETA_DRIFT_MS),
         "feature_names": list(FEATURE_NAMES),
     }
+
+
+def write_meta(cache_dir: Path | str) -> None:
+    meta = steering_meta()
     path = Path(cache_dir) / CACHE_META_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
 

@@ -122,7 +122,7 @@ def _build_joint_latent(
         load_trained_model,
         load_trained_pinn_candidate,
     )
-    from .real_inference_cycle import _build_live_x
+    from .real_inference_cycle import _build_live_x, _live_steering_for
     from .real_inference_live import build_live_pinn_x
     from .real_latents import GROUP1_ORDER
 
@@ -147,8 +147,14 @@ def _build_joint_latent(
                 candidate_basins=basin_inputs(version.tags, CANDIDATE_BASIN_INPUTS_TAG),
             )
         else:
+            steering, steering_reason = _live_steering_for(
+                name, version, track, current, cache_dir, None,
+            )
+            if steering_reason is not None:
+                return None  # a steering Transformer without its steering can't run
             raw = _build_live_x(
                 name, track, current, cache_dir, basins=basin_inputs(version.tags),
+                steering=steering,
             )
         if raw is None:
             return None

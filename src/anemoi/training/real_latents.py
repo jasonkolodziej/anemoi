@@ -196,11 +196,42 @@ def joint_stage_windows(
     return train_windows, val_windows
 
 
+#: Where a Transformer that reads forecast-lead steering (Decision Log 68)
+#: finds each window's features (``anemoi steering-cache``'s --cache-dir)
+#: when the caller passes no ``steering_cache_dir``: the jobs that extract
+#: latents (train-schedule, spread-backtest, validation-forecasts, ...) set
+#: it once in the image's entrypoint instead of each growing a flag.
+STEERING_CACHE_ENV = "ANEMOI_STEERING_CACHE_DIR"
+
+
+def _steering_source(trained_artifacts, steering_cache_dir):
+    """``(storm_id, valid_time) -> vector | None`` for the Transformer's
+    steering channels, or ``None`` when the version doesn't read steering.
+    Raises when it does and no cache is configured: its input can't be
+    built without them."""
+    import os
+
+    from ..data.steering import steering_vector
+    from .real_run_transformer import n_steering_of
+
+    transformer_a = trained_artifacts["transformer"]
+    if not n_steering_of(getattr(transformer_a, "arch_params", None)):
+        return None
+    cache = steering_cache_dir or os.environ.get(STEERING_CACHE_ENV)
+    if not cache:
+        raise ValueError(
+            "the Transformer reads forecast-lead steering (arch_params n_steering); pass "
+            f"steering_cache_dir or set {STEERING_CACHE_ENV}"
+        )
+    return lambda storm_id, valid_time: steering_vector(cache, storm_id, valid_time)
+
+
 def _extract_for_tracks(
     windows: Iterable[StageWindow],
     trained_artifacts: dict[str, RunArtifacts],
     gdas_cache_dir: Path | str,
     device=None,
+    steering_cache_dir: Path | str | None = None,
 ) -> JointLatentSamples:
     from .real_run_cnn import cnn_input
     from .real_run_gnn import batch_graph, build_mesh_topology, gnn_input
@@ -235,6 +266,7 @@ def _extract_for_tracks(
     topo = None
     shape: tuple[int, int] | None = None
     gh, gw = GRID_SIZE
+    steering_of = _steering_source(trained_artifacts, steering_cache_dir)
 
     for sw in windows:
         task = FetchTask(
@@ -264,7 +296,14 @@ def _extract_for_tracks(
         # with (`basin_input`): none, for a version from before the basin
         # input existed.
         cnn_stack = cnn_input(fields, sw.storm_id, cnn_a.basins)
-        trf_stack = transformer_input(fields, sw.storm_id, transformer_a.basins)
+        steering = None
+        if steering_of is not None:
+            steering = steering_of(sw.storm_id, sw.current.valid_time)
+            if steering is None:
+                continue  # the Transformer can't run without it, as in training and serving
+        trf_stack = transformer_input(
+            fields, sw.storm_id, transformer_a.basins, steering=steering,
+        )
         node_features = gnn_input(fields, topo, sw.storm_id, gnn_a.basins)
         if cnn_stack is None or trf_stack is None or node_features is None:
             continue
@@ -403,6 +442,7 @@ def extract_joint_latents(
     seed: int = 20260806,
     n_augment: int = 1,
     device=None,
+    steering_cache_dir: Path | str | None = None,
 ) -> JointLatentBundle:
     """Extract real per-window latents/predictions/context from the five
     trained Group 1 models, split train/val the same storm-disjoint way
@@ -413,14 +453,19 @@ def extract_joint_latents(
     development on Apple Silicon can force ``"cpu"``, sidestepping a real
     torch/MPS ``nn.LSTM`` platform bug ("Placeholder storage has not been
     allocated on MPS device") that CUDA (the real training VM) doesn't have.
+    ``steering_cache_dir``: for a Transformer that reads forecast-lead
+    steering (default: `STEERING_CACHE_ENV`); a window without features is
+    skipped.
     """
     _require_group1(trained_artifacts)
     train_windows, val_windows = joint_stage_windows(tracks, seed=seed, n_augment=n_augment)
     train_samples = _extract_for_tracks(
         train_windows, trained_artifacts, gdas_cache_dir, device=device,
+        steering_cache_dir=steering_cache_dir,
     )
     val_samples = _extract_for_tracks(
         val_windows, trained_artifacts, gdas_cache_dir, device=device,
+        steering_cache_dir=steering_cache_dir,
     )
     return JointLatentBundle(train=train_samples, val=val_samples)
 
@@ -433,6 +478,7 @@ def extract_validation_latents(
     seed: int = 20260806,
     n_augment: int = 1,
     device=None,
+    steering_cache_dir: Path | str | None = None,
 ) -> JointLatentSamples:
     """`extract_joint_latents`' ``val`` alone, for a job that only scores
     the validation windows: the same windows and working fixes, without
@@ -442,7 +488,10 @@ def extract_validation_latents(
     """
     _require_group1(trained_artifacts)
     _train, val_windows = joint_stage_windows(tracks, seed=seed, n_augment=n_augment)
-    return _extract_for_tracks(val_windows, trained_artifacts, gdas_cache_dir, device=device)
+    return _extract_for_tracks(
+        val_windows, trained_artifacts, gdas_cache_dir, device=device,
+        steering_cache_dir=steering_cache_dir,
+    )
 
 
 def _require_group1(trained_artifacts: dict[str, RunArtifacts]) -> None:
