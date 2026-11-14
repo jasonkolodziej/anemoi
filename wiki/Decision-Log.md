@@ -911,6 +911,22 @@ Phase 1 of docs/multi_basin.md after its first training run (decision 57), track
 
 ---
 
+### 68. Forecast-lead GFS steering becomes a model input, by the pre-registered exit rule — *training, data*
+
+**Question** (docs/skill_gap_plan.md, Phase 1, step 2): the models see one GDAS f006 snapshot, so nothing tells them how the steering flow evolves over the next 48 h. Is that the missing input behind the 248 nm Atlantic 48 h error, or is it the models?
+
+**Tested:** `anemoi steering-spike` (`training.steering_spike`, features from `data.steering`). One Stage A, then per seed two Stage B arms from the same weights, on the same windows, same window draw and batch order. The steering arm adds 54 features (f006–f054 of the t−6 GFS run: per lead, the deep-layer-mean wind and 850–200 hPa shear averaged over a 5° disc that follows a beta-advection track, and that track's cumulative east and north displacement from the starting fix, in nm) as constant channels through a zero-initialised conv beside the patch embedding, so both arms start as the same function. Nothing registered.
+
+**Result** (`docs/backtests/2026-11-13-steering-spike-transformer.json`; seeds 20260806 and 20260807): Atlantic 48 h, 255 cases, 15 storms, steering minus baseline −77 nm [−106, −49] and −76 nm [−106, −46] (storm-block intervals), 248 → 171 nm; the two baselines differ by −0.7 nm [−3.0, 1.3]. East Pacific −8 and −12 nm, intervals spanning zero (138 cases, 10 storms). Central Pacific is one storm: not read.
+
+**What it doesn't separate.** Stage B freezes everything outside the head in both arms, and the steering arm adds one trainable path, the steering conv. So the gain is the benefit of steering *plus* that added input path; the spike has no matched-capacity control (the same conv fed steering from other windows, or shuffled). It doesn't change the decision, since the input path ships with the input, but a later claim that the information alone is worth 77 nm needs that control.
+
+**Decided:** the exit rule's first branch. Forecast-lead steering becomes a registry input, trained and served from the t−6 GFS cycle (train/serve parity: AWS `noaa-gfs-bdp-pds` holds 2021 onward). 171 nm is still 2.4 times the 70 nm gate and behind AVNI (66 nm on AL B), so this is a necessary input, not the whole fix.
+
+**Enforced by** `tests/test_steering.py` (features against hand values; the advected track; the cache and its meta under concurrent writers), `tests/test_steering_spike.py` (both arms start as the same function; Stage B trains the steering conv and keeps the rest frozen; with zero steering the two arms are the same run, which fails without the reseed; arms validated on different windows are refused).
+
+---
+
 ## Implementation → rebrand
 
 ### 14. Two product names for one platform — *naming*
