@@ -224,6 +224,32 @@ def steering_meta() -> dict:
     }
 
 
+def steering_meta_digest(meta: dict | None = None) -> str:
+    """A short digest of :func:`steering_meta` (or ``meta``): names a cache
+    namespace, so features computed with other settings are never read."""
+    import hashlib
+
+    text = json.dumps(steering_meta() if meta is None else meta, sort_keys=True)
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+def require_meta(cache_dir: Path | str) -> None:
+    """Raise unless ``cache_dir`` has a ``_meta.json`` equal to this build's
+    :func:`steering_meta`. ``feature_version`` in each file only catches a
+    definition change someone remembered to version; the meta records every
+    setting, so a cache computed with other settings is refused before a
+    model trains on it or reads it."""
+    path = Path(cache_dir) / CACHE_META_NAME
+    try:
+        old = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"steering cache {cache_dir} has no readable {CACHE_META_NAME}: "
+                         f"{exc}") from exc
+    if old != steering_meta():
+        raise ValueError(f"steering cache {cache_dir} was computed with other settings "
+                         f"than this build's: {old}")
+
+
 def write_meta(cache_dir: Path | str) -> None:
     meta = steering_meta()
     path = Path(cache_dir) / CACHE_META_NAME

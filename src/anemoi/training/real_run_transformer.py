@@ -544,7 +544,7 @@ def run_transformer_curriculum(
     cached features, drops a window that has none, and trains the conv
     besides the head. ``arch_params`` records ``n_steering``.
     """
-    from ..data.steering import STEERING_DIM, steering_vector
+    from ..data.steering import STEERING_DIM, require_meta, steering_meta, steering_vector
     from ..models.transformer import STEERING_PARAM_PREFIX, build_transformer
 
     require_torch()
@@ -553,6 +553,8 @@ def run_transformer_curriculum(
     n_steering = STEERING_DIM if steering_cache_dir is not None else 0
     if n_steering and not streaming:
         raise ValueError("the steering input needs streaming=True")
+    if n_steering:
+        require_meta(steering_cache_dir)  # the tag will record this build's settings
     zeros = np.zeros(n_steering)
     rng = np.random.default_rng(seed)
     curriculum = Curriculum.standard("transformer", **(curriculum_kwargs or {}))
@@ -618,5 +620,6 @@ def run_transformer_curriculum(
     artifacts = RunArtifacts(
         model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
         arch_params=arch_params, basins=basins,
+        steering_inputs=steering_meta() if n_steering else None,
     )
     return run, val_metrics, artifacts

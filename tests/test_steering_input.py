@@ -126,14 +126,38 @@ def test_steering_tag_only_for_a_version_that_reads_steering():
 
     assert steering_input_tags(SimpleNamespace(arch_params={"d_model": 16})) == {}
     assert steering_input_tags(None) == {}
-    tags = steering_input_tags(SimpleNamespace(arch_params={"n_steering": DIM}))
+    tags = steering_input_tags(SimpleNamespace(arch_params={"n_steering": DIM},
+                                               steering_inputs=steering.steering_meta()))
     assert json.loads(tags[STEERING_INPUTS_TAG]) == steering.steering_meta()
+    with pytest.raises(ValueError, match="record the settings"):
+        steering_input_tags(SimpleNamespace(arch_params={"n_steering": DIM},
+                                            steering_inputs=None))
 
 
 def test_cache_meta_is_the_same_settings_the_tag_records(tmp_path):
     steering.write_meta(tmp_path)
     assert json.loads((tmp_path / steering.CACHE_META_NAME).read_text()) == (
         steering.steering_meta())
+    steering.require_meta(tmp_path)
+
+
+def test_a_cache_without_meta_or_with_other_settings_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="no readable"):
+        steering.require_meta(tmp_path)
+    (tmp_path / steering.CACHE_META_NAME).write_text("{not json")
+    with pytest.raises(ValueError, match="no readable"):
+        steering.require_meta(tmp_path)
+    other = {**steering.steering_meta(), "beta_drift_ms": [0.0, 0.0]}
+    (tmp_path / steering.CACHE_META_NAME).write_text(json.dumps(other))
+    with pytest.raises(ValueError, match="other settings"):
+        steering.require_meta(tmp_path)
+
+
+def test_the_settings_digest_changes_with_any_setting():
+    base = steering.steering_meta_digest()
+    assert base == steering.steering_meta_digest(steering.steering_meta())
+    assert base != steering.steering_meta_digest(
+        {**steering.steering_meta(), "disc_radius_deg": 4.0})
 
 
 # --------------------------------------------------------------------------- #
@@ -160,7 +184,9 @@ def test_live_steering_matches_the_training_features_and_is_cached(tmp_path):
     assert vec.shape == (DIM,)
     assert np.allclose(vec, expected)
     assert [lead for _, lead in calls] == list(steering.STEERING_LEADS_H)
-    assert live.live_steering_path(tmp_path, track.storm_id, current).exists()
+    path = live.live_steering_path(tmp_path, track.storm_id, current)
+    assert path.exists()
+    assert steering.steering_meta_digest() in path.parts  # other settings: another directory
 
     # a second storm in the same cycle reuses the fetched flows
     other = make_track("AL022022", 2022, n=4, seed=3)  # same valid times, other positions
@@ -323,6 +349,7 @@ def test_curriculum_with_steering_trains_the_conv_in_stage_b_only(tmp_path):
         cache_all_fixes(era5, t, Flavor.ERA5_PRETRAIN)
         cache_all_fixes(gdas, t, Flavor.GDAS_FINETUNE)
         cache_steering(steer, t, rng)
+    steering.write_meta(steer)
     client = _FakeS3Client()
     store = CheckpointStore(S3Config(
         endpoint_url="https://example.r2.cloudflarestorage.com", bucket="anemoi-test",
@@ -335,6 +362,7 @@ def test_curriculum_with_steering_trains_the_conv_in_stage_b_only(tmp_path):
     )
     assert run.complete
     assert artifacts.arch_params["n_steering"] == DIM
+    assert artifacts.steering_inputs == steering.steering_meta()
 
     def extra_of(stage):
         key = next(k for k in client.objects if f"/transformer/{stage}/" in k)
@@ -373,13 +401,16 @@ def test_curriculum_without_steering_records_no_n_steering(tmp_path):
     assert "n_steering" not in artifacts.arch_params
 
 
-def test_curriculum_refuses_steering_without_streaming(tmp_path):
+def test_curriculum_refuses_steering_without_streaming_or_without_the_cache_meta(tmp_path):
     pytest.importorskip("torch")
     from anemoi.training.real_run_transformer import run_transformer_curriculum
 
     with pytest.raises(ValueError, match="streaming"):
         run_transformer_curriculum(_curriculum_tracks(), None, tmp_path, tmp_path,
                                    steering_cache_dir=tmp_path)
+    with pytest.raises(ValueError, match="no readable"):
+        run_transformer_curriculum(_curriculum_tracks(), None, tmp_path, tmp_path,
+                                   steering_cache_dir=tmp_path, streaming=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -393,13 +424,23 @@ def test_latents_need_a_steering_cache_for_a_steering_transformer(tmp_path, monk
     monkeypatch.delenv(STEERING_CACHE_ENV, raising=False)
     plain = {"transformer": SimpleNamespace(arch_params={"d_model": 16})}
     assert _steering_source(plain, None) is None
-    steer = {"transformer": SimpleNamespace(arch_params={"n_steering": DIM})}
+    meta = steering.steering_meta()
+    steer = {"transformer": SimpleNamespace(arch_params={"n_steering": DIM},
+                                            steering_inputs=meta)}
     with pytest.raises(ValueError, match=STEERING_CACHE_ENV):
         _steering_source(steer, None)
+    for recorded in (None, {**meta, "disc_radius_deg": 3.0}):
+        other = {"transformer": SimpleNamespace(arch_params={"n_steering": DIM},
+                                                steering_inputs=recorded)}
+        with pytest.raises(ValueError, match="other settings"):
+            _steering_source(other, tmp_path)
 
     track = make_track("AL012022", 2022, n=3)
     cache_steering(tmp_path, track, np.random.default_rng(0), skip={track.fixes[1].valid_time})
     monkeypatch.setenv(STEERING_CACHE_ENV, str(tmp_path))
+    with pytest.raises(ValueError, match="no readable"):  # a cache with no meta
+        _steering_source(steer, None)
+    steering.write_meta(tmp_path)
     source = _steering_source(steer, None)
     assert source(track.storm_id, track.fixes[0].valid_time).shape == (DIM,)
     assert source(track.storm_id, track.fixes[1].valid_time) is None

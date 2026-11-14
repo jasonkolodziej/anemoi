@@ -201,13 +201,22 @@ STEERING_INPUTS_TAG = "steering_inputs"
 
 def steering_input_tags(artifacts: object) -> dict[str, str]:
     """``{STEERING_INPUTS_TAG: ...}`` for a run whose ``arch_params`` has
-    ``n_steering`` > 0, else nothing."""
+    ``n_steering`` > 0 (the settings it trained with, ``steering_inputs``),
+    else nothing."""
     arch = getattr(artifacts, "arch_params", None) or {}
     if not int(arch.get("n_steering", 0)):
         return {}
-    from ..data.steering import steering_meta
+    meta = getattr(artifacts, "steering_inputs", None)
+    if meta is None:
+        raise ValueError("a run that reads steering must record the settings it trained with")
+    return {STEERING_INPUTS_TAG: json.dumps(meta, sort_keys=True)}
 
-    return {STEERING_INPUTS_TAG: json.dumps(steering_meta(), sort_keys=True)}
+
+def steering_inputs(tags: dict[str, str]) -> dict | None:
+    """A version's recorded steering settings (`STEERING_INPUTS_TAG`), or
+    ``None``."""
+    raw = tags.get(STEERING_INPUTS_TAG)
+    return None if raw is None else json.loads(raw)
 
 
 def basin_inputs(tags: dict[str, str], tag: str = BASIN_INPUTS_TAG) -> tuple[str, ...]:

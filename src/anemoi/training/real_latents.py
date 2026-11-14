@@ -207,22 +207,29 @@ STEERING_CACHE_ENV = "ANEMOI_STEERING_CACHE_DIR"
 def _steering_source(trained_artifacts, steering_cache_dir):
     """``(storm_id, valid_time) -> vector | None`` for the Transformer's
     steering channels, or ``None`` when the version doesn't read steering.
-    Raises when it does and no cache is configured: its input can't be
-    built without them."""
+    Raises when it does and its input can't be built as it was trained: no
+    cache configured, or the version, the cache and this build don't all
+    record the same steering settings."""
     import os
 
-    from ..data.steering import steering_vector
+    from ..data.steering import require_meta, steering_meta, steering_vector
     from .real_run_transformer import n_steering_of
 
     transformer_a = trained_artifacts["transformer"]
     if not n_steering_of(getattr(transformer_a, "arch_params", None)):
         return None
+    if getattr(transformer_a, "steering_inputs", None) != steering_meta():
+        raise ValueError(
+            "the Transformer was trained on steering computed with other settings than this "
+            f"build's (or recorded none): {getattr(transformer_a, 'steering_inputs', None)}"
+        )
     cache = steering_cache_dir or os.environ.get(STEERING_CACHE_ENV)
     if not cache:
         raise ValueError(
             "the Transformer reads forecast-lead steering (arch_params n_steering); pass "
             f"steering_cache_dir or set {STEERING_CACHE_ENV}"
         )
+    require_meta(cache)
     return lambda storm_id, valid_time: steering_vector(cache, storm_id, valid_time)
 
 

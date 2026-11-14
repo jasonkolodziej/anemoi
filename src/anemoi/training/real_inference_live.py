@@ -216,9 +216,13 @@ _FLOW_MEMO: dict[tuple[datetime, int], object] = {}
 
 def live_steering_path(cache_dir: Path | str, storm_id: str, current: Fix) -> Path:
     """Where a live cycle's steering features are kept: by storm, time and
-    position, as `live_cache_path` keys the fields."""
+    position, as `live_cache_path` keys the fields, under a directory named
+    by this build's settings (`data.steering.steering_meta_digest`), so
+    features computed with other settings are never read back."""
+    from ..data.steering import steering_meta_digest
+
     name = f"{current.valid_time:%Y%m%d%H}_{current.lat:+.2f}_{current.lon:+.2f}.npz"
-    return Path(cache_dir) / "live_steering" / storm_id / name
+    return Path(cache_dir) / "live_steering" / steering_meta_digest() / storm_id / name
 
 
 def fetch_live_steering(
