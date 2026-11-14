@@ -1431,11 +1431,15 @@ def assemble_validation_forecasts(
     forecasts[PERSISTENCE] = persistence_abs
 
     def scored(pred: np.ndarray) -> dict:
-        has = np.isfinite(pred).all(axis=-1)
+        # Only the rows this forecast has: sample counts count rows, not
+        # the mask. Fusion and the Group 1 set have every row.
+        rows = np.isfinite(pred).all(axis=(1, 2))
+        if not rows.any():
+            return {}
         return validation_metrics(
-            Flavor.GDAS_FINETUNE, np.where(has[..., None], pred, 0.0), val.true_absolute,
-            np.asarray(val.mask) & has, val_storm_ids=val.storm_ids,
-            persistence_abs=persistence_abs,
+            Flavor.GDAS_FINETUNE, pred[rows], np.asarray(val.true_absolute)[rows],
+            np.asarray(val.mask)[rows], val_storm_ids=np.asarray(val.storm_ids)[rows],
+            persistence_abs=persistence_abs[rows],
         ).values
 
     recomputed = {name: scored(pred) for name, pred in forecasts.items() if name != PERSISTENCE}
@@ -1639,7 +1643,7 @@ def collect_validation_forecasts(
             entry = registry.get(model, version)
         except RegistryError as exc:
             raise BaselineBacktestError(str(exc)) from exc
-        swapped = {**artifacts, model: load_run_artifacts(model, entry.version, checkpoint_store)}
+        swapped = {**artifacts, model: load_run_artifacts(model, entry, checkpoint_store)}
         try:
             other = extract_validation_latents(
                 tracks, swapped, gdas_cache_dir, seed=seed, n_augment=n_augment, device=device,

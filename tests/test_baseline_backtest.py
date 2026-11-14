@@ -613,6 +613,18 @@ def test_an_extra_version_is_dumped_beside_fusions_set_on_the_cases_it_has(
     assert file.header["extra_models"] == ["transformer_v9"]
     assert "transformer_v9" in file.header["recomputed"]
     assert all(np.isfinite(v) for v in file.header["recomputed"]["transformer_v9"].values())
+    extra_n = sum(v for k, v in file.header["recomputed"]["transformer_v9"].items()
+                  if k.endswith("val_samples"))
+    fusion_n = sum(v for k, v in file.header["recomputed"]["fusion"].items()
+                   if k.endswith("val_samples"))
+    assert extra_n == fusion_n - 1  # the window it has no forecast for isn't counted
+    none = assemble_validation_forecasts(
+        val, fusion_abs, cases, versions={}, latent_signature="sig",
+        registered=_registered(val, fusion_abs),
+        extra_forecasts={"transformer_v9": np.full_like(extra, np.nan)},
+    )
+    assert none.consistent and none.header["recomputed"]["transformer_v9"] == {}
+    assert "forecasts for 0 of" in format_forecast_check(none)
     assert "transformer_v9: forecasts for" in format_forecast_check(file)
 
     path = tmp_path / "forecasts.json"
@@ -645,3 +657,63 @@ def test_an_extra_versions_rows_are_aligned_by_storm_and_time(cases, archive):
     np.testing.assert_allclose(got[1:], val.predictions[1:, i] + 1.0)
     with pytest.raises(BaselineBacktestError, match="working fix"):
         _aligned(val, replace(other, base_lat=other.base_lat + 0.1), i)
+
+
+def test_an_extra_version_is_loaded_from_its_registry_entry(cases, archive, monkeypatch):
+    torch = pytest.importorskip("torch")
+    from types import SimpleNamespace
+
+    from anemoi.tracking.registry import GROUP1_MODELS, latent_signature
+    from anemoi.training import real_inference
+    from anemoi.training.baseline_backtest import collect_validation_forecasts
+
+    tracks, _ = archive
+    val = _latents(cases, archive)
+    versions = {m: 1 for m in GROUP1_MODELS}
+    entries = {
+        (m, v): SimpleNamespace(name=m, version=v, tags={}, metrics={})
+        for m in GROUP1_MODELS for v in (1, 9)
+    }
+    fusion = SimpleNamespace(version=12, latent_signature=latent_signature(versions), tags={})
+
+    class Registry:
+        def get(self, name, version):
+            return fusion if name == "fusion" else entries[(name, version)]
+
+        def champion(self, name):
+            return fusion if name == "fusion" else entries[(name, 1)]
+
+    loaded = []
+
+    def load_run_artifacts(name, version, _store):
+        assert version is entries[(name, version.version)]  # the entry, not its number
+        loaded.append((name, version.version))
+        return SimpleNamespace(version=version.version)
+
+    def extract(_tracks, artifacts, *_a, steering_cache_dir=None, **_k):
+        if artifacts["transformer"].version == 9:
+            assert steering_cache_dir == "/steer"
+            return replace(val, predictions=val.predictions + 1.0)
+        return val
+
+    class Fusion(torch.nn.Module):
+        def forward(self, predictions, _context):
+            return predictions[:, 0]
+
+    monkeypatch.setattr(real_inference, "load_run_artifacts", load_run_artifacts)
+    monkeypatch.setattr(real_inference, "load_trained_model", lambda *_a: (Fusion(), None))
+    monkeypatch.setattr(real_latents, "extract_validation_latents", extract)
+    out = collect_validation_forecasts(
+        tracks, Registry(), None, "/gdas", extra_versions={"transformer": 9},
+        steering_cache_dir="/steer",
+    )
+    extras = out[-1]
+    assert ("transformer", 9) in loaded
+    model, version, pred = extras["transformer_v9"]
+    assert (model, version) == ("transformer", 9)
+    i = GROUP1_ORDER.index("transformer")
+    np.testing.assert_allclose(pred, val.predictions[:, i] + 1.0)
+    with pytest.raises(BaselineBacktestError, match="not a Group 1 model"):
+        collect_validation_forecasts(
+            tracks, Registry(), None, "/gdas", extra_versions={"fusion": 1},
+        )
