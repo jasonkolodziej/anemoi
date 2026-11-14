@@ -489,6 +489,16 @@ anemoi baseline-backtest --hurdat2 hurdat2.txt --adeck-dir <the cache adeck-fetc
   --out docs/backtests/<date>-homogeneous-baseline-val2024-fusion-v12.json
 ```
 
+To test a Group 1 version fusion wasn't trained on (an unstaged retrain, say) on the same cases, add `--also MODEL=VERSION` (repeatable). That version runs on the same validation windows, in place of fusion's own version of that model, and is written beside the others as `MODEL_vVERSION`. Where it had no input (a steering Transformer on a window without steering), its forecast is `null`. Fusion's registry check is unchanged, and fusion is never run on the extra version. For a version that reads forecast-lead steering, pass `--steering-cache-dir` (or rely on `ANEMOI_STEERING_CACHE_DIR`). For the steering Transformer v9 against fusion v12's set:
+
+```bash
+gcloud run jobs execute anemoi-train-schedule --region us-central1 \
+  --task-timeout 3600s \
+  --args=validation-forecasts,--hurdat2,/app/data/hurdat2-atl.txt,--gdas-cache-dir,/cache/gdas_cache_f006,--registry-root,/tmp/registry,--fusion-version,12,--also,transformer=9,--steering-cache-dir,/cache/steering_f006,--out,/cache/backtests/validation-forecasts-fusion-v12-transformer-v9-val2024.json
+```
+
+Then score `--models transformer_v9,transformer,fusion`. Each row is that sample's homogeneous cases, so the windows v9 has no forecast for drop out of every member's numbers.
+
 ## Common env knobs
 
 - `MODE=sequential|parallel`

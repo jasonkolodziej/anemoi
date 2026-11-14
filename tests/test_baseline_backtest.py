@@ -32,6 +32,7 @@ from anemoi.training.baseline_backtest import (
     RegisteredError,
     TechniqueSpec,
     ValidationForecasts,
+    _aligned,
     assemble_validation_forecasts,
     format_forecast_check,
     format_report,
@@ -594,3 +595,53 @@ def test_registered_error_spec():
     assert RegisteredError.parse("fusion:AL:48=231") == RegisteredError("fusion", "AL", 48, 231.0)
     with pytest.raises(BaselineBacktestError):
         RegisteredError.parse("fusion AL 48 231")
+
+
+def test_an_extra_version_is_dumped_beside_fusions_set_on_the_cases_it_has(
+    cases, archive, tmp_path,
+):
+    val = _latents(cases, archive)
+    fusion_abs = cases.obs_abs + [0.05, 0.0, 0.5]
+    extra = cases.obs_abs + [0.02, 0.0, 0.0]
+    extra[0] = np.nan  # a steering Transformer had no steering for the first window
+    file = assemble_validation_forecasts(
+        val, fusion_abs, cases, versions={"fusion": 12, "transformer_v9": 9},
+        latent_signature="sig", registered=_registered(val, fusion_abs),
+        extra_forecasts={"transformer_v9": extra},
+    )
+    assert file.consistent  # fusion's own check is untouched
+    assert file.header["extra_models"] == ["transformer_v9"]
+    assert "transformer_v9" in file.header["recomputed"]
+    assert all(np.isfinite(v) for v in file.header["recomputed"]["transformer_v9"].values())
+    assert "transformer_v9: forecasts for" in format_forecast_check(file)
+
+    path = tmp_path / "forecasts.json"
+    file.write(path)
+    assert "NaN" not in path.read_text()
+    back = ValidationForecasts.read(path)
+    assert np.isnan(back.forecasts["transformer_v9"][0]).all()
+    (member,), _ = model_members(cases, back, ["transformer_v9"])
+    assert "v9" in member.description
+    assert int((~member.has_track.any(axis=1)).sum()) == 1  # only the window it had no input for
+
+    with pytest.raises(BaselineBacktestError, match="replace a dumped one"):
+        assemble_validation_forecasts(
+            val, fusion_abs, cases, versions={}, latent_signature=None, registered={},
+            extra_forecasts={"transformer": extra},
+        )
+
+
+def test_an_extra_versions_rows_are_aligned_by_storm_and_time(cases, archive):
+    val = _latents(cases, archive)
+    keep = np.arange(1, len(val))
+    other = replace(
+        val, predictions=val.predictions[keep] + 1.0, base_lat=val.base_lat[keep],
+        base_lon=val.base_lon[keep], storm_ids=tuple(np.asarray(val.storm_ids)[keep]),
+        valid_times=tuple(np.asarray(val.valid_times, dtype=object)[keep]),
+    )
+    i = GROUP1_ORDER.index("transformer")
+    got = _aligned(val, other, i)
+    assert np.isnan(got[0]).all()
+    np.testing.assert_allclose(got[1:], val.predictions[1:, i] + 1.0)
+    with pytest.raises(BaselineBacktestError, match="working fix"):
+        _aligned(val, replace(other, base_lat=other.base_lat + 0.1), i)

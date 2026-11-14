@@ -505,7 +505,8 @@ class ValidationForecasts:
                 "init_time": f"{init:%Y%m%d%H}",
                 "base": [float(self.base_lat[i]), float(self.base_lon[i])],
                 "forecasts": {
-                    model: _rounded(values[i]).tolist() for model, values in self.forecasts.items()
+                    model: _json_rows(_rounded(values[i]))
+                    for model, values in self.forecasts.items()
                 },
             })
         return {**self.header, "models": list(self.forecasts), "cases": cases}
@@ -555,6 +556,12 @@ class ValidationForecasts:
         except (OSError, ValueError) as exc:
             raise BaselineBacktestError(f"cannot read {path}: {exc}") from exc
         return cls.from_dict(body)
+
+
+def _json_rows(values: np.ndarray) -> list:
+    """Nested lists, with ``null`` for a missing (NaN) value: valid JSON,
+    and `from_dict`'s ``dtype=float`` reads it back as NaN."""
+    return [[None if not np.isfinite(x) else float(x) for x in row] for row in values]
 
 
 def _rounded(values: np.ndarray) -> np.ndarray:
@@ -1387,6 +1394,7 @@ def assemble_validation_forecasts(
     hurdat2: Mapping[str, object] | None = None,
     trained_on_hurdat2_sha256: str | None = None,
     git_commit: str | None = None,
+    extra_forecasts: Mapping[str, np.ndarray] | None = None,
 ) -> ValidationForecasts:
     """Build the per-case forecast file from the validation latents (each
     Group 1 model's forecast per window) and fusion's forecast for them,
@@ -1399,6 +1407,10 @@ def assemble_validation_forecasts(
     fusion's registered per-basin sample counts, persistence errors and own
     errors are all reproduced. The Group 1 models' registered numbers are
     from their own noise draws and are shown, not checked.
+
+    ``extra_forecasts`` (`collect_validation_forecasts`' ``extras``) are
+    written beside them under their own names, NaN where they have no
+    forecast; their metrics are recomputed on the rows they have.
     """
     if len(val.valid_times) != len(val) or len(val.storm_ids) != len(val):
         raise BaselineBacktestError("the validation latents carry no storm ids or valid times")
@@ -1412,15 +1424,21 @@ def assemble_validation_forecasts(
         name: np.asarray(val.predictions[:, i], dtype=float) for i, name in enumerate(GROUP1_ORDER)
     }
     forecasts["fusion"] = np.asarray(fusion_abs, dtype=float)
+    for name, pred in (extra_forecasts or {}).items():
+        if name in forecasts or name == PERSISTENCE:
+            raise BaselineBacktestError(f"extra forecast {name!r} would replace a dumped one")
+        forecasts[name] = np.asarray(pred, dtype=float)
     forecasts[PERSISTENCE] = persistence_abs
 
-    recomputed = {
-        name: validation_metrics(
-            Flavor.GDAS_FINETUNE, pred, val.true_absolute, val.mask,
-            val_storm_ids=val.storm_ids, persistence_abs=persistence_abs,
+    def scored(pred: np.ndarray) -> dict:
+        has = np.isfinite(pred).all(axis=-1)
+        return validation_metrics(
+            Flavor.GDAS_FINETUNE, np.where(has[..., None], pred, 0.0), val.true_absolute,
+            np.asarray(val.mask) & has, val_storm_ids=val.storm_ids,
+            persistence_abs=persistence_abs,
         ).values
-        for name, pred in forecasts.items() if name != PERSISTENCE
-    }
+
+    recomputed = {name: scored(pred) for name, pred in forecasts.items() if name != PERSISTENCE}
     checks = []
     for key, value in sorted(registered.get("fusion", {}).items()):
         if key not in recomputed["fusion"]:
@@ -1455,6 +1473,7 @@ def assemble_validation_forecasts(
             else read_sha == trained_on_hurdat2_sha256
         ),
         "versions": dict(versions),
+        "extra_models": list(extra_forecasts or {}),
         "latent_signature": latent_signature,
         "n_cases": len(val),
         "n_enumerated": len(cases),
@@ -1501,6 +1520,16 @@ def format_forecast_check(forecasts: ValidationForecasts) -> str:
     for key in sorted(registered):
         if key.endswith(("track_error_48h_nm", "val_samples")):
             lines.append(f"{'fusion ' + key:<40}{registered[key]:>12.2f}{recomputed[key]:>12.2f}")
+    for name in header.get("extra_models", []):
+        reg = header.get("registered", {}).get(name, {})
+        rec = header.get("recomputed", {}).get(name, {})
+        n = int(np.isfinite(forecasts.forecasts[name]).all(axis=(1, 2)).sum())
+        lines.append(f"{name}: forecasts for {n} of {len(forecasts)} windows "
+                     "(registered numbers are its own training's, shown, not checked)")
+        for key in sorted(rec):
+            if key.endswith("track_error_48h_nm"):
+                got = f"{reg[key]:>12.2f}" if key in reg else f"{'-':>12}"
+                lines.append(f"{name + ' ' + key:<40}{got}{rec[key]:>12.2f}")
     if header.get("same_hurdat2_as_training") is False:
         lines.append(
             "note: this HURDAT2 is not the file fusion was trained on; the checks below say "
@@ -1544,14 +1573,25 @@ def collect_validation_forecasts(
     seed: int = 20260806,
     n_augment: int = 1,
     fusion_version: int | None = None,
+    extra_versions: Mapping[str, int] | None = None,
+    steering_cache_dir: Path | str | None = None,
     device=None,
 ):
     """The torch half: load fusion and the Group 1 versions it was trained
     on, and run them on the validation windows. Returns ``(val, fusion_abs,
-    versions, fusion, served)``: the validation `JointLatentSamples`,
+    versions, fusion, served, extras)``: the validation `JointLatentSamples`,
     fusion's ``(n, n_leads, 3)`` absolute forecast for them, the versions
-    used, fusion's registered version, and whether those Group 1 versions
-    are the champions served today.
+    used, fusion's registered version, whether those Group 1 versions
+    are the champions served today, and the ``extra_versions`` forecasts.
+
+    ``extra_versions`` (``{"transformer": 9}``) also runs other registered
+    versions of Group 1 models on the same windows, each in place of
+    fusion's own version of that model, for a paired test of a version
+    fusion wasn't trained on. Each comes back as ``extras[f"{model}_v{N}"]
+    = (model, N, forecast)``, aligned to ``val``'s rows, NaN where that
+    version had no input (a steering Transformer skips a window without
+    steering). Fusion is never run on them. ``steering_cache_dir`` is the
+    steering cache for a version that reads it (`real_latents`).
 
     Fusion is the champion unless ``fusion_version`` names one. Its Group 1
     inputs come from its own ``latent_signature``, not from today's
@@ -1591,7 +1631,45 @@ def collect_validation_forecasts(
             torch.as_tensor(val.predictions, dtype=torch.float32),
             torch.as_tensor(val.context, dtype=torch.float32),
         ).cpu().numpy()
-    return val, fusion_abs, {**versions, "fusion": fusion.version}, fusion, served
+    extras: dict[str, tuple[str, int, np.ndarray]] = {}
+    for model, version in (extra_versions or {}).items():
+        if model not in GROUP1_MODELS:
+            raise BaselineBacktestError(f"{model} is not a Group 1 model")
+        try:
+            entry = registry.get(model, version)
+        except RegistryError as exc:
+            raise BaselineBacktestError(str(exc)) from exc
+        swapped = {**artifacts, model: load_run_artifacts(model, entry.version, checkpoint_store)}
+        try:
+            other = extract_validation_latents(
+                tracks, swapped, gdas_cache_dir, seed=seed, n_augment=n_augment, device=device,
+                steering_cache_dir=steering_cache_dir,
+            )
+        except ValueError as exc:
+            raise BaselineBacktestError(f"{model} v{version}: {exc}") from exc
+        extras[f"{model}_v{entry.version}"] = (
+            model, entry.version, _aligned(val, other, GROUP1_ORDER.index(model)),
+        )
+    return val, fusion_abs, {**versions, "fusion": fusion.version}, fusion, served, extras
+
+
+def _aligned(val, other, index: int) -> np.ndarray:
+    """``other``'s forecast from Group 1 model ``index``, on ``val``'s rows
+    (matched by storm and valid time); NaN where ``other`` has no row.
+    Raises if a shared row starts from a different fix: then the two runs
+    did not draw the same working tracks."""
+    keys = zip(other.storm_ids, other.valid_times, strict=True)
+    at = {(s, t): i for i, (s, t) in enumerate(keys)}
+    out = np.full(np.asarray(val.predictions[:, index]).shape, np.nan)
+    for i, key in enumerate(zip(val.storm_ids, val.valid_times, strict=True)):
+        j = at.get(key)
+        if j is None:
+            continue
+        if (abs(other.base_lat[j] - val.base_lat[i]) > 1e-6
+                or abs(other.base_lon[j] - val.base_lon[i]) > 1e-6):
+            raise BaselineBacktestError(f"window {key} starts from a different working fix")
+        out[i] = other.predictions[j, index]
+    return out
 
 
 def dump_validation_forecasts(
@@ -1604,6 +1682,8 @@ def dump_validation_forecasts(
     seed: int = 20260806,
     n_augment: int = 1,
     fusion_version: int | None = None,
+    extra_versions: Mapping[str, int] | None = None,
+    steering_cache_dir: Path | str | None = None,
     hurdat2: Mapping[str, object] | None = None,
     git_commit: str | None = None,
     device=None,
@@ -1611,18 +1691,23 @@ def dump_validation_forecasts(
     """`collect_validation_forecasts`, then `assemble_validation_forecasts`."""
     from ..tracking.registry import GROUP1_MODELS
 
-    val, fusion_abs, versions, fusion, served = collect_validation_forecasts(
+    val, fusion_abs, versions, fusion, served, extras = collect_validation_forecasts(
         tracks, registry, checkpoint_store, gdas_cache_dir,
-        seed=seed, n_augment=n_augment, fusion_version=fusion_version, device=device,
+        seed=seed, n_augment=n_augment, fusion_version=fusion_version,
+        extra_versions=extra_versions, steering_cache_dir=steering_cache_dir, device=device,
     )
     registered = {"fusion": dict(fusion.metrics)}
     for name in GROUP1_MODELS:
         registered[name] = dict(registry.get(name, versions[name]).metrics)
+    for label, (model, version, _pred) in extras.items():
+        registered[label] = dict(registry.get(model, version).metrics)
     forecasts = assemble_validation_forecasts(
         val, fusion_abs, validation_cases(tracks, statuses, seed=seed, n_augment=n_augment),
-        versions=versions, latent_signature=fusion.latent_signature, registered=registered,
+        versions={**versions, **{label: v for label, (_m, v, _p) in extras.items()}},
+        latent_signature=fusion.latent_signature, registered=registered,
         hurdat2=hurdat2, trained_on_hurdat2_sha256=fusion.tags.get("hurdat2_sha256"),
         git_commit=git_commit,
+        extra_forecasts={label: pred for label, (_m, _v, pred) in extras.items()},
     )
     forecasts.header["group1_served_today"] = served
     return forecasts
