@@ -1,0 +1,151 @@
+{
+ "kind": "steering_spike",
+ "question": "does forecast-lead GFS steering along an advected track move 48 h error toward the 70 nm gate (docs/skill_gap_plan.md Phase 1, step 2)",
+ "gate_lead_h": 48,
+ "seeds": [
+  20260806,
+  20260807
+ ],
+ "n_augment": 3,
+ "steering_dim": 54,
+ "stage_a_val_loss": 1.1975676061015843,
+ "arms": [
+  {
+   "arm": "baseline",
+   "seed": 20260806,
+   "val_loss": 1.4153617405081051,
+   "n_val_windows": 607,
+   "mean_48h_nm": 205.09197403730798
+  },
+  {
+   "arm": "steering",
+   "seed": 20260806,
+   "val_loss": 1.3232348829347886,
+   "n_val_windows": 607,
+   "mean_48h_nm": 159.61361766925222
+  },
+  {
+   "arm": "baseline",
+   "seed": 20260807,
+   "val_loss": 1.4123606577755514,
+   "n_val_windows": 607,
+   "mean_48h_nm": 204.63866907429048
+  },
+  {
+   "arm": "steering",
+   "seed": 20260807,
+   "val_loss": 1.3230633205079436,
+   "n_val_windows": 607,
+   "mean_48h_nm": 159.4388895551648
+  }
+ ],
+ "steering_minus_baseline": {
+  "20260806": {
+   "AL": {
+    "n_cases": 255,
+    "n_storms": 15,
+    "baseline_mean_nm": 248.47496654950515,
+    "steering_mean_nm": 171.08551022468424,
+    "mean_diff_nm": -77.38945632482093,
+    "ci95": [
+     -105.58436921159505,
+     -49.187503360330666
+    ],
+    "beat_rate": 0.7372549019607844
+   },
+   "EP": {
+    "n_cases": 138,
+    "n_storms": 10,
+    "baseline_mean_nm": 150.7277811733317,
+    "steering_mean_nm": 142.3521034098323,
+    "mean_diff_nm": -8.375677763499402,
+    "ci95": [
+     -57.330949172135846,
+     39.26473213065703
+    ],
+    "beat_rate": 0.5579710144927537
+   },
+   "CP": {
+    "n_cases": 30,
+    "n_storms": 1,
+    "baseline_mean_nm": 86.4118248579228,
+    "steering_mean_nm": 141.50549654141165,
+    "mean_diff_nm": 55.093671683488836,
+    "ci95": null,
+    "beat_rate": 0.23333333333333334
+   }
+  },
+  "20260807": {
+   "AL": {
+    "n_cases": 255,
+    "n_storms": 15,
+    "baseline_mean_nm": 247.81427646661783,
+    "steering_mean_nm": 171.89213286495612,
+    "mean_diff_nm": -75.92214360166172,
+    "ci95": [
+     -106.01486030240237,
+     -46.39861754095225
+    ],
+    "beat_rate": 0.7411764705882353
+   },
+   "EP": {
+    "n_cases": 138,
+    "n_storms": 10,
+    "baseline_mean_nm": 150.58958556593274,
+    "steering_mean_nm": 138.8091924813976,
+    "mean_diff_nm": -11.780393084535111,
+    "ci95": [
+     -60.20010807924813,
+     38.414847789548034
+    ],
+    "beat_rate": 0.5652173913043478
+   },
+   "CP": {
+    "n_cases": 30,
+    "n_storms": 1,
+    "baseline_mean_nm": 86.27179037795386,
+    "steering_mean_nm": 148.4829279612676,
+    "mean_diff_nm": 62.21113758331376,
+    "ci95": null,
+    "beat_rate": 0.2
+   }
+  }
+ },
+ "baseline_seed_noise": {
+  "20260807_minus_20260806": {
+   "AL": {
+    "n_cases": 255,
+    "n_storms": 15,
+    "baseline_mean_nm": 248.47496654950515,
+    "baseline_other_seed_mean_nm": 247.81427646661783,
+    "mean_diff_nm": -0.660690082887362,
+    "ci95": [
+     -2.9661989202935883,
+     1.272014245620211
+    ],
+    "beat_rate": 0.5215686274509804
+   },
+   "EP": {
+    "n_cases": 138,
+    "n_storms": 10,
+    "baseline_mean_nm": 150.7277811733317,
+    "baseline_other_seed_mean_nm": 150.58958556593274,
+    "mean_diff_nm": -0.1381956073989604,
+    "ci95": [
+     -3.9373399876623076,
+     3.2876057788894704
+    ],
+    "beat_rate": 0.5144927536231884
+   },
+   "CP": {
+    "n_cases": 30,
+    "n_storms": 1,
+    "baseline_mean_nm": 86.4118248579228,
+    "baseline_other_seed_mean_nm": 86.27179037795386,
+    "mean_diff_nm": -0.14003447996895144,
+    "ci95": null,
+    "beat_rate": 0.5333333333333333
+   }
+  }
+ }
+}

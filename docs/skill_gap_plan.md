@@ -11,7 +11,7 @@ ticked when its work has landed, with what was found written under it. The
 
 ## Where things stand
 
-The track gap is the priority: fusion v12's 48 h Atlantic track error is 231 nm, against a 70 nm promotion gate and NHC's 51 nm 2026 target. Ocean inputs mainly improve intensity, so they run alongside the track work instead of ahead of it.
+The track gap is the priority: fusion v12's 48 h Atlantic track error is 231 nm, against a 70 nm promotion gate and NHC's 51 nm 2026 target. The steering spike (Phase 1, step 2) showed forecast-lead GFS steering is a missing input: −77 nm on the Transformer's Atlantic 48 h error, so it becomes a model input next. Ocean inputs mainly improve intensity, so they run alongside the track work instead of ahead of it.
 
 Only two of the ten registry sources feed a model today (commit `3838fcc`, 2026-11-12). `Role.OPERATIONAL` means a source is allowed to be read, not that a model reads it. Since `b672fca` the registry
 records the second fact too: `data.sources.used_by`, served as `used_by` by
@@ -90,6 +90,8 @@ This phase answers one question fast: is the 231 nm error a missing-input proble
    - `data/steering.py`: from the t−6 run that Stage B's crops already come from, f006–f054 (valid t … t+48 h), the 850–200 hPa pressure-weighted deep-layer-mean wind and the 850–200 hPa shear, each averaged over a 5° disc. The disc follows a beta-advection track: every 6 h, move with the disc-mean DLM wind plus a 2 m/s northwestward beta drift. That gives 9 leads × (u, v, shear u, shear v, track dx, dy) = 54 features per window, cached per (storm, time) like the crops, by `anemoi steering-cache` (one fetch per valid time, shared across storms; sharded across Cloud Run tasks). On Idalia at 2023-08-29 12Z the track runs 361 nm north and 9 nm east at 24 h, against the real 325 nm and 70 nm: BAM-quality placement.
    - `training/steering_spike.py` (`anemoi steering-spike`): Stage A once, then for each seed two Stage B arms from the same weights, on the same windows (those with steering), with the same window draw and shuffle seed. *Baseline* uses the usual channels; *steering* adds the 54 features as constant channels through their own zero-initialised conv beside the patch embedding, so both arms start as the same function. Stage B's freezing (everything outside the head) holds in both arms; the steering conv is the one extra trainable part, and both arms are reseeded so they see the same batch order. It reports each basin's 48 h mean error per arm, the paired difference (steering − baseline) with a storm-block interval, and the baseline's difference across seeds as the noise floor. Nothing is registered or uploaded.
    - **Read it as:** a gain on Atlantic 48 h whose interval excludes zero and that is larger than the seed-to-seed noise means forecast-lead steering is a missing input (the exit rule's "make it a registry input"); no gain means the architectures come next, with AVNO as the one stronger retry.
+   - **Result (2026-11-13,** `docs/backtests/2026-11-13-steering-spike-transformer.json`**): steering is a missing input.** Two seeds, 423 validation windows with a 48 h target. Atlantic 48 h (255 cases, 15 storms): baseline 248 → steering 171 nm, a paired −77 nm [−106, −49] on seed 20260806 and −76 nm [−106, −46] on 20260807; steering wins 74% of cases. The baselines of the two seeds differ by −0.7 nm [−3.0, 1.3], so the gain is about 25 times the run-to-run noise. East Pacific (138 cases, 10 storms): −8 and −12 nm, intervals spanning zero. Central Pacific is one storm (30 cases), +55 and +62 nm, no interval: not readable. The steering conv's weights moved off zero (|w| ≈ 2,150) in both seeds.
+   - **What it doesn't say.** 171 nm is still 2.4 times the 70 nm gate and well behind AVNI (66 nm on AL B), so steering closes 43% of the gap from baseline to gate, not all of it. The spike trained only Stage B's head and one conv on constant channels; a model trained with the leads from Stage A, or one that reads the advected track directly as a prior, may close more. The case set is the spike's (windows with steering and a 48 h target), close to but not the same as sample B.
 3. **AIFS feasibility check (in parallel).** Check how far back archived AIFS forecasts go, in what format, and their latency. ECMWF reports AIFS cuts TC position error substantially versus IFS but has a weak-intensity bias, so treat it as a track input only.
    - **Done: a baseline now, not a trained input.** Operational AIFS Single starts with the 06 UTC run of 2025-02-25 (v1.1 from 2025-08-27, v2 from 2026-05-12); AIFS ENS with 06 UTC 2025-07-01. The AWS open-data mirror also keeps experimental AIFS for every cycle from 06 UTC 2024-02-28 to 2025-02-25. So nothing covers the 2021–2023 training years, experimental AIFS covers the 2024 validation season and operational AIFS the 2025 test season. AIFS v2 was itself fine-tuned on 2018–2024 analyses, so every Stage B year is inside some version's training data.
    - Format: 0.25° GRIB2, one file per 6 h step to 360 h, with a JSON index for byte-range reads; u and v at 850–200 hPa and mean sea-level pressure in every version checked; AIFS Single also issues track BUFR.
@@ -98,6 +100,8 @@ This phase answers one question fast: is the 231 nm error a missing-input proble
    - As a baseline: NHC's archived 2025 a-decks carry EAIO/EAII (252 cycles, 00/12 UTC only); none of the 2024 decks or the 2026 public decks do (real-time access is restricted). For 2024, tracks would come from the open-data BUFR or fields. Revisit AIFS as an input only if Stage B can train on the AIFS era or handle a missing AIFS input for earlier years.
 
 **Exit:** If step 2 moves 48 h AL error clearly toward the 70 nm gate, make forecast-lead steering a registry input (train/serve: GFS f-leads from the t−6 cycle). If not, go back to the architectures before adding more sources.
+
+**Exit taken (2026-11-13): make forecast-lead steering a registry input** (Decision Log 68). Step 2 moved Atlantic 48 h error 77 nm toward the gate, replicated across seeds and far outside seed noise. Next: the `data.steering` features as a model input in training and serving (GFS f006–f054 from the t−6 cycle, as in the spike), which needs a live fetch path in inference, then retrain and re-run the paired test against AVNI.
 
 ## Phase 2: Ocean inputs (runs alongside Phase 1)
 
@@ -212,7 +216,7 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 - ~~**No OHC for 2021–2022.**~~ Not a risk: CoastWatch's older `na`/`np` chain covers 2021–2023 in full (Phase 0).
 - **The forecast-lead input breaks train/serve parity.** Training must use GFS leads from the t−6 cycle, the same as serving. AWS `noaa-gfs-bdp-pds` holds 2021 onward, so this is covered.
 - ~~**Version switch.**~~ The grid, units and values didn't change (Phase 0). What did: the file format (NetCDF-3 → HDF5) and, from 2025 day 85, the name's date, which makes test and live inputs a day fresher than training ones unless files are indexed by creation day.
-- **Fusion trails GFS's own track: confirmed.** The pre-registered paired test (Phase 1, step 1) puts fusion 154 nm [112, 202] behind AVNI on Atlantic B at 48 h and 122 nm [89, 164] on C. So the steering spike (step 2) is the next test and the architectures are the fallback, as the exit rule says.
+- **Fusion trails GFS's own track: confirmed.** The pre-registered paired test (Phase 1, step 1) puts fusion 154 nm [112, 202] behind AVNI on Atlantic B at 48 h and 122 nm [89, 164] on C. The steering spike (step 2) recovered 77 nm of it on the Transformer, so forecast-lead steering becomes an input; the rest of the gap is still open.
 - **Training crops are centred on the final best track.** Live crops are centred on the working fix, so in serving the storm sits off the centre pixel by the working-fix error, which training never shows (Decision Log 67). Sizing it is inference-only: score the champions on validation crops re-centred on emulated positions.
 - **An OHC outage inside the training years.** 2022 days 201–204 and 208–216 have degraded altimetry and no replacement; 69 EP training fixes read them (Phase 0).
 - **Small samples.** With 58 Atlantic training storms and 18 in validation, per-basin gains can be noise. Report them per lead, with storm-level bootstrap intervals, before promoting.
@@ -234,10 +238,14 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-13.** Steering spike result (Phase 1, step 2): Atlantic 48 h
+  −77 nm [−106, −49] and −76 nm [−106, −46] on two seeds (248 → 171 nm);
+  seed noise −0.7 nm [−3.0, 1.3]; EP −8 and −12 nm, intervals span zero.
+  Exit taken: forecast-lead steering becomes a registry input (Decision
+  Log 68). JSON in `docs/backtests/`.
 - **2026-11-13.** Steering-along-track spike built (Phase 1, step 2):
   `data/steering.py`, `anemoi steering-cache`, `anemoi steering-spike`.
   Track advected through the GFS fields, leads to 48 h, no registry.
-  Waiting on the cache job and the GPU run.
 - **2026-11-13.** Dropout-0.1 retrain (Phase 0 spread item): diffusion and
   fusion v13 staged. Overall track spread now calibrated from 48 h; the
   recurving long-lead cases are still under 0.8 (96 h along 0.71, 120 h
