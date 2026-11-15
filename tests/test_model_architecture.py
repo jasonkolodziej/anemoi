@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("torch")
 
 from anemoi.models.architecture import DESCRIBABLE_MODELS, describe, resolved_params  # noqa: E402
+from anemoi.training.steering_input import STEERING_MODELS  # noqa: E402
 
 
 @pytest.mark.parametrize("name", DESCRIBABLE_MODELS)
@@ -39,7 +40,7 @@ def test_a_versions_arch_params_change_what_is_described():
     assert rnn.output_shape[-1] == 16
 
 
-@pytest.mark.parametrize("name", ["cnn", "transformer", "gnn", "pinn"])
+@pytest.mark.parametrize("name", STEERING_MODELS)
 def test_a_version_that_reads_steering_is_described(name):
     # Steering versions (Decision Log 68) take 54 more input features; the
     # example input must carry them or describing the version raises (the
