@@ -511,7 +511,9 @@ def _forward(name, model, x, steer, torch):
         edge_index = torch.tensor([[0, 1, 2], [1, 2, 0]])
         return model(inp, edge_index, torch.zeros(3, 3), center_index=0)
     env = x if steer is None else torch.cat([x, steer], 1)
-    return model(env, torch.randn(1, 7, 3, generator=torch.Generator().manual_seed(1)))
+    # The trunk's output, not the forecast: the correction head starts at
+    # zero, so the forecast is the candidate whatever the trunk computes.
+    return model.encode(env, torch.randn(1, 7, 3, generator=torch.Generator().manual_seed(1)))
 
 
 @pytest.mark.torch
@@ -636,3 +638,23 @@ def test_unfreeze_refuses_a_steering_path_that_isnt_there():
     with pytest.raises(ValueError, match="no parameter"):
         unfreeze(model, ("embed.extra.",))
     unfreeze(model, ())  # nothing asked, nothing checked
+
+
+def test_one_forecast_call_fetches_steering_once_failures_included(tmp_path):
+    from anemoi.training.real_inference_cycle import shared_steering
+
+    track = make_track("AL012022", 2022, n=4)
+    calls = []
+
+    def fetch(track_, current_, cache_dir_):
+        calls.append(current_.valid_time)
+        return None  # e.g. a lead not published yet
+
+    once = shared_steering(fetch)
+    for _ in range(4):  # four models that read steering
+        assert once(track, track.fixes[-1], tmp_path) is None
+    assert calls == [track.fixes[-1].valid_time]
+    once(track, track.fixes[-2], tmp_path)  # another time is its own fetch
+    assert len(calls) == 2
+    shared_steering(fetch)(track, track.fixes[-1], tmp_path)  # the next call retries
+    assert len(calls) == 3

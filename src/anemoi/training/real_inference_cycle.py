@@ -245,6 +245,26 @@ def _build_live_context(track: Track, current: Fix) -> np.ndarray | None:
     return _context_features(sw)
 
 
+def shared_steering(steering_fetcher: SteeringFetcher | None) -> SteeringFetcher:
+    """One forecast invocation's steering source: ``steering_fetcher`` (or
+    `real_inference_live.fetch_live_steering`), called at most once per
+    storm and time, its result kept, ``None`` included. Every model that
+    reads steering then shares one fetch, and a failed one isn't retried
+    per model; the next invocation starts a new one, so it retries."""
+    from .real_inference_live import fetch_live_steering
+
+    fetch = steering_fetcher or fetch_live_steering
+    seen: dict = {}
+
+    def fetcher(track, current, cache_dir):
+        key = (track.storm_id, current.valid_time)
+        if key not in seen:
+            seen[key] = fetch(track, current, cache_dir)
+        return seen[key]
+
+    return fetcher
+
+
 def _live_steering_for(
     name: str, version, track: Track, current: Fix, cache_dir: Path | str,
     steering_fetcher: SteeringFetcher | None,
@@ -375,9 +395,10 @@ def build_real_deterministic_fn(
     deterministic stack rather than a separate parallel implementation of
     it that could quietly drift out of sync with what operationally runs.
 
-    ``steering_fetcher`` overrides the forecast-lead steering source for a
-    Transformer version that reads it (default
-    `real_inference_live.fetch_live_steering`; Decision Log 68).
+    ``steering_fetcher`` overrides the forecast-lead steering source for
+    the versions that read it (default
+    `real_inference_live.fetch_live_steering`; Decision Log 68), shared
+    by all of them within one call (`shared_steering`).
 
     Raises `InferenceCycleError` if no real model could contribute at
     all (no registered version in staging/production, no cached field,
@@ -433,13 +454,14 @@ def build_real_deterministic_fn(
         env_features = _compute_env_features(
             track, current, cache_dir, fields_fetcher=shared_fetcher,
         )
+        steering_once = shared_steering(steering_fetcher)
 
         for name in _GROUP1_LIVE_MODELS:
             if name == "pinn":
                 version = registry.production("pinn") or registry.in_stage("pinn", Stage.STAGING)
                 steering, steering_reason = (
                     _live_steering_for(
-                        name, version, track, current, cache_dir, steering_fetcher,
+                        name, version, track, current, cache_dir, steering_once,
                     ) if version is not None else (None, None)
                 )
                 abs_pred = None if steering_reason is not None else _run_pinn(
@@ -462,7 +484,7 @@ def build_real_deterministic_fn(
                 abs_pred = None
                 steering, steering_reason = (
                     _live_steering_for(
-                        name, version, track, current, cache_dir, steering_fetcher,
+                        name, version, track, current, cache_dir, steering_once,
                     ) if version is not None else (None, None)
                 )
                 if version is None:
