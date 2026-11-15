@@ -125,20 +125,24 @@ def _example_inputs(
 ) -> tuple[list, dict, list[TensorInfo]]:
     """Positional args, keyword args, and their description, for one forward."""
     n_leads = len(spec.lead_hours)
+    # A version that reads forecast-lead steering (Decision Log 68) takes
+    # its features after the usual inputs: extra constant channels (CNN,
+    # Transformer), node columns (GNN) or environment entries (PINN).
+    n_steer = int(params.get("n_steering", 0) or 0)
     if name == "lstm":
         x = torch.randn(1, SEQUENCE_LENGTH, params["input_dim"])
         return [x], {}, [TensorInfo("track history", list(x.shape))]
     if name == "cnn":
-        x = torch.randn(1, params["in_channels"], GRID_CELLS, GRID_CELLS)
+        x = torch.randn(1, params["in_channels"] + n_steer, GRID_CELLS, GRID_CELLS)
         return [x], {}, [TensorInfo("gridded fields", list(x.shape))]
     if name == "transformer":
         rows, cols = params["grid_size"]
-        x = torch.randn(1, params["n_variables"], rows, cols)
+        x = torch.randn(1, params["n_variables"] + n_steer, rows, cols)
         return [x], {}, [TensorInfo("gridded fields", list(x.shape))]
     if name == "gnn":
         side = (GRID_CELLS - 1) // GNN_STRIDE + 1
         x, edge_index, edge_attr, center = _lattice(
-            torch, side, side, params["node_features"], params["edge_features"]
+            torch, side, side, params["node_features"] + n_steer, params["edge_features"]
         )
         return [x, edge_index, edge_attr], {"center_index": center}, [
             TensorInfo("node features", list(x.shape)),
@@ -146,7 +150,7 @@ def _example_inputs(
             TensorInfo("edge features", list(edge_attr.shape)),
         ]
     if name == "pinn":
-        env = torch.randn(1, params["input_dim"])
+        env = torch.randn(1, params["input_dim"] + n_steer)
         candidate = torch.randn(1, n_leads, 3)
         return [env, candidate], {}, [
             TensorInfo("environment", list(env.shape)),

@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("torch")
 
 from anemoi.models.architecture import DESCRIBABLE_MODELS, describe, resolved_params  # noqa: E402
+from anemoi.training.steering_input import STEERING_MODELS  # noqa: E402
 
 
 @pytest.mark.parametrize("name", DESCRIBABLE_MODELS)
@@ -37,6 +38,20 @@ def test_a_versions_arch_params_change_what_is_described():
     assert small.total_params < default.total_params
     rnn = next(layer for layer in small.layers if layer.path == "rnn")
     assert rnn.output_shape[-1] == 16
+
+
+@pytest.mark.parametrize("name", STEERING_MODELS)
+def test_a_version_that_reads_steering_is_described(name):
+    # Steering versions (Decision Log 68) take 54 more input features; the
+    # example input must carry them or describing the version raises (the
+    # console's 500 for cnn v9 and transformer v9).
+    from anemoi.data.steering import STEERING_DIM
+
+    plain = describe(name)
+    steering = describe(name, {"n_steering": STEERING_DIM})
+
+    assert steering.total_params > plain.total_params
+    assert any(".extra" in layer.path for layer in steering.layers)
 
 
 def test_resolved_params_fill_in_the_builders_defaults():
