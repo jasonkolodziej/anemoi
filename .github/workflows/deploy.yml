@@ -289,11 +289,23 @@ jobs:
             exit 1
           fi
           latest=$(git ls-remote origin refs/heads/main | cut -f1)
-          if [[ "$latest" != "$GITHUB_SHA" ]]; then
+          if [[ "$latest" == "$GITHUB_SHA" ]]; then
+            echo "current=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # graphify.yml's rebuild lands on main moments after most merges,
+          # with [skip ci], so it never gets a Deploy run of its own. A
+          # commit that is behind main only by such commits ships nothing
+          # older than main, so it still deploys; otherwise this run would
+          # skip and there'd be no newer run to approve.
+          git fetch --quiet --depth=100 origin main
+          if git merge-base --is-ancestor "$GITHUB_SHA" "$latest" \
+            && [[ -z "$(git diff --name-only "$GITHUB_SHA" "$latest" -- . ':(exclude)graphify-out')" ]]; then
+            echo "::notice::main is at ${latest:0:7}, ahead of ${GITHUB_SHA:0:7} only in graphify-out/; deploying ${GITHUB_SHA:0:7}."
+            echo "current=true" >>"$GITHUB_OUTPUT"
+          else
             echo "::notice::main has moved on to ${latest:0:7}; not deploying ${GITHUB_SHA:0:7}. Approve the newest Deploy run instead -- it includes these changes."
             echo "current=false" >>"$GITHUB_OUTPUT"
-          else
-            echo "current=true" >>"$GITHUB_OUTPUT"
           fi
 
       - name: Set up pnpm
