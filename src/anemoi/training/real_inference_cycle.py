@@ -59,8 +59,8 @@ def _build_live_x(
 ):
     """``name``'s live input. ``basins`` is what the version being served
     was trained with (`tracking.experiment_tracking.basin_inputs`): its
-    input has to be built the same way. ``steering`` (Transformer only):
-    the cycle's steering vector, for a version that reads it."""
+    input has to be built the same way. ``steering``: the cycle's steering
+    vector, for a version that reads it (`_live_steering_for`)."""
     from .real_inference_live import (
         build_live_cnn_x,
         build_live_gnn_x,
@@ -72,11 +72,11 @@ def _build_live_x(
         return build_live_lstm_x(track, current, basins=basins)
     gridded = {"fields_fetcher": fields_fetcher, "basins": basins}
     if name == "cnn":
-        return build_live_cnn_x(track, current, cache_dir, **gridded)
+        return build_live_cnn_x(track, current, cache_dir, steering=steering, **gridded)
     if name == "transformer":
         return build_live_transformer_x(track, current, cache_dir, steering=steering, **gridded)
     if name == "gnn":
-        return build_live_gnn_x(track, current, cache_dir, **gridded)
+        return build_live_gnn_x(track, current, cache_dir, steering=steering, **gridded)
     raise InferenceCycleError(f"no real live feature builder for {name!r}")
 
 
@@ -107,7 +107,7 @@ def _compute_env_features(
 def _run_pinn(
     registry: ModelRegistry, checkpoint_store: CheckpointStore,
     track: Track, current: Fix, cache_dir: Path | str,
-    *, fields_fetcher: FieldsFetcher | None = None,
+    *, fields_fetcher: FieldsFetcher | None = None, steering: np.ndarray | None = None,
 ) -> np.ndarray | None:
     """PINN's own (n_leads, 3) absolute prediction -- structurally
     different from the other four: two real models to load (the
@@ -116,6 +116,8 @@ def _run_pinn(
     already absolute, module docstring's own note). Returns ``None`` for
     any of the same real reasons the other models' path can: no
     registered version, no real live feature, no checkpoint to load.
+    ``steering``: the cycle's steering vector for a version that reads it
+    (`_live_steering_for`, which the caller checks first).
     """
     from ..tracking.experiment_tracking import CANDIDATE_BASIN_INPUTS_TAG, basin_inputs
     from ..tracking.registry import Stage
@@ -140,6 +142,7 @@ def _run_pinn(
         track, current, candidate_model, cache_dir, fields_fetcher=fields_fetcher,
         basins=basin_inputs(version.tags),
         candidate_basins=basin_inputs(version.tags, CANDIDATE_BASIN_INPUTS_TAG),
+        steering=steering,
     )
     if raw is None:
         return None
@@ -242,12 +245,32 @@ def _build_live_context(track: Track, current: Fix) -> np.ndarray | None:
     return _context_features(sw)
 
 
+def shared_steering(steering_fetcher: SteeringFetcher | None) -> SteeringFetcher:
+    """One forecast invocation's steering source: ``steering_fetcher`` (or
+    `real_inference_live.fetch_live_steering`), called at most once per
+    storm and time, its result kept, ``None`` included. Every model that
+    reads steering then shares one fetch, and a failed one isn't retried
+    per model; the next invocation starts a new one, so it retries."""
+    from .real_inference_live import fetch_live_steering
+
+    fetch = steering_fetcher or fetch_live_steering
+    seen: dict = {}
+
+    def fetcher(track, current, cache_dir):
+        key = (track.storm_id, current.valid_time)
+        if key not in seen:
+            seen[key] = fetch(track, current, cache_dir)
+        return seen[key]
+
+    return fetcher
+
+
 def _live_steering_for(
     name: str, version, track: Track, current: Fix, cache_dir: Path | str,
     steering_fetcher: SteeringFetcher | None,
 ) -> tuple[np.ndarray | None, str | None]:
     """``(steering, reason)`` for one served version: ``(None, None)`` when
-    it doesn't read steering (every model but a Transformer trained with
+    it doesn't read steering (the LSTM, and any version trained without
     it; Decision Log 68); the vector when it does and the cycle has it; and
     ``(None, reason)`` when it does and can't have it, in which case the
     model skips the cycle (no stale fallback: training never saw one)."""
@@ -256,9 +279,9 @@ def _live_steering_for(
     from ..data.steering import steering_meta
     from ..tracking.experiment_tracking import STEERING_INPUTS_TAG
     from .real_inference_live import fetch_live_steering
-    from .real_run_transformer import n_steering_of
+    from .steering_input import STEERING_MODELS, n_steering_of
 
-    if name != "transformer":
+    if name not in STEERING_MODELS:
         return None, None
     try:
         n_steering = n_steering_of(json.loads(version.tags.get("arch_params", "{}")))
@@ -372,9 +395,10 @@ def build_real_deterministic_fn(
     deterministic stack rather than a separate parallel implementation of
     it that could quietly drift out of sync with what operationally runs.
 
-    ``steering_fetcher`` overrides the forecast-lead steering source for a
-    Transformer version that reads it (default
-    `real_inference_live.fetch_live_steering`; Decision Log 68).
+    ``steering_fetcher`` overrides the forecast-lead steering source for
+    the versions that read it (default
+    `real_inference_live.fetch_live_steering`; Decision Log 68), shared
+    by all of them within one call (`shared_steering`).
 
     Raises `InferenceCycleError` if no real model could contribute at
     all (no registered version in staging/production, no cached field,
@@ -430,16 +454,24 @@ def build_real_deterministic_fn(
         env_features = _compute_env_features(
             track, current, cache_dir, fields_fetcher=shared_fetcher,
         )
+        steering_once = shared_steering(steering_fetcher)
 
         for name in _GROUP1_LIVE_MODELS:
             if name == "pinn":
-                abs_pred = _run_pinn(
-                    registry, checkpoint_store, track, current, cache_dir,
-                    fields_fetcher=shared_fetcher,
-                )
                 version = registry.production("pinn") or registry.in_stage("pinn", Stage.STAGING)
+                steering, steering_reason = (
+                    _live_steering_for(
+                        name, version, track, current, cache_dir, steering_once,
+                    ) if version is not None else (None, None)
+                )
+                abs_pred = None if steering_reason is not None else _run_pinn(
+                    registry, checkpoint_store, track, current, cache_dir,
+                    fields_fetcher=shared_fetcher, steering=steering,
+                )
                 if version is None:
                     reasons[name] = "no registered staging/production version"
+                elif steering_reason is not None:
+                    reasons[name] = steering_reason
                 elif abs_pred is None:
                     reason = "no real live feature, checkpoint, or env standardisation stats"
                     if _gdas_likely_unpublished(current.valid_time):
@@ -452,7 +484,7 @@ def build_real_deterministic_fn(
                 abs_pred = None
                 steering, steering_reason = (
                     _live_steering_for(
-                        name, version, track, current, cache_dir, steering_fetcher,
+                        name, version, track, current, cache_dir, steering_once,
                     ) if version is not None else (None, None)
                 )
                 if version is None:

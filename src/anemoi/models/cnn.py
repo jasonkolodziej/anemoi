@@ -6,7 +6,11 @@ the transformer and GNN backbones and, via the latent extractor, Anemoi-Spread.
 
 from __future__ import annotations
 
-from .base import DEFAULT_LEADS, ModelSpec, require_torch
+from .base import DEFAULT_LEADS, ModelSpec, extra_input_conv, require_torch
+
+#: Parameter-name prefixes of the steering input path: the parts Stage B
+#: trains outside the head when the model reads steering.
+STEERING_PARAM_PREFIXES = ("blocks.0.conv1.extra.", "blocks.0.skip.extra.")
 
 
 def build_cnn(
@@ -15,18 +19,29 @@ def build_cnn(
     depth: int = 4,
     latent_dim: int = 256,
     lead_hours: tuple[int, ...] = DEFAULT_LEADS,
+    n_steering: int = 0,
 ):
     """Residual encoder over multi-channel storm-centred imagery.
 
     Returns ``(module, spec)``. Global average pooling at the end makes the
     encoder resolution-agnostic, which matters because GOES crop sizes differ
     between the 512 and 1024 pixel datasets in §4.3 Stage 4.
+
+    ``n_steering`` > 0 adds that many input channels after the
+    ``in_channels`` (forecast-lead steering as constant channels,
+    `data.steering`; Decision Log 68). The first block's two convs that
+    read the input (``conv1`` and ``skip``) each get a zero-initialised,
+    bias-free conv for them (`models.base.extra_input_conv`), so the model
+    computes the plain CNN until those train. With 0 (the default, and
+    every version from before the steering input) nothing changes and
+    older checkpoints load unchanged.
     """
     torch = require_torch()
     nn = torch.nn
 
     spec = ModelSpec(
-        name="cnn", input_dim=in_channels, latent_dim=latent_dim, lead_hours=lead_hours
+        name="cnn", input_dim=in_channels + n_steering, latent_dim=latent_dim,
+        lead_hours=lead_hours,
     )
 
     class ResBlock(nn.Module):
@@ -51,6 +66,10 @@ def build_cnn(
             self.blocks = nn.Sequential(
                 *[ResBlock(widths[i], widths[i + 1]) for i in range(depth)]
             )
+            if n_steering:
+                first = self.blocks[0]
+                first.conv1 = extra_input_conv(first.conv1, n_steering)
+                first.skip = extra_input_conv(first.skip, n_steering)
             self.pool = nn.AdaptiveAvgPool2d(1)
             self.project = nn.Linear(widths[-1], latent_dim)
             self.head = nn.Sequential(

@@ -242,16 +242,21 @@ def _version(arch: dict, *, tag: dict | None | str = "match"):
     return SimpleNamespace(tags=tags)
 
 
-def test_serving_gate_only_applies_to_a_steering_transformer(tmp_path):
+def test_serving_gate_only_applies_to_a_version_that_reads_steering(tmp_path):
     from anemoi.training.real_inference_cycle import _live_steering_for
 
     track = make_track("AL012022", 2022, n=4)
     current = track.fixes[-1]
     fail = lambda *a: pytest.fail("fetched for a model that doesn't read steering")  # noqa: E731
-    assert _live_steering_for("cnn", _version({"n_steering": DIM}), track, current,
+    assert _live_steering_for("lstm", _version({"n_steering": DIM}), track, current,
                               tmp_path, fail) == (None, None)
-    assert _live_steering_for("transformer", _version({"d_model": 16}, tag=None), track,
-                              current, tmp_path, fail) == (None, None)
+    for name in ("transformer", "cnn", "gnn", "pinn"):
+        assert _live_steering_for(name, _version({"d_model": 16}, tag=None), track,
+                                  current, tmp_path, fail) == (None, None)
+        vec = np.ones(DIM, dtype=np.float32)
+        got, reason = _live_steering_for(name, _version({"n_steering": DIM}), track, current,
+                                         tmp_path, lambda *a, vec=vec: vec)
+        assert reason is None and got is vec
 
 
 def test_serving_gate_feeds_the_vector_or_skips_with_a_reason(tmp_path):
@@ -418,21 +423,22 @@ def test_curriculum_refuses_steering_without_streaming_or_without_the_cache_meta
 # --------------------------------------------------------------------------- #
 
 
-def test_latents_need_a_steering_cache_for_a_steering_transformer(tmp_path, monkeypatch):
+def test_latents_need_a_steering_cache_for_a_model_that_reads_steering(tmp_path, monkeypatch):
     from anemoi.training.real_latents import STEERING_CACHE_ENV, _steering_source
 
     monkeypatch.delenv(STEERING_CACHE_ENV, raising=False)
-    plain = {"transformer": SimpleNamespace(arch_params={"d_model": 16})}
-    assert _steering_source(plain, None) is None
+    plain = {m: SimpleNamespace(arch_params={"d_model": 16})
+             for m in ("lstm", "cnn", "transformer", "gnn", "pinn")}
+    assert _steering_source(plain, None) == (None, frozenset())
     meta = steering.steering_meta()
-    steer = {"transformer": SimpleNamespace(arch_params={"n_steering": DIM},
-                                            steering_inputs=meta)}
+    reads = SimpleNamespace(arch_params={"n_steering": DIM}, steering_inputs=meta)
+    steer = {**plain, "transformer": reads, "pinn": reads}
     with pytest.raises(ValueError, match=STEERING_CACHE_ENV):
         _steering_source(steer, None)
     for recorded in (None, {**meta, "disc_radius_deg": 3.0}):
-        other = {"transformer": SimpleNamespace(arch_params={"n_steering": DIM},
-                                                steering_inputs=recorded)}
-        with pytest.raises(ValueError, match="other settings"):
+        other = {**steer, "pinn": SimpleNamespace(arch_params={"n_steering": DIM},
+                                                  steering_inputs=recorded)}
+        with pytest.raises(ValueError, match="pinn version .*other settings"):
             _steering_source(other, tmp_path)
 
     track = make_track("AL012022", 2022, n=3)
@@ -441,6 +447,214 @@ def test_latents_need_a_steering_cache_for_a_steering_transformer(tmp_path, monk
     with pytest.raises(ValueError, match="no readable"):  # a cache with no meta
         _steering_source(steer, None)
     steering.write_meta(tmp_path)
-    source = _steering_source(steer, None)
+    source, readers = _steering_source(steer, None)
+    assert readers == {"transformer", "pinn"}
     assert source(track.storm_id, track.fixes[0].valid_time).shape == (DIM,)
     assert source(track.storm_id, track.fixes[1].valid_time) is None
+
+
+# --------------------------------------------------------------------------- #
+# CNN, GNN and PINN (Decision Log 68, carried over from the Transformer)
+# --------------------------------------------------------------------------- #
+
+
+def test_gridded_inputs_append_steering_after_the_basin_inputs():
+    from anemoi.training.real_run_cnn import CNN_FIELD_NAMES, cnn_input
+    from anemoi.training.real_run_gnn import build_mesh_topology, gnn_input
+    from anemoi.training.real_run_pinn import pinn_environment
+
+    fields = _fields(datetime(2022, 8, 1, tzinfo=UTC))
+    vec = np.arange(DIM, dtype=np.float32)
+    basins = ("AL", "EP")
+
+    plain = cnn_input(fields, "AL012022", basins)
+    x = cnn_input(fields, "AL012022", basins, steering=vec)
+    n = len(CNN_FIELD_NAMES) + 2
+    assert plain.shape[0] == n and x.shape == (n + DIM, *plain.shape[1:])
+    assert np.array_equal(x[:n], plain) and np.all(x[n + 7] == 7.0)
+
+    topo = build_mesh_topology(fields.shape)
+    plain = gnn_input(fields, topo, "AL012022", basins)
+    x = gnn_input(fields, topo, "AL012022", basins, steering=vec)
+    assert x.shape == (plain.shape[0], plain.shape[1] + DIM)
+    assert np.array_equal(x[:, :plain.shape[1]], plain)
+    assert np.array_equal(x[3, plain.shape[1]:], vec)  # the same vector on every node
+
+    plain = pinn_environment(fields, "AL012022", basins)
+    x = pinn_environment(fields, "AL012022", basins, steering=vec)
+    assert np.array_equal(x[:plain.size], plain) and np.array_equal(x[plain.size:], vec)
+
+
+def _builders():
+    from anemoi.models.cnn import build_cnn
+    from anemoi.models.gnn import build_gnn
+    from anemoi.models.pinn import build_pinn
+
+    return {
+        "cnn": (lambda n: build_cnn(in_channels=4, base_width=8, depth=2, latent_dim=16,
+                                    n_steering=n)),
+        "gnn": (lambda n: build_gnn(node_features=4, hidden_dim=16, n_layers=1, n_steering=n)),
+        "pinn": (lambda n: build_pinn(input_dim=4, hidden_dim=16, n_layers=2, n_steering=n)),
+    }
+
+
+def _forward(name, model, x, steer, torch):
+    """One forward of ``model`` on base input ``x`` plus ``steer`` (or
+    without it when ``steer`` is None)."""
+    if name == "cnn":
+        inp = x if steer is None else torch.cat(
+            [x, steer[:, :, None, None].expand(-1, -1, *x.shape[2:])], 1)
+        return model(inp)
+    if name == "gnn":
+        n_nodes = x.shape[0]
+        inp = x if steer is None else torch.cat([x, steer.expand(n_nodes, -1)], 1)
+        edge_index = torch.tensor([[0, 1, 2], [1, 2, 0]])
+        return model(inp, edge_index, torch.zeros(3, 3), center_index=0)
+    env = x if steer is None else torch.cat([x, steer], 1)
+    # The trunk's output, not the forecast: the correction head starts at
+    # zero, so the forecast is the candidate whatever the trunk computes.
+    return model.encode(env, torch.randn(1, 7, 3, generator=torch.Generator().manual_seed(1)))
+
+
+@pytest.mark.torch
+@pytest.mark.parametrize("name", ["cnn", "gnn", "pinn"])
+def test_a_zero_steering_path_computes_the_plain_model(name):
+    torch = pytest.importorskip("torch")
+    from anemoi.training.steering_input import STEERING_PARAMS
+
+    build = _builders()[name]
+    torch.manual_seed(0)
+    plain, plain_spec = build(0)
+    steer_model, spec = build(5)
+    assert spec.input_dim == plain_spec.input_dim + 5
+    keys = set(steer_model.state_dict())
+    extra = {k for k in keys if k.startswith(STEERING_PARAMS[name])}
+    assert extra and all(k.endswith(".weight") for k in extra)  # bias-free
+    assert not any(".extra." in k for k in plain.state_dict())  # old layout unchanged
+
+    # the steering model with the plain one's weights, and its zero path
+    renamed = {}
+    for k, v in plain.state_dict().items():
+        for prefix in STEERING_PARAMS[name]:
+            owner = prefix[: -len("extra.")]
+            if k.startswith(owner):
+                k = owner + "base." + k[len(owner):]
+        renamed[k] = v
+    steer_model.load_state_dict({**steer_model.state_dict(), **renamed})
+    plain.eval()
+    steer_model.eval()
+    x = torch.randn(*{"cnn": (1, 4, 8, 8), "gnn": (3, 4), "pinn": (1, 4)}[name])
+    torch.testing.assert_close(
+        _forward(name, plain, x, None, torch),
+        _forward(name, steer_model, x, 50 * torch.randn(1, 5), torch), atol=1e-5, rtol=0,
+    )
+
+
+_CURRICULA = {
+    "cnn": ("real_run_cnn", "run_cnn_curriculum", {"latent_dim": 16},
+            ("blocks.0.conv1.extra.weight", "blocks.0.skip.extra.weight"),
+            "blocks.0.conv1.base.weight"),
+    "gnn": ("real_run_gnn", "run_gnn_curriculum", {"hidden_dim": 16},
+            ("embed.extra.weight",), "embed.base.weight"),
+    "pinn": ("real_run_pinn", "run_pinn_curriculum", {"hidden_dim": 16},
+             ("trunk.0.extra.weight",), "trunk.0.base.weight"),
+}
+
+
+@pytest.mark.torch
+@pytest.mark.parametrize("name", ["cnn", "gnn", "pinn"])
+def test_curriculum_trains_the_steering_path_in_stage_b_only(tmp_path, name):
+    torch = pytest.importorskip("torch")
+    import importlib
+
+    from anemoi.tracking.checkpoint_store import CheckpointStore, S3Config
+    from anemoi.tracking.experiment_tracking import arch_params_tag
+    from anemoi.training.real_inference import _builder
+
+    module, runner, kwargs, extra_keys, frozen_key = _CURRICULA[name]
+    run_curriculum = getattr(importlib.import_module(f"anemoi.training.{module}"), runner)
+    era5, gdas, steer = tmp_path / "era5", tmp_path / "gdas", tmp_path / "steer"
+    rng = np.random.default_rng(0)
+    tracks = _curriculum_tracks()
+    for t in tracks:
+        cache_all_fixes(era5, t, Flavor.ERA5_PRETRAIN)
+        cache_all_fixes(gdas, t, Flavor.GDAS_FINETUNE)
+        cache_steering(steer, t, rng)
+    steering.write_meta(steer)
+    client = _FakeS3Client()
+    store = CheckpointStore(S3Config(
+        endpoint_url="https://example.r2.cloudflarestorage.com", bucket="anemoi-test",
+        access_key_id="key", secret_access_key="secret"), client=client)
+
+    run, _metrics, artifacts = run_curriculum(
+        tracks, store, era5, gdas, seed=42, n_augment=1, streaming=True, batch_size=4,
+        steering_cache_dir=steer, **kwargs,
+        curriculum_kwargs={"a": {"epochs": 1}, "b": {"epochs": 2, "learning_rate": 1e-2}},
+    )
+    assert run.complete
+    assert artifacts.arch_params["n_steering"] == DIM
+    assert artifacts.steering_inputs == steering.steering_meta()
+
+    def state_of(stage):
+        key = next(k for k in client.objects
+                   if f"/{name}/{stage}/" in k and "candidate" not in k)
+        return torch.load(io.BytesIO(client.objects[key]), weights_only=True)
+
+    a, b = state_of("A"), state_of("B")
+    for key in extra_keys:
+        assert a[key].abs().sum() == 0  # ERA5 years: zeros in, no gradient
+        assert b[key].abs().sum() > 0
+    assert torch.equal(a[frozen_key], b[frozen_key])  # Stage B's freezing still holds
+
+    # what serving rebuilds from the registry tag loads these weights
+    params = json.loads(arch_params_tag(artifacts))
+    rebuilt, _ = _builder(name)(**{k: tuple(v) if isinstance(v, list) else v
+                                   for k, v in params.items()})
+    rebuilt.load_state_dict(artifacts.model.state_dict())
+
+
+def test_steering_stage_kwargs_feed_zeros_on_era5_and_the_cache_on_gdas(tmp_path):
+    from anemoi.training.curriculum import stage_a, stage_b
+    from anemoi.training.steering_input import STEERING_PARAMS, steering_stage_kwargs
+
+    assert steering_stage_kwargs("cnn", stage_b(), tmp_path, 0) == {}
+    a = steering_stage_kwargs("gnn", stage_a(), tmp_path, DIM)
+    assert set(a) == {"extra_x"} and not a["extra_x"](None).any()
+    b = steering_stage_kwargs("gnn", stage_b(), tmp_path, DIM)
+    assert b["trainable"] == STEERING_PARAMS["gnn"]
+    track = make_track("AL012022", 2022, n=2)
+    cache_steering(tmp_path, track, np.random.default_rng(0), skip={track.fixes[1].valid_time})
+    sw = SimpleNamespace(storm_id=track.storm_id, current=track.fixes[0])
+    assert b["extra_x"](sw).shape == (DIM,)
+    sw = SimpleNamespace(storm_id=track.storm_id, current=track.fixes[1])
+    assert b["extra_x"](sw) is None
+
+
+def test_unfreeze_refuses_a_steering_path_that_isnt_there():
+    torch = pytest.importorskip("torch")
+    from anemoi.training.steering_input import unfreeze
+
+    model = torch.nn.Linear(2, 2)
+    with pytest.raises(ValueError, match="no parameter"):
+        unfreeze(model, ("embed.extra.",))
+    unfreeze(model, ())  # nothing asked, nothing checked
+
+
+def test_one_forecast_call_fetches_steering_once_failures_included(tmp_path):
+    from anemoi.training.real_inference_cycle import shared_steering
+
+    track = make_track("AL012022", 2022, n=4)
+    calls = []
+
+    def fetch(track_, current_, cache_dir_):
+        calls.append(current_.valid_time)
+        return None  # e.g. a lead not published yet
+
+    once = shared_steering(fetch)
+    for _ in range(4):  # four models that read steering
+        assert once(track, track.fixes[-1], tmp_path) is None
+    assert calls == [track.fixes[-1].valid_time]
+    once(track, track.fixes[-2], tmp_path)  # another time is its own fetch
+    assert len(calls) == 2
+    shared_steering(fetch)(track, track.fixes[-1], tmp_path)  # the next call retries
+    assert len(calls) == 3

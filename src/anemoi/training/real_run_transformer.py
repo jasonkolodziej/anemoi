@@ -54,6 +54,14 @@ from .real_run import (
     iter_stage_windows,
     window_validation_metrics,
 )
+from .steering_input import (  # noqa: F401 (n_steering_of: re-exported)
+    keep_with_extra,
+    n_steering_of,
+    steering_n,
+    steering_stage_kwargs,
+    unfreeze,
+    with_constant_channels,
+)
 
 #: Same field order/set as real_run_cnn.CNN_FIELD_NAMES -- kept separate
 #: rather than imported, since the two runners' channel stacks are allowed
@@ -83,17 +91,6 @@ def _sanitized_channel_stack(fields) -> np.ndarray | None:
     return np.stack(channels)
 
 
-def with_constant_channels(stack: np.ndarray, vec: np.ndarray | None) -> np.ndarray:
-    """``stack`` (C, H, W) with one constant channel per entry of ``vec``
-    appended (the steering features, `data.steering`); ``stack`` itself for
-    ``None`` or an empty vector."""
-    if vec is None or np.size(vec) == 0:
-        return stack
-    vec = np.asarray(vec, dtype=np.float64).reshape(-1)
-    const = np.broadcast_to(vec[:, None, None], (vec.size, *stack.shape[1:]))
-    return np.concatenate([stack, const.astype(stack.dtype)], axis=0)
-
-
 def transformer_input(
     fields, storm_id: str, basins: Sequence[str] = (), grid_size: tuple[int, int] = GRID_SIZE,
     *, steering: np.ndarray | None = None,
@@ -111,13 +108,6 @@ def transformer_input(
     return with_constant_channels(
         with_basin_channels(stack[:, :gh, :gw], storm_id, basins), steering,
     )
-
-
-def n_steering_of(arch_params: dict | None) -> int:
-    """How many steering channels a Transformer version reads (0 for every
-    version from before the steering input): its ``arch_params``'
-    ``n_steering``."""
-    return int((arch_params or {}).get("n_steering", 0))
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,18 +365,9 @@ def train_transformer_stage_streaming(
     )
     extras: dict[tuple[str, datetime], np.ndarray] = {}
     if extra_x is not None:
-        def keep(windows):
-            kept = []
-            for sw in windows:
-                vec = extra_x(sw)
-                if vec is not None:
-                    extras[(sw.storm_id, sw.current.valid_time)] = np.asarray(
-                        vec, dtype=np.float64,
-                    ).reshape(-1)
-                    kept.append(sw)
-            return kept
-
-        train_windows, val_windows = keep(train_windows), keep(val_windows)
+        train_windows, train_extras = keep_with_extra(train_windows, extra_x)
+        val_windows, val_extras = keep_with_extra(val_windows, extra_x)
+        extras = {**train_extras, **val_extras}
     if not train_windows or not val_windows:
         raise ValueError(
             f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
@@ -432,14 +413,7 @@ def train_transformer_stage_streaming(
     )
 
     freeze_encoder(model, stage.frozen_modules)
-    if trainable:
-        matched = False
-        for name, param in model.named_parameters():
-            if name.startswith(tuple(trainable)):
-                param.requires_grad = True
-                matched = True
-        if not matched:
-            raise ValueError(f"no parameter starts with any of {tuple(trainable)}")
+    unfreeze(model, trainable)
     model.to(device)
 
     def masked_mse_sums(pred, target, mask3):
@@ -544,18 +518,13 @@ def run_transformer_curriculum(
     cached features, drops a window that has none, and trains the conv
     besides the head. ``arch_params`` records ``n_steering``.
     """
-    from ..data.steering import STEERING_DIM, require_meta, steering_meta, steering_vector
-    from ..models.transformer import STEERING_PARAM_PREFIX, build_transformer
+    from ..data.steering import steering_meta
+    from ..models.transformer import build_transformer
 
     require_torch()
     basins = DEFAULT_BASIN_INPUTS if basins is None else tuple(basins)
     n_variables = len(TRANSFORMER_FIELD_NAMES) + len(basins)
-    n_steering = STEERING_DIM if steering_cache_dir is not None else 0
-    if n_steering and not streaming:
-        raise ValueError("the steering input needs streaming=True")
-    if n_steering:
-        require_meta(steering_cache_dir)  # the tag will record this build's settings
-    zeros = np.zeros(n_steering)
+    n_steering = steering_n(steering_cache_dir, streaming=streaming)
     rng = np.random.default_rng(seed)
     curriculum = Curriculum.standard("transformer", **(curriculum_kwargs or {}))
     run = CurriculumRun(curriculum=curriculum)
@@ -578,13 +547,9 @@ def run_transformer_curriculum(
 
         stage_fn = train_transformer_stage_streaming if streaming else train_transformer_stage
         stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
-        if n_steering and stage.flavor is Flavor.ERA5_PRETRAIN:
-            stage_kwargs["extra_x"] = lambda sw: zeros
-        elif n_steering:
-            stage_kwargs["extra_x"] = lambda sw: steering_vector(
-                steering_cache_dir, sw.storm_id, sw.current.valid_time,
-            )
-            stage_kwargs["trainable"] = (STEERING_PARAM_PREFIX,)
+        stage_kwargs.update(
+            steering_stage_kwargs("transformer", stage, steering_cache_dir, n_steering),
+        )
         model, train_loss, val_loss, val_metrics, stats = stage_fn(
             model, stage, train_tracks, val_tracks, cache_dir, rng,
             n_augment=n_augment, basins=basins, **stage_kwargs,

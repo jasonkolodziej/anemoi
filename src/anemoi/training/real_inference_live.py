@@ -283,13 +283,15 @@ def fetch_live_steering(
 def build_live_cnn_x(
     track: Track, current: Fix, cache_dir: Path | str,
     *, fields_fetcher: FieldsFetcher | None = None, basins: Sequence[str] = (),
+    steering: np.ndarray | None = None,
 ) -> np.ndarray | None:
+    """``steering``: as in `build_live_transformer_x`."""
     from .real_run_cnn import cnn_input
 
     fields = (fields_fetcher or _current_fields)(track, current, cache_dir)
     if fields is None:
         return None
-    return cnn_input(fields, track.storm_id, basins)
+    return cnn_input(fields, track.storm_id, basins, steering=steering)
 
 
 def build_live_transformer_x(
@@ -312,7 +314,7 @@ def build_live_transformer_x(
 def build_live_pinn_x(
     track: Track, current: Fix, candidate_model, cache_dir: Path | str,
     *, fields_fetcher: FieldsFetcher | None = None, basins: Sequence[str] = (),
-    candidate_basins: Sequence[str] = (),
+    candidate_basins: Sequence[str] = (), steering: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """PINN's real input: the environment-feature vector plus its
     candidate-generator LSTM's own forecast, converted to absolute (lat,
@@ -333,6 +335,9 @@ def build_live_pinn_x(
     entirely over land -- real ERA5 SST has no ocean pixel there at all,
     see `data.features.area_mean`'s docstring), or too little real
     history for the candidate's own input sequence.
+
+    ``steering``: as in `build_live_transformer_x`, appended to the
+    environment vector.
     """
     import torch
 
@@ -344,7 +349,7 @@ def build_live_pinn_x(
     if fields is None:
         return None
     try:
-        env = pinn_environment(fields, track.storm_id, basins)
+        env = pinn_environment(fields, track.storm_id, basins, steering=steering)
     except ValueError:
         return None
 
@@ -370,13 +375,14 @@ def build_live_pinn_x(
 def build_live_gnn_x(
     track: Track, current: Fix, cache_dir: Path | str, stride: int | None = None,
     *, fields_fetcher: FieldsFetcher | None = None, basins: Sequence[str] = (),
+    steering: np.ndarray | None = None,
 ) -> tuple[np.ndarray, MeshTopology] | None:
     """GNN needs its mesh topology alongside the node features (`models
     .gnn.build_gnn`'s ``forward`` takes ``edge_index``/``edge_attr``
     directly, not baked into the model) -- built fresh from the cached
     field's own shape, the same cheap "pure function of shape/stride"
     real_run_gnn's own module docstring already establishes for the
-    training path.
+    training path. ``steering``: as in `build_live_transformer_x`.
     """
     from .real_run_gnn import GNN_STRIDE, build_mesh_topology, gnn_input
 
@@ -384,7 +390,7 @@ def build_live_gnn_x(
     if fields is None:
         return None
     topo = build_mesh_topology(fields.shape, stride or GNN_STRIDE)
-    node_features = gnn_input(fields, topo, track.storm_id, basins)
+    node_features = gnn_input(fields, topo, track.storm_id, basins, steering=steering)
     if node_features is None:
         return None
     return node_features, topo

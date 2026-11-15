@@ -58,3 +58,57 @@ class ModelSpec:
 
 
 DEFAULT_LEADS: tuple[int, ...] = (12, 24, 36, 48, 72, 96, 120)
+
+
+def extra_input_conv(base, n_extra: int):
+    """A conv that takes ``n_extra`` more input channels than ``base`` (an
+    ``nn.Conv2d``), through a separate zero-initialised, bias-free conv of
+    the same geometry (``.extra``: kernel, stride, padding), added to
+    ``base``'s output. It computes ``base``'s function until ``.extra``
+    trains, so it can sit in a model whose other weights a stage freezes
+    (the forecast-lead steering input, Decision Log 68)."""
+    torch = require_torch()
+    nn = torch.nn
+
+    class _ExtraInputConv(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.base = base
+            self.extra = nn.Conv2d(
+                n_extra, base.out_channels, kernel_size=base.kernel_size,
+                stride=base.stride, padding=base.padding, bias=False,
+            )
+            nn.init.zeros_(self.extra.weight)
+            self.extra.to(base.weight.device)
+            self.in_channels = base.in_channels + n_extra
+            self.out_channels = base.out_channels
+
+        def forward(self, x):
+            c = self.base.in_channels
+            return self.base(x[:, :c]) + self.extra(x[:, c:])
+
+    return _ExtraInputConv()
+
+
+def extra_input_linear(base, n_extra: int):
+    """`extra_input_conv` for an ``nn.Linear``: ``n_extra`` more input
+    features, read from the end of the input through a zero-initialised,
+    bias-free ``.extra``."""
+    torch = require_torch()
+    nn = torch.nn
+
+    class _ExtraInputLinear(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.base = base
+            self.extra = nn.Linear(n_extra, base.out_features, bias=False)
+            nn.init.zeros_(self.extra.weight)
+            self.extra.to(base.weight.device)
+            self.in_features = base.in_features + n_extra
+            self.out_features = base.out_features
+
+        def forward(self, x):
+            c = self.base.in_features
+            return self.base(x[..., :c]) + self.extra(x[..., c:])
+
+    return _ExtraInputLinear()

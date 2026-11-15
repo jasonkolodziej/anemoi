@@ -51,6 +51,14 @@ from .real_run import (
     iter_stage_windows,
     window_validation_metrics,
 )
+from .steering_input import (
+    ExtraX,
+    keep_with_extra,
+    steering_n,
+    steering_stage_kwargs,
+    unfreeze,
+    with_constant_channels,
+)
 
 #: Order the 10 cached GriddedFields arrays are stacked as CNN channels.
 CNN_FIELD_NAMES: tuple[str, ...] = (
@@ -76,12 +84,18 @@ def _sanitized_channel_stack(fields) -> np.ndarray | None:
     return np.stack(channels)
 
 
-def cnn_input(fields, storm_id: str, basins: Sequence[str] = ()) -> np.ndarray | None:
+def cnn_input(
+    fields, storm_id: str, basins: Sequence[str] = (), *, steering: np.ndarray | None = None,
+) -> np.ndarray | None:
     """The CNN's input for one window's fields: `_sanitized_channel_stack`,
     plus a constant channel per basin for a model trained with ``basins``
-    (`basin_input`). ``None`` when the fields can't be used, as there."""
+    (`basin_input`), then one per steering feature for a model that reads
+    them (``steering``, the window's `data.steering.steering_vector`;
+    Decision Log 68). ``None`` when the fields can't be used, as there."""
     stack = _sanitized_channel_stack(fields)
-    return None if stack is None else with_basin_channels(stack, storm_id, basins)
+    if stack is None:
+        return None
+    return with_constant_channels(with_basin_channels(stack, storm_id, basins), steering)
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,6 +300,8 @@ def train_cnn_stage_streaming(
     num_workers: int = 0,
     device=None,
     basins: Sequence[str] = (),
+    extra_x: ExtraX | None = None,
+    trainable: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_cnn_stage`'s streaming analog (`docs/streaming_dataloader.md`) --
     same return contract, real per-batch training via a `torch.utils.data
@@ -294,6 +310,10 @@ def train_cnn_stage_streaming(
     the reference implementation this follows. ``num_workers`` (default 0)
     forwards to `streaming.make_dataloader` -- see that function's
     docstring.
+
+    ``extra_x`` and ``trainable``: the steering input, as in
+    `real_run_transformer.train_transformer_stage_streaming` (constant
+    channels after the basin channels; `training.steering_input`).
     """
     from .streaming import (
         OnlineMaskedLeadMeanStd,
@@ -318,6 +338,11 @@ def train_cnn_stage_streaming(
         list(iter_stage_windows(val_tracks, rng, 1)), cache_dir,
     )
     val_windows = filter_windows_with_finite_fields(raw_val_windows, cache_dir, CNN_FIELD_NAMES)
+    extras: dict = {}
+    if extra_x is not None:
+        train_windows, train_extras = keep_with_extra(train_windows, extra_x)
+        val_windows, val_extras = keep_with_extra(val_windows, extra_x)
+        extras = {**train_extras, **val_extras}
     if not train_windows or not val_windows:
         raise ValueError(
             f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
@@ -330,7 +355,9 @@ def train_cnn_stage_streaming(
             storm_id=sw.storm_id, valid_time=sw.current.valid_time,
             lat=sw.current.lat, lon=sw.current.lon,
         )))
-        return cnn_input(fields, sw.storm_id, basins)
+        return cnn_input(
+            fields, sw.storm_id, basins, steering=extras.get((sw.storm_id, sw.current.valid_time)),
+        )
 
     n_leads = len(LEAD_STEPS)
     raw_train_ds = WindowDataset(train_windows, build_x)
@@ -364,14 +391,15 @@ def train_cnn_stage_streaming(
     )
 
     freeze_encoder(model, stage.frozen_modules)
+    unfreeze(model, trainable)
     model.to(device)
 
     def masked_mse_sums(pred, target, mask3):
         diff2 = (pred - target) ** 2 * mask3
         return diff2.sum(), mask3.sum()
 
-    trainable = [p for p in model.parameters() if p.requires_grad]
-    opt = torch.optim.Adam(trainable, lr=stage.learning_rate)
+    params = [p for p in model.parameters() if p.requires_grad]
+    opt = torch.optim.Adam(params, lr=stage.learning_rate)
 
     model.train()
     for _ in range(stage.epochs):
@@ -426,6 +454,7 @@ def run_cnn_curriculum(
     batch_size: int = 32,
     num_workers: int = 0,
     basins: Sequence[str] | None = None,
+    steering_cache_dir: Path | str | None = None,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the CNN baseline
     against real cached GriddedFields.
@@ -447,12 +476,19 @@ def run_cnn_curriculum(
     ``num_workers`` (streaming only, default 0) forwards to
     `streaming.make_dataloader` -- see that function's docstring.
     ``basins``: see `real_run.run_lstm_curriculum`.
+
+    ``steering_cache_dir`` (streaming only): the forecast-lead steering
+    input, as in `real_run_transformer.run_transformer_curriculum` (zeros
+    in Stage A, the cached features in Stage B, which trains the steering
+    path besides the head; `training.steering_input`).
     """
+    from ..data.steering import steering_meta
     from ..models.cnn import build_cnn
 
     require_torch()
     basins = DEFAULT_BASIN_INPUTS if basins is None else tuple(basins)
     in_channels = len(CNN_FIELD_NAMES) + len(basins)
+    n_steering = steering_n(steering_cache_dir, streaming=streaming)
     rng = np.random.default_rng(seed)
     curriculum = Curriculum.standard("cnn", **(curriculum_kwargs or {}))
     run = CurriculumRun(curriculum=curriculum)
@@ -469,10 +505,12 @@ def run_cnn_curriculum(
         if model is None:
             model, _spec = build_cnn(
                 in_channels=in_channels, latent_dim=latent_dim, lead_hours=DEFAULT_LEADS,
+                n_steering=n_steering,
             )
 
         stage_fn = train_cnn_stage_streaming if streaming else train_cnn_stage
         stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
+        stage_kwargs.update(steering_stage_kwargs("cnn", stage, steering_cache_dir, n_steering))
         model, train_loss, val_loss, val_metrics, stats = stage_fn(
             model, stage, train_tracks, val_tracks, cache_dir, rng,
             n_augment=n_augment, basins=basins, **stage_kwargs,
@@ -502,8 +540,11 @@ def run_cnn_curriculum(
     arch_params = {
         "in_channels": in_channels, "latent_dim": latent_dim, "lead_hours": list(DEFAULT_LEADS),
     }
+    if n_steering:
+        arch_params["n_steering"] = n_steering
     artifacts = RunArtifacts(
         model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
         arch_params=arch_params, basins=basins,
+        steering_inputs=steering_meta() if n_steering else None,
     )
     return run, val_metrics, artifacts

@@ -108,6 +108,7 @@ This phase answers one question fast: is the 231 nm error a missing-input proble
   - **Against v8 (the served Transformer), Atlantic 48 h:** sample B −76 nm [−105, −46] (242 cases, 15 storms; 250 → 174 nm); C −72 nm [−100, −47] (190 cases; 204 → 132 nm). At 72 h: B −106 [−162, −51], C −109 [−200, −48]. East Pacific 48 h B −40 nm [−90, −0] (102 cases, 9 storms); EP C has 7 storms, so a mean only (−40). The spike's gain survives a full curriculum and NHC's case set.
   - **Against AVNI, Atlantic 48 h:** B **+108 nm [79, 141]**, C **+79 nm [58, 106]**; v9 beats AVNI on 13% of B cases. Fusion v12 on the same rows: +154 and +122. So v9 alone closes 30–35% of fusion's gap to GFS's own track, and is better on its own than fusion over the five unsteered models (AL B 174 against 220 nm). By Decision Log 66's rule an ML forecast still subtracts value against AVNI. EP B: +43 [21, 69]. Intensity didn't move (AL B 48 h 23.5 kt against v8's 23.4).
   - **Read it as:** the input is worth carrying to the other Group 1 models (the plan's "only if it holds"), and fusion should then be retrained once on the steering set, not once per model. Closing the remaining ~110 nm to AVNI needs more than one more input; the spike's caveats (no matched-capacity control; only Stage B's head and the conv train) still apply.
+- **Built for CNN, GNN and PINN (2026-11-14):** the same input and curriculum, each through its own zero-initialised layer (Decision Log 68, "Carried to CNN, GNN and PINN"). Next: train each with `--register-only` on the GPU job, compare each with its served version on the same validation windows, then decide on staging the four with one fusion retrain.
 
 ## Phase 2: Ocean inputs (runs alongside Phase 1)
 
@@ -244,6 +245,8 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-14.** Forecast-lead steering built for CNN, GNN and PINN
+  (Decision Log 68); training next, registered but not staged.
 - **2026-11-14.** Steering Transformer v9 trained (unstaged) and paired
   against AVNI: Atlantic 48 h −76 nm [−105, −46] against v8 on sample B,
   still +108 nm [79, 141] behind AVNI (fusion v12: +154). JSON in
