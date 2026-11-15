@@ -100,28 +100,10 @@ STEERING_PARAM_PREFIX = "patch.extra."
 
 
 def extra_channel_patch(base, n_extra: int):
-    """A patch embedding that takes ``n_extra`` more input channels than
-    ``base`` (an ``nn.Conv2d``), through a separate zero-initialised,
-    bias-free conv of the same geometry (``.extra``), added to ``base``'s
-    output. It computes ``base``'s function until ``.extra`` trains, so it
-    can be added to a pretrained model, and Stage B can train ``.extra``
-    alone while its freezing holds for ``.base`` (the steering spike,
-    `training.steering_spike`; the steering input, Decision Log 68)."""
-    torch = require_torch()
-    nn = torch.nn
+    """The patch embedding's steering path: `models.base.extra_input_conv`
+    (a patch conv has no padding, so the geometry is the spike's). Kept
+    under this name for the spike and for the state-dict layout
+    (``patch.base``, ``patch.extra``)."""
+    from .base import extra_input_conv
 
-    class _ExtraChannelPatch(nn.Module):
-        def __init__(self) -> None:
-            super().__init__()
-            self.base = base
-            self.extra = nn.Conv2d(n_extra, base.out_channels, kernel_size=base.kernel_size,
-                                   stride=base.stride, bias=False)
-            nn.init.zeros_(self.extra.weight)
-            self.extra.to(base.weight.device)
-            self.in_channels = base.in_channels + n_extra
-
-        def forward(self, x):
-            c = self.base.in_channels
-            return self.base(x[:, :c]) + self.extra(x[:, c:])
-
-    return _ExtraChannelPatch()
+    return extra_input_conv(base, n_extra)

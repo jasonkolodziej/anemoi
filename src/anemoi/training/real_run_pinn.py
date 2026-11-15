@@ -69,6 +69,14 @@ from .real_run import (
     track_input,
     validation_metrics,
 )
+from .steering_input import (
+    ExtraX,
+    keep_with_extra,
+    steering_n,
+    steering_stage_kwargs,
+    unfreeze,
+    with_trailing,
+)
 
 #: Weights on each physics_residuals term in the training loss -- small
 #: relative to the track/intensity MSE, so physics acts as a soft
@@ -81,12 +89,16 @@ _PHYSICS_LEAD_COUNT = 4
 _PHYSICS_DT_HOURS = 12.0
 
 
-def pinn_environment(fields, storm_id: str, basins: Sequence[str] = ()) -> np.ndarray:
+def pinn_environment(
+    fields, storm_id: str, basins: Sequence[str] = (), *, steering: np.ndarray | None = None,
+) -> np.ndarray:
     """PINN's environment input for one window's fields:
     `data.features.compute_environment_features`, plus the storm's basin
-    for a model trained with ``basins`` (`basin_input`). Raises
-    ``ValueError`` for non-finite features, as that function does."""
-    return with_basin_vector(compute_environment_features(fields).values, storm_id, basins)
+    for a model trained with ``basins`` (`basin_input`), then the steering
+    features for a model that reads them (``steering``; Decision Log 68).
+    Raises ``ValueError`` for non-finite features, as that function does."""
+    env = with_basin_vector(compute_environment_features(fields).values, storm_id, basins)
+    return with_trailing(env, steering)
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,12 +341,14 @@ class _PinnWindowDataset:
         env_mean: np.ndarray | None = None,
         env_std: np.ndarray | None = None,
         basins: Sequence[str] = (),
+        extras: dict | None = None,
     ) -> None:
         self._windows = windows
         self._cache_dir = cache_dir
         self.env_mean = env_mean
         self.env_std = env_std
         self._basins = tuple(basins)
+        self._extras = extras or {}
 
     def __len__(self) -> int:
         return len(self._windows)
@@ -345,7 +359,10 @@ class _PinnWindowDataset:
             storm_id=sw.storm_id, valid_time=sw.current.valid_time,
             lat=sw.current.lat, lon=sw.current.lon,
         )))
-        env = pinn_environment(fields, sw.storm_id, self._basins).astype(np.float32)
+        env = pinn_environment(
+            fields, sw.storm_id, self._basins,
+            steering=self._extras.get((sw.storm_id, sw.current.valid_time)),
+        ).astype(np.float32)
         if self.env_mean is not None:
             env = (env - self.env_mean) / self.env_std
         x_track = track_input(sw.window, sw.storm_id, self._basins).astype(np.float32)
@@ -394,7 +411,7 @@ def _filter_windows_with_finite_env(windows: list, cache_dir: Path) -> list:
 
 
 def _filter_and_fit_env_stats(
-    windows: list, cache_dir: Path, basins: Sequence[str] = (),
+    windows: list, cache_dir: Path, basins: Sequence[str] = (), extras: dict | None = None,
 ) -> tuple[list, np.ndarray | None, np.ndarray | None]:
     """TRAIN-only combined pass: drop windows whose environment features
     come back non-finite (same real land-coverage limitation
@@ -420,7 +437,10 @@ def _filter_and_fit_env_stats(
             lat=sw.current.lat, lon=sw.current.lon,
         )))
         try:
-            env = pinn_environment(fields, sw.storm_id, basins)
+            env = pinn_environment(
+                fields, sw.storm_id, basins,
+                steering=(extras or {}).get((sw.storm_id, sw.current.valid_time)),
+            )
         except ValueError:
             continue
         acc.update(env[None])
@@ -445,6 +465,8 @@ def train_pinn_stage_streaming(
     num_workers: int = 0,
     device=None,
     basins: Sequence[str] = (),
+    extra_x: ExtraX | None = None,
+    trainable: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_pinn_stage`'s streaming analog (`docs/streaming_dataloader.md`) --
     same return contract, same masked track/intensity loss plus physics
@@ -455,6 +477,11 @@ def train_pinn_stage_streaming(
     tensor and a single `.mean()`/`.std()` call. ``num_workers`` (default
     0) forwards to `streaming.make_dataloader` -- see that function's
     docstring.
+
+    ``extra_x`` and ``trainable``: the steering input, as in
+    `real_run_transformer.train_transformer_stage_streaming` (the vector
+    appended to the environment, so its standardisation covers it too;
+    `training.steering_input`).
     """
     from ..models.pinn import physics_residuals
     from .streaming import filter_windows_with_cache, make_dataloader
@@ -471,6 +498,11 @@ def train_pinn_stage_streaming(
     val_windows = _filter_windows_with_finite_env(
         filter_windows_with_cache(val_stage_windows, cache_dir), cache_dir,
     )
+    extras: dict = {}
+    if extra_x is not None:
+        train_windows_cached, train_extras = keep_with_extra(train_windows_cached, extra_x)
+        val_windows, val_extras = keep_with_extra(val_windows, extra_x)
+        extras = {**train_extras, **val_extras}
     if not train_windows_cached or not val_windows:
         raise ValueError(
             f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
@@ -479,7 +511,7 @@ def train_pinn_stage_streaming(
 
     cache_dir = Path(cache_dir)
     train_windows, env_mean, env_std = _filter_and_fit_env_stats(
-        train_windows_cached, cache_dir, basins,
+        train_windows_cached, cache_dir, basins, extras,
     )
     if not train_windows:
         raise ValueError(
@@ -489,9 +521,11 @@ def train_pinn_stage_streaming(
 
     train_ds = _PinnWindowDataset(
         train_windows, cache_dir, env_mean=env_mean, env_std=env_std, basins=basins,
+        extras=extras,
     )
     val_ds = _PinnWindowDataset(
         val_windows, cache_dir, env_mean=env_mean, env_std=env_std, basins=basins,
+        extras=extras,
     )
 
     def collate(batch):
@@ -506,6 +540,7 @@ def train_pinn_stage_streaming(
     )
 
     _freeze_pinn_trunk(model, stage.frozen_modules)
+    unfreeze(model, trainable)
     model.to(device)
     candidate_model.to(device)
     candidate_model.eval()
@@ -523,8 +558,8 @@ def train_pinn_stage_streaming(
         candt = torch.as_tensor(candidate_abs, dtype=torch.float32, device=device)
         return model(envt, candt)
 
-    trainable = [p for p in model.parameters() if p.requires_grad]
-    opt = torch.optim.Adam(trainable, lr=stage.learning_rate)
+    params = [p for p in model.parameters() if p.requires_grad]
+    opt = torch.optim.Adam(params, lr=stage.learning_rate)
 
     model.train()
     for _ in range(stage.epochs):
@@ -697,6 +732,7 @@ def run_pinn_curriculum(
     batch_size: int = 32,
     num_workers: int = 0,
     basins: Sequence[str] | None = None,
+    steering_cache_dir: Path | str | None = None,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the PINN baseline.
     A fresh candidate-generator LSTM is trained per stage (see module
@@ -724,12 +760,19 @@ def run_pinn_curriculum(
     ``basins`` (see `real_run.run_lstm_curriculum`) goes into both models'
     inputs: the corrector's environment vector and the candidate
     generator's track sequence.
+
+    ``steering_cache_dir`` (streaming only): the forecast-lead steering
+    input for the corrector, as in `real_run_transformer
+    .run_transformer_curriculum` (`training.steering_input`). The
+    candidate LSTM doesn't read it.
     """
+    from ..data.steering import steering_meta
     from ..models.pinn import build_pinn
 
     require_torch()
     basins = DEFAULT_BASIN_INPUTS if basins is None else tuple(basins)
     env_dim = len(FEATURE_NAMES) + len(basins)
+    n_steering = steering_n(steering_cache_dir, streaming=streaming)
     candidate_input_dim = len(STORM_RELATIVE_COLUMNS) + len(basins)
     rng = np.random.default_rng(seed)
     device = get_device()
@@ -760,10 +803,12 @@ def run_pinn_curriculum(
         if model is None:
             model, _spec = build_pinn(
                 input_dim=env_dim, hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
+                n_steering=n_steering,
             )
 
         stage_fn = train_pinn_stage_streaming if streaming else train_pinn_stage
         stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
+        stage_kwargs.update(steering_stage_kwargs("pinn", stage, steering_cache_dir, n_steering))
         model, train_loss, val_loss, val_metrics, env_stats = stage_fn(
             model, candidate_model, stage, train_tracks, val_tracks, cache_dir, rng,
             n_augment=n_augment, device=device, basins=basins, **stage_kwargs,
@@ -803,6 +848,8 @@ def run_pinn_curriculum(
     arch_params = {
         "input_dim": env_dim, "hidden_dim": hidden_dim, "lead_hours": list(DEFAULT_LEADS),
     }
+    if n_steering:
+        arch_params["n_steering"] = n_steering
     candidate_arch_params = {
         "input_dim": candidate_input_dim, "hidden_dim": candidate_hidden_dim,
         "lead_hours": list(DEFAULT_LEADS),
@@ -814,5 +861,6 @@ def run_pinn_curriculum(
         # The candidate trains on every Stage B training track, cached or
         # not: its columns are live for the basins those came from.
         candidate_basins=served_columns(basins, basins_of(train_tracks)),
+        steering_inputs=steering_meta() if n_steering else None,
     )
     return run, val_metrics, artifacts

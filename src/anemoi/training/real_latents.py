@@ -205,32 +205,39 @@ STEERING_CACHE_ENV = "ANEMOI_STEERING_CACHE_DIR"
 
 
 def _steering_source(trained_artifacts, steering_cache_dir):
-    """``(storm_id, valid_time) -> vector | None`` for the Transformer's
-    steering channels, or ``None`` when the version doesn't read steering.
-    Raises when it does and its input can't be built as it was trained: no
-    cache configured, or the version, the cache and this build don't all
-    record the same steering settings."""
+    """``((storm_id, valid_time) -> vector | None, readers)``: the
+    forecast-lead steering source and the models that read it, or
+    ``(None, frozenset())`` when none does. Raises when one does and its
+    input can't be built as it was trained: no cache configured, or the
+    version, the cache and this build don't all record the same steering
+    settings."""
     import os
 
     from ..data.steering import require_meta, steering_meta, steering_vector
-    from .real_run_transformer import n_steering_of
+    from .steering_input import STEERING_MODELS, n_steering_of
 
-    transformer_a = trained_artifacts["transformer"]
-    if not n_steering_of(getattr(transformer_a, "arch_params", None)):
-        return None
-    if getattr(transformer_a, "steering_inputs", None) != steering_meta():
-        raise ValueError(
-            "the Transformer was trained on steering computed with other settings than this "
-            f"build's (or recorded none): {getattr(transformer_a, 'steering_inputs', None)}"
-        )
+    readers = frozenset(
+        name for name in STEERING_MODELS
+        if name in trained_artifacts
+        and n_steering_of(getattr(trained_artifacts[name], "arch_params", None))
+    )
+    if not readers:
+        return None, readers
+    for name in sorted(readers):
+        recorded = getattr(trained_artifacts[name], "steering_inputs", None)
+        if recorded != steering_meta():
+            raise ValueError(
+                f"the {name} version was trained on steering computed with other settings "
+                f"than this build's (or recorded none): {recorded}"
+            )
     cache = steering_cache_dir or os.environ.get(STEERING_CACHE_ENV)
     if not cache:
         raise ValueError(
-            "the Transformer reads forecast-lead steering (arch_params n_steering); pass "
-            f"steering_cache_dir or set {STEERING_CACHE_ENV}"
+            f"{', '.join(sorted(readers))} read forecast-lead steering (arch_params "
+            f"n_steering); pass steering_cache_dir or set {STEERING_CACHE_ENV}"
         )
     require_meta(cache)
-    return lambda storm_id, valid_time: steering_vector(cache, storm_id, valid_time)
+    return (lambda storm_id, valid_time: steering_vector(cache, storm_id, valid_time)), readers
 
 
 def _extract_for_tracks(
@@ -273,7 +280,10 @@ def _extract_for_tracks(
     topo = None
     shape: tuple[int, int] | None = None
     gh, gw = GRID_SIZE
-    steering_of = _steering_source(trained_artifacts, steering_cache_dir)
+    steering_of, readers = _steering_source(trained_artifacts, steering_cache_dir)
+
+    def steering_for(name, vec):
+        return vec if name in readers else None
 
     for sw in windows:
         task = FetchTask(
@@ -302,20 +312,27 @@ def _extract_for_tracks(
         # Each model's input is built with the basins *it* was trained
         # with (`basin_input`): none, for a version from before the basin
         # input existed.
-        cnn_stack = cnn_input(fields, sw.storm_id, cnn_a.basins)
         steering = None
         if steering_of is not None:
             steering = steering_of(sw.storm_id, sw.current.valid_time)
             if steering is None:
-                continue  # the Transformer can't run without it, as in training and serving
-        trf_stack = transformer_input(
-            fields, sw.storm_id, transformer_a.basins, steering=steering,
+                continue  # a model that reads it can't run without it, as in training and serving
+        cnn_stack = cnn_input(
+            fields, sw.storm_id, cnn_a.basins, steering=steering_for("cnn", steering),
         )
-        node_features = gnn_input(fields, topo, sw.storm_id, gnn_a.basins)
+        trf_stack = transformer_input(
+            fields, sw.storm_id, transformer_a.basins,
+            steering=steering_for("transformer", steering),
+        )
+        node_features = gnn_input(
+            fields, topo, sw.storm_id, gnn_a.basins, steering=steering_for("gnn", steering),
+        )
         if cnn_stack is None or trf_stack is None or node_features is None:
             continue
         try:
-            env = pinn_environment(fields, sw.storm_id, pinn_a.basins)
+            env = pinn_environment(
+                fields, sw.storm_id, pinn_a.basins, steering=steering_for("pinn", steering),
+            )
         except ValueError:
             continue  # non-finite env feature (storm entirely over land) -- skip, don't crash
 

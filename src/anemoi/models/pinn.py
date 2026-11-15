@@ -10,12 +10,14 @@ enters through :func:`physics_residuals`, which penalises implausible motion.
 
 from __future__ import annotations
 
-from .base import DEFAULT_LEADS, ModelSpec, require_torch
+from .base import DEFAULT_LEADS, ModelSpec, extra_input_linear, require_torch
 
 #: Earth rotation rate, for the Coriolis parameter.
 OMEGA = 7.2921e-5
 #: Storms faster than this over open water are not physically credible.
 MAX_TRANSLATION_KT = 45.0
+#: Parameter-name prefixes of the steering input path (`build_pinn`).
+STEERING_PARAM_PREFIXES = ("trunk.0.extra.",)
 
 
 def build_pinn(
@@ -23,18 +25,27 @@ def build_pinn(
     hidden_dim: int = 128,
     n_layers: int = 4,
     lead_hours: tuple[int, ...] = DEFAULT_LEADS,
+    n_steering: int = 0,
 ):
     """Residual corrector applied on top of a candidate forecast.
 
     Returns ``(module, spec)``. The network outputs a *correction*, initialised
     near zero, so an untrained corrector is the identity: a physics layer should
     never make a good forecast worse before it has learned anything.
+
+    ``n_steering`` > 0: the environment vector carries that many more
+    entries at its end (forecast-lead steering, `data.steering`; Decision
+    Log 68), read by a zero-initialised, bias-free linear beside the
+    trunk's first layer (``trunk.0.extra``, `models.base
+    .extra_input_linear`). With 0 (the default) nothing changes and older
+    checkpoints load unchanged.
     """
     torch = require_torch()
     nn = torch.nn
 
     spec = ModelSpec(
-        name="pinn", input_dim=input_dim, latent_dim=hidden_dim, lead_hours=lead_hours
+        name="pinn", input_dim=input_dim + n_steering, latent_dim=hidden_dim,
+        lead_hours=lead_hours,
     )
 
     class PhysicsCorrector(nn.Module):
@@ -43,6 +54,8 @@ def build_pinn(
             layers: list[nn.Module] = [nn.Linear(input_dim + spec.output_dim, hidden_dim), nn.Tanh()]
             for _ in range(n_layers - 1):
                 layers += [nn.Linear(hidden_dim, hidden_dim), nn.Tanh()]
+            if n_steering:
+                layers[0] = extra_input_linear(layers[0], n_steering)
             self.trunk = nn.Sequential(*layers)
             self.correction = nn.Linear(hidden_dim, spec.output_dim)
             nn.init.zeros_(self.correction.weight)
@@ -50,7 +63,12 @@ def build_pinn(
 
         def encode(self, environment, candidate):
             flat = candidate.flatten(1)
-            return self.trunk(torch.cat([environment, flat], dim=-1))
+            if not n_steering:
+                return self.trunk(torch.cat([environment, flat], dim=-1))
+            # The trunk's first layer reads [environment, candidate] and
+            # then the steering, which its .extra takes from the end.
+            env, steering = environment[:, :input_dim], environment[:, input_dim:]
+            return self.trunk(torch.cat([env, flat, steering], dim=-1))
 
         def forward(self, environment, candidate):
             latent = self.encode(environment, candidate)

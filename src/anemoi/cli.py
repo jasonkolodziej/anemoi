@@ -434,8 +434,9 @@ def cmd_train(args: argparse.Namespace) -> int:
     for name in ("steering_cache_dir", "localize_to"):
         setattr(args, name, getattr(args, name, None))
     args.register_only = getattr(args, "register_only", False)
-    if args.steering_cache_dir and args.model != "transformer":
-        print("--steering-cache-dir is a transformer input only (Decision Log 68)")
+    if args.steering_cache_dir and args.model == "lstm":
+        print("--steering-cache-dir is a gridded-model input (cnn, transformer, gnn, pinn; "
+              "Decision Log 68); the lstm reads the track alone")
         return 1
     if args.localize_to:
         os.environ.setdefault("ANEMOI_FIELDS_MEMO", "1")
@@ -468,7 +469,8 @@ def cmd_train(args: argparse.Namespace) -> int:
             return 1
         run, val_metrics, artifacts = run_cnn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
-            seed=args.seed, n_augment=args.n_augment, **streaming_kwargs,
+            seed=args.seed, n_augment=args.n_augment,
+            steering_cache_dir=args.steering_cache_dir, **streaming_kwargs,
         )
     elif args.model == "transformer":
         from .training.real_run_transformer import run_transformer_curriculum
@@ -490,7 +492,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         run, val_metrics, artifacts = run_gnn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
-            **streaming_kwargs,
+            steering_cache_dir=args.steering_cache_dir, **streaming_kwargs,
         )
     elif args.model == "pinn":
         from .training.real_run_pinn import run_pinn_curriculum
@@ -501,7 +503,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         run, val_metrics, artifacts = run_pinn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
-            **streaming_kwargs,
+            steering_cache_dir=args.steering_cache_dir, **streaming_kwargs,
         )
     else:
         print(f"no real training runner yet for {args.model!r} -- see cmd_train's docstring")
@@ -1908,8 +1910,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument(
         "--steering-cache-dir", dest="steering_cache_dir", default=None,
-        help=("transformer only, with --streaming: also read forecast-lead GFS steering "
-              "(anemoi steering-cache's --cache-dir; Decision Log 68)"),
+        help=("cnn/transformer/gnn/pinn, with --streaming: also read forecast-lead GFS "
+              "steering (anemoi steering-cache's --cache-dir; Decision Log 68)"),
     )
     p.add_argument(
         "--localize-to", dest="localize_to", default=None,

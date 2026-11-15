@@ -8,7 +8,10 @@ inner-core processes are localised and non-Euclidean.
 
 from __future__ import annotations
 
-from .base import DEFAULT_LEADS, ModelSpec, require_torch
+from .base import DEFAULT_LEADS, ModelSpec, extra_input_linear, require_torch
+
+#: Parameter-name prefixes of the steering input path (`build_gnn`).
+STEERING_PARAM_PREFIXES = ("embed.extra.",)
 
 
 def build_gnn(
@@ -17,6 +20,7 @@ def build_gnn(
     hidden_dim: int = 128,
     n_layers: int = 6,
     lead_hours: tuple[int, ...] = DEFAULT_LEADS,
+    n_steering: int = 0,
 ):
     """Interaction-network style GNN with edge conditioning.
 
@@ -24,12 +28,19 @@ def build_gnn(
     than a PyG dependency, so the reference implementation installs with plain
     torch; the message/update decomposition is the standard one and swapping in
     PyG later is a local change.
+
+    ``n_steering`` > 0 adds that many features after ``node_features`` on
+    every node (forecast-lead steering, `data.steering`; Decision Log 68),
+    read by a zero-initialised, bias-free linear beside the node embedding
+    (``embed.extra``, `models.base.extra_input_linear`). With 0 (the
+    default) nothing changes and older checkpoints load unchanged.
     """
     torch = require_torch()
     nn = torch.nn
 
     spec = ModelSpec(
-        name="gnn", input_dim=node_features, latent_dim=hidden_dim, lead_hours=lead_hours
+        name="gnn", input_dim=node_features + n_steering, latent_dim=hidden_dim,
+        lead_hours=lead_hours,
     )
 
     class MessagePassing(nn.Module):
@@ -56,7 +67,8 @@ def build_gnn(
     class MeshGNN(nn.Module):
         def __init__(self) -> None:
             super().__init__()
-            self.embed = nn.Linear(node_features, hidden_dim)
+            embed = nn.Linear(node_features, hidden_dim)
+            self.embed = extra_input_linear(embed, n_steering) if n_steering else embed
             self.layers = nn.ModuleList([MessagePassing() for _ in range(n_layers)])
             self.head = nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim),

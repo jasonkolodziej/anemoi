@@ -142,16 +142,22 @@ def _build_joint_latent(
                 candidate_model, _cspec = load_trained_pinn_candidate(version, checkpoint_store)
             except InferenceLoadError:
                 return None
+            steering, steering_reason = _live_steering_for(
+                name, version, track, current, cache_dir, None,
+            )
+            if steering_reason is not None:
+                return None  # a model that reads steering can't run without it
             raw = build_live_pinn_x(
                 track, current, candidate_model, cache_dir, basins=basin_inputs(version.tags),
                 candidate_basins=basin_inputs(version.tags, CANDIDATE_BASIN_INPUTS_TAG),
+                steering=steering,
             )
         else:
             steering, steering_reason = _live_steering_for(
                 name, version, track, current, cache_dir, None,
             )
             if steering_reason is not None:
-                return None  # a steering Transformer without its steering can't run
+                return None  # a model that reads steering can't run without it
             raw = _build_live_x(
                 name, track, current, cache_dir, basins=basin_inputs(version.tags),
                 steering=steering,

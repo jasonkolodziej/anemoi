@@ -65,6 +65,14 @@ from .real_run import (
     iter_stage_windows,
     window_validation_metrics,
 )
+from .steering_input import (
+    ExtraX,
+    keep_with_extra,
+    steering_n,
+    steering_stage_kwargs,
+    unfreeze,
+    with_constant_columns,
+)
 
 GNN_FIELD_NAMES: tuple[str, ...] = (
     "u200", "v200", "u850", "v850", "z500", "rh700", "t700", "mslp", "sst", "ohc",
@@ -155,12 +163,17 @@ def _node_features(fields, topo: MeshTopology) -> np.ndarray | None:
 
 def gnn_input(
     fields, topo: MeshTopology, storm_id: str, basins: Sequence[str] = (),
+    *, steering: np.ndarray | None = None,
 ) -> np.ndarray | None:
     """The GNN's node features for one window's fields: `_node_features`,
     plus the storm's basin on every node for a model trained with
-    ``basins`` (`basin_input`). ``None`` when the fields can't be used."""
+    ``basins`` (`basin_input`), then the steering features on every node
+    for a model that reads them (``steering``; Decision Log 68). ``None``
+    when the fields can't be used."""
     nodes = _node_features(fields, topo)
-    return None if nodes is None else with_basin_columns(nodes, storm_id, basins)
+    if nodes is None:
+        return None
+    return with_constant_columns(with_basin_columns(nodes, storm_id, basins), steering)
 
 
 @dataclass(frozen=True, slots=True)
@@ -398,6 +411,8 @@ def train_gnn_stage_streaming(
     stride: int = GNN_STRIDE,
     device=None,
     basins: Sequence[str] = (),
+    extra_x: ExtraX | None = None,
+    trainable: Sequence[str] = (),
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_gnn_stage`'s streaming analog (`docs/streaming_dataloader.md`) --
     same return contract, real per-batch training via a `torch.utils.data
@@ -416,6 +431,10 @@ def train_gnn_stage_streaming(
     *before* `train_loader`/`val_loader` are constructed, so every forked
     worker process inherits an already-populated topology via
     copy-on-write, never a race to build it themselves.
+
+    ``extra_x`` and ``trainable``: the steering input, as in
+    `real_run_transformer.train_transformer_stage_streaming` (the vector
+    on every node, after the basin columns; `training.steering_input`).
     """
     from .streaming import (
         OnlineMaskedLeadMeanStd,
@@ -440,6 +459,11 @@ def train_gnn_stage_streaming(
         list(iter_stage_windows(val_tracks, rng, 1)), cache_dir,
     )
     val_windows = filter_windows_with_finite_fields(raw_val_windows, cache_dir, GNN_FIELD_NAMES)
+    extras: dict = {}
+    if extra_x is not None:
+        train_windows, train_extras = keep_with_extra(train_windows, extra_x)
+        val_windows, val_extras = keep_with_extra(val_windows, extra_x)
+        extras = {**train_extras, **val_extras}
     if not train_windows or not val_windows:
         raise ValueError(
             f"stage {stage.name}: no cached GriddedFields matched the given tracks in "
@@ -463,7 +487,10 @@ def train_gnn_stage_streaming(
                 f"ragged cached field shape for {sw.storm_id}: {fields.shape} != "
                 f"{mesh_state['shape']} -- cache was built with inconsistent box_deg"
             )
-        return gnn_input(fields, mesh_state["topo"], sw.storm_id, basins)
+        return gnn_input(
+            fields, mesh_state["topo"], sw.storm_id, basins,
+            steering=extras.get((sw.storm_id, sw.current.valid_time)),
+        )
 
     n_leads = len(LEAD_STEPS)
     raw_train_ds = WindowDataset(train_windows, build_x)
@@ -502,6 +529,7 @@ def train_gnn_stage_streaming(
     )
 
     freeze_encoder(model, stage.frozen_modules)
+    unfreeze(model, trainable)
     model.to(device)
 
     def masked_mse_sums(pred, target, mask3):
@@ -516,8 +544,8 @@ def train_gnn_stage_streaming(
         ci_t = torch.as_tensor(ci, dtype=torch.long, device=device)
         return model(xf_t, ei_t, ea_t, center_index=ci_t)
 
-    trainable = [p for p in model.parameters() if p.requires_grad]
-    opt = torch.optim.Adam(trainable, lr=stage.learning_rate)
+    params = [p for p in model.parameters() if p.requires_grad]
+    opt = torch.optim.Adam(params, lr=stage.learning_rate)
 
     model.train()
     for _ in range(stage.epochs):
@@ -572,6 +600,7 @@ def run_gnn_curriculum(
     batch_size: int = 32,
     num_workers: int = 0,
     basins: Sequence[str] | None = None,
+    steering_cache_dir: Path | str | None = None,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the GNN baseline
     against real cached GriddedFields, treated as a lattice mesh (see
@@ -586,13 +615,19 @@ def run_gnn_curriculum(
     default full-batch `train_gnn_stage` (`docs/streaming_dataloader.md`).
     ``num_workers`` (streaming only, default 0) forwards to
     `streaming.make_dataloader` -- see that function's docstring.
+
+    ``steering_cache_dir`` (streaming only): the forecast-lead steering
+    input, as in `real_run_transformer.run_transformer_curriculum`
+    (`training.steering_input`).
     """
+    from ..data.steering import steering_meta
     from ..models.gnn import build_gnn
 
     require_torch()
     # See `real_run.run_lstm_curriculum` for ``basins``.
     basins = DEFAULT_BASIN_INPUTS if basins is None else tuple(basins)
     node_features = NODE_FEATURES + len(basins)
+    n_steering = steering_n(steering_cache_dir, streaming=streaming)
     rng = np.random.default_rng(seed)
     curriculum = Curriculum.standard("gnn", **(curriculum_kwargs or {}))
     run = CurriculumRun(curriculum=curriculum)
@@ -609,11 +644,12 @@ def run_gnn_curriculum(
         if model is None:
             model, _spec = build_gnn(
                 node_features=node_features, edge_features=EDGE_FEATURES,
-                hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS,
+                hidden_dim=hidden_dim, lead_hours=DEFAULT_LEADS, n_steering=n_steering,
             )
 
         stage_fn = train_gnn_stage_streaming if streaming else train_gnn_stage
         stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
+        stage_kwargs.update(steering_stage_kwargs("gnn", stage, steering_cache_dir, n_steering))
         model, train_loss, val_loss, val_metrics, stats = stage_fn(
             model, stage, train_tracks, val_tracks, cache_dir, rng,
             n_augment=n_augment, basins=basins, **stage_kwargs,
@@ -644,8 +680,11 @@ def run_gnn_curriculum(
         "node_features": node_features, "edge_features": EDGE_FEATURES,
         "hidden_dim": hidden_dim, "lead_hours": list(DEFAULT_LEADS),
     }
+    if n_steering:
+        arch_params["n_steering"] = n_steering
     artifacts = RunArtifacts(
         model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
         arch_params=arch_params, basins=basins,
+        steering_inputs=steering_meta() if n_steering else None,
     )
     return run, val_metrics, artifacts

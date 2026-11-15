@@ -264,15 +264,14 @@ def test_cmd_train_register_only_leaves_a_promotable_candidate_unstaged(
     assert ModelRegistry(registry_root).latest("lstm").stage is Stage.NONE
 
 
-def test_cmd_train_steering_is_a_transformer_input_only(tmp_path, monkeypatch):
+def test_cmd_train_steering_is_not_an_lstm_input(tmp_path, monkeypatch):
     called = []
     monkeypatch.setattr(
-        "anemoi.training.real_run_cnn.run_cnn_curriculum",
-        lambda *a, **k: called.append(1),
+        "anemoi.training.real_run.run_lstm_curriculum", lambda *a, **k: called.append(1),
     )
     args = argparse.Namespace(
-        model="cnn", hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
-        era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
+        model="lstm", hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
+        era5_cache_dir=None, gdas_cache_dir=None,
         registry_root=str(tmp_path / "registry"), streaming=True, batch_size=None,
         num_workers=0, steering_cache_dir=str(tmp_path),
     )
@@ -280,18 +279,26 @@ def test_cmd_train_steering_is_a_transformer_input_only(tmp_path, monkeypatch):
     assert not called
 
 
-def test_cmd_train_passes_the_steering_cache_to_the_transformer(tmp_path, monkeypatch):
+@pytest.mark.parametrize("model, module, runner", [
+    ("transformer", "real_run_transformer", "run_transformer_curriculum"),
+    ("cnn", "real_run_cnn", "run_cnn_curriculum"),
+    ("gnn", "real_run_gnn", "run_gnn_curriculum"),
+    ("pinn", "real_run_pinn", "run_pinn_curriculum"),
+])
+def test_cmd_train_passes_the_steering_cache_to_a_gridded_model(
+    tmp_path, monkeypatch, model, module, runner,
+):
     captured: dict = {}
 
     def fake(*a, **k):
         captured.update(k)
-        return _fake_curriculum_run("transformer")
+        return _fake_curriculum_run(model)
 
-    monkeypatch.setattr("anemoi.training.real_run_transformer.run_transformer_curriculum", fake)
+    monkeypatch.setattr(f"anemoi.training.{module}.{runner}", fake)
     _fake_checkpoint_store(monkeypatch)
     monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [])
     args = argparse.Namespace(
-        model="transformer", hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
+        model=model, hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
         era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
         registry_root=str(tmp_path / "registry"), streaming=True, batch_size=None,
         num_workers=0, steering_cache_dir=str(tmp_path / "steer"), register_only=True,
