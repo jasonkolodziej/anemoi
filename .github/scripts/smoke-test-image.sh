@@ -50,7 +50,9 @@ check_no_ssh_keys() {
 	docker run --rm --user 0 --entrypoint python "$image" -c '
 import os, re, sys
 NAME = re.compile(r"^(id_(rsa|dsa|ecdsa|ed25519)(_sk)?(\.pub)?|authorized_keys2?|known_hosts|ssh_host_.*_key(\.pub)?|identity)$")
-HEADER = b"-----BEGIN OPENSSH PRIVATE KEY-----"
+# A whole key, not the marker alone: ssh.py in the cryptography package
+# (it parses keys) holds the BEGIN line as a constant.
+KEY = re.compile(rb"-----BEGIN OPENSSH PRIVATE KEY-----\s+[A-Za-z0-9+/=\s]{64,}-----END OPENSSH PRIVATE KEY-----")
 SKIP = ("/proc", "/sys", "/dev")
 found = []
 for root, dirs, files in os.walk("/", followlinks=False):
@@ -67,7 +69,7 @@ for root, dirs, files in os.walk("/", followlinks=False):
             if os.path.islink(path) or os.path.getsize(path) > 64 * 1024:
                 continue
             with open(path, "rb") as fh:
-                if HEADER in fh.read():
+                if KEY.search(fh.read()):
                     found.append(path)
         except OSError:
             pass
