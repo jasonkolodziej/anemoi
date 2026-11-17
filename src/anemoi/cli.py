@@ -378,12 +378,17 @@ def cmd_steering_spike(args: argparse.Namespace) -> int:
 
 def _stage_b_frozen(value: str | None) -> tuple[str, ...] | None:
     """``--stage-b-frozen``: None keeps curriculum.yaml's Stage B freezing;
-    ``none`` freezes nothing; otherwise a comma-separated module list."""
+    ``none`` freezes nothing; ``encoder`` freezes everything outside the
+    head. Those are the only names the runners' freezing understands
+    (`real_run.freeze_encoder`), so nothing else is accepted: an unknown
+    name would freeze nothing while the version's tag said otherwise."""
     if value is None:
         return None
-    if value.strip().lower() == "none":
+    if value == "none":
         return ()
-    return tuple(m.strip() for m in value.split(",") if m.strip())
+    if value == "encoder":
+        return ("encoder",)
+    raise ValueError(f"--stage-b-frozen must be 'encoder' or 'none', not {value!r}")
 
 
 def cmd_train(args: argparse.Namespace) -> int:
@@ -1977,10 +1982,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument(
         "--stage-b-frozen", dest="stage_b_frozen", default=None,
+        choices=["encoder", "none"],
         help=(
-            "Stage B's frozen modules: 'none' fine-tunes the whole model; "
-            "default: curriculum.yaml stage_b.frozen_modules (the encoder). "
-            "Recorded in the version's tags as stage_b_frozen"
+            "Stage B freezing: 'none' fine-tunes the whole model, 'encoder' "
+            "freezes everything outside the head; default: curriculum.yaml "
+            "stage_b.frozen_modules. Recorded in the version's tags as stage_b_frozen"
         ),
     )
     p.set_defaults(func=cmd_train)

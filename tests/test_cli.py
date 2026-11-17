@@ -346,6 +346,13 @@ def test_cmd_train_stage_b_frozen_reaches_the_curriculum_and_the_tags(
     assert ModelRegistry(registry_root).latest(model).tags.get("stage_b_frozen") == tag
 
 
+def test_stage_b_frozen_rejects_a_name_the_runners_cannot_freeze():
+    with pytest.raises(ValueError):
+        cli._stage_b_frozen("rnn,norm")
+    with pytest.raises(SystemExit):
+        cli.main(["train", "--hurdat2", "x", "--stage-b-frozen", "rnn"])
+
+
 def test_stage_b_frozen_none_builds_an_unfrozen_stage_b():
     from anemoi.training.curriculum import Curriculum
 
