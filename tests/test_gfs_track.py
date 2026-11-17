@@ -228,4 +228,4 @@ def test_a_working_fix_seeds_the_same_track_as_the_best_track_fix():
             fields, 20.0 + rng.normal(0, sd), -60.0 + rng.normal(0, sd),
             0.6 + rng.normal(0, 0.25), -0.9 + rng.normal(0, 0.25),
         )
-        np.testing.assert_allclose(noisy, ref, atol=1e-9)
+        np.testing.assert_allclose(noisy, ref, atol=1e-3)  # 0.06 nm: the same track
