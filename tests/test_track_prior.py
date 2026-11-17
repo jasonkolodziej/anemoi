@@ -281,3 +281,41 @@ def test_cli_train_refuses_the_prior_for_lstm_and_pinn(tmp_path):
             num_workers=0, adeck_dir=str(tmp_path),
         )
         assert cli.cmd_train(args) == 1
+
+
+def test_one_prior_fetch_is_shared_by_every_model_in_a_forecast(tmp_path):
+    from anemoi.training.real_inference_cycle import _live_prior_for, shared_prior
+
+    track = _track()
+    current = track.fixes[-1]
+    calls = []
+
+    def fetch(*a):
+        calls.append(1)
+        return None  # e.g. NHC unreachable: cached too, not retried per model
+
+    once = shared_prior(fetch)
+    for _ in ("cnn", "transformer", "gnn"):
+        prior, reason = _live_prior_for(
+            _version({"track_prior": "AVNI"}), track, current, tmp_path, once,
+        )
+        assert prior is None and reason
+    assert len(calls) == 1
+
+
+def test_live_adeck_text_is_capped_while_decompressing(monkeypatch):
+    import gzip
+
+    from anemoi.data import adeck_source
+    from anemoi.training import real_inference_live as live
+
+    monkeypatch.setattr(adeck_source, "MAX_ADECK_TEXT_BYTES", 100)
+    body = gzip.compress(b"x" * 10_000)
+    monkeypatch.setattr(adeck_source, "_get", lambda url: body)
+    assert live.fetch_live_adeck("AL012022") is None
+
+    line = (b"AL, 01, 2022090112, 03, AVNI,  12, 210N,  600W,  50,\n")
+    monkeypatch.setattr(adeck_source, "MAX_ADECK_TEXT_BYTES", 10_000)
+    monkeypatch.setattr(adeck_source, "_get", lambda url: gzip.compress(line))
+    adeck = live.fetch_live_adeck("AL012022")
+    assert adeck is not None and adeck.get("AVNI", T0, 12).lat == pytest.approx(21.0)

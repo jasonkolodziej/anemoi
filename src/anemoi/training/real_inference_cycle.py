@@ -271,6 +271,26 @@ def shared_steering(steering_fetcher: SteeringFetcher | None) -> SteeringFetcher
     return fetcher
 
 
+def shared_prior(prior_fetcher):
+    """One forecast invocation's track-prior source: ``prior_fetcher`` (or
+    `real_inference_live.fetch_live_track_prior`), called at most once per
+    storm and time, its result kept, ``None`` included, as `shared_steering`
+    does for steering: every model trained with the prior shares one a-deck
+    download, and a failed one isn't retried per model."""
+    from .real_inference_live import fetch_live_track_prior
+
+    fetch = prior_fetcher or fetch_live_track_prior
+    seen: dict = {}
+
+    def fetcher(track, current, cache_dir):
+        key = (track.storm_id, current.valid_time)
+        if key not in seen:
+            seen[key] = fetch(track, current, cache_dir)
+        return seen[key]
+
+    return fetcher
+
+
 def _live_prior_for(
     version, track: Track, current: Fix, cache_dir: Path | str,
     prior_fetcher,
@@ -490,6 +510,7 @@ def build_real_deterministic_fn(
             track, current, cache_dir, fields_fetcher=shared_fetcher,
         )
         steering_once = shared_steering(steering_fetcher)
+        prior_once = shared_prior(prior_fetcher)
 
         for name in _GROUP1_LIVE_MODELS:
             if name == "pinn":
@@ -523,7 +544,7 @@ def build_real_deterministic_fn(
                     ) if version is not None else (None, None)
                 )
                 prior, prior_reason = (
-                    _live_prior_for(version, track, current, cache_dir, prior_fetcher)
+                    _live_prior_for(version, track, current, cache_dir, prior_once)
                     if version is not None and steering_reason is None else (None, None)
                 )
                 if version is None:

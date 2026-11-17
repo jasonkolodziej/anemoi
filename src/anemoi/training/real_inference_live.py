@@ -87,6 +87,7 @@ def fetch_live_adeck(storm_id: str):
     season in progress, then the archive), AVNI rows only, or None when
     neither has it or it can't be read."""
     import gzip
+    import io
 
     from ..data.adeck_source import MAX_ADECK_TEXT_BYTES, _get, adeck_urls
     from ..data.atcf import parse_adeck
@@ -102,7 +103,10 @@ def fetch_live_adeck(storm_id: str):
         except Exception:  # noqa: BLE001 - unreachable now: the model skips this cycle
             return None
         try:
-            text = gzip.decompress(body)[: MAX_ADECK_TEXT_BYTES + 1]
+            # Read at most the cap from the stream: decompressing first would
+            # let a small download expand without bound before any check.
+            with gzip.GzipFile(fileobj=io.BytesIO(body)) as fh:
+                text = fh.read(MAX_ADECK_TEXT_BYTES + 1)
             if len(text) > MAX_ADECK_TEXT_BYTES:
                 return None
             return parse_adeck(
