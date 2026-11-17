@@ -376,6 +376,21 @@ def cmd_steering_spike(args: argparse.Namespace) -> int:
     return 0
 
 
+def _stage_b_frozen(value: str | None) -> tuple[str, ...] | None:
+    """``--stage-b-frozen``: None keeps curriculum.yaml's Stage B freezing;
+    ``none`` freezes nothing; ``encoder`` freezes everything outside the
+    head. Those are the only names the runners' freezing understands
+    (`real_run.freeze_encoder`), so nothing else is accepted: an unknown
+    name would freeze nothing while the version's tag said otherwise."""
+    if value is None:
+        return None
+    if value == "none":
+        return ()
+    if value == "encoder":
+        return ("encoder",)
+    raise ValueError(f"--stage-b-frozen must be 'encoder' or 'none', not {value!r}")
+
+
 def cmd_train(args: argparse.Namespace) -> int:
     """Run a real Stage A/B curriculum against a real HURDAT2 file (#22).
 
@@ -453,6 +468,14 @@ def cmd_train(args: argparse.Namespace) -> int:
     streaming_kwargs: dict = {"streaming": args.streaming, "num_workers": args.num_workers}
     if args.batch_size is not None:
         streaming_kwargs["batch_size"] = args.batch_size
+    # Stage B freezes everything outside the head (curriculum.yaml
+    # stage_b.frozen_modules), so a new input such as steering is learnt by
+    # its own layer and the head alone. `--stage-b-frozen none` fine-tunes
+    # the whole model at Stage B's learning rate instead (skill-gap plan,
+    # Phase 1: the spike's "only the head and the conv train" caveat).
+    stage_b_frozen = _stage_b_frozen(getattr(args, "stage_b_frozen", None))
+    if stage_b_frozen is not None:
+        streaming_kwargs["curriculum_kwargs"] = {"b": {"frozen_modules": stage_b_frozen}}
 
     if args.model == "lstm":
         from .training.real_run import run_lstm_curriculum
@@ -552,6 +575,8 @@ def cmd_train(args: argparse.Namespace) -> int:
     tag_dict.update(gridded_input_tags(args.gdas_cache_dir))
     tag_dict.update(training_data_tags(args.hurdat2, tracks))
     tag_dict.update(basin_tags(val_metrics))
+    if stage_b_frozen is not None:
+        tag_dict["stage_b_frozen"] = ",".join(stage_b_frozen) or "none"
     version = registry.register(
         args.model,
         run_id=f"cli-{datetime.now(UTC):%Y%m%dT%H%M%S}",
@@ -782,9 +807,15 @@ def cmd_retrain_check(args: argparse.Namespace) -> int:
         print("no dispatchable trigger fired; nothing to train")
         return 0
 
-    other = [j.reason.value for j in jobs if j.reason not in dispatchable and j.reason != Reason.CASCADE]
+    other = [
+        j.reason.value for j in jobs
+        if j.reason not in dispatchable and j.reason != Reason.CASCADE
+    ]
     if other:
-        print(f"note: also reported but not dispatched (out of this command's scope): {sorted(set(other))}")
+        print(
+            "note: also reported but not dispatched (out of this command's scope): "
+            f"{sorted(set(other))}"
+        )
 
     if args.dry_run:
         print("--dry-run: a dispatchable trigger fired, but not running training")
@@ -955,7 +986,9 @@ def cmd_registry_reconcile(args: argparse.Namespace) -> int:
         if registry.production(model) is not None:
             print(f"{model}: has a production version -- skipped (§5.3 manual gate)")
             continue
-        candidates = [v for v in registry.versions(model) if _finite(v) is not None and _loadable(v)]
+        candidates = [
+            v for v in registry.versions(model) if _finite(v) is not None and _loadable(v)
+        ]
         if not candidates:
             print(
                 f"{model}: no version has a real, finite {args.primary_metric!r} "
@@ -965,7 +998,10 @@ def cmd_registry_reconcile(args: argparse.Namespace) -> int:
         best = min(candidates, key=_finite)
         current = registry.in_stage(model, Stage.STAGING)
         if current is not None and current.version == best.version:
-            print(f"{model}: v{best.version} already staging ({args.primary_metric}={_finite(best):.2f})")
+            print(
+                f"{model}: v{best.version} already staging "
+                f"({args.primary_metric}={_finite(best):.2f})"
+            )
             continue
         was = f"v{current.version}" if current is not None else "nothing"
         if args.dry_run:
@@ -1942,6 +1978,15 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "--streaming only; real DataLoader worker processes (default: 0, "
             "main-process loading) -- training.streaming.make_dataloader"
+        ),
+    )
+    p.add_argument(
+        "--stage-b-frozen", dest="stage_b_frozen", default=None,
+        choices=["encoder", "none"],
+        help=(
+            "Stage B freezing: 'none' fine-tunes the whole model, 'encoder' "
+            "freezes everything outside the head; default: curriculum.yaml "
+            "stage_b.frozen_modules. Recorded in the version's tags as stage_b_frozen"
         ),
     )
     p.set_defaults(func=cmd_train)

@@ -307,6 +307,60 @@ def test_cmd_train_passes_the_steering_cache_to_a_gridded_model(
     assert captured["steering_cache_dir"] == str(tmp_path / "steer")
 
 
+@pytest.mark.parametrize("model, module, runner", [
+    ("transformer", "real_run_transformer", "run_transformer_curriculum"),
+    ("cnn", "real_run_cnn", "run_cnn_curriculum"),
+    ("gnn", "real_run_gnn", "run_gnn_curriculum"),
+    ("pinn", "real_run_pinn", "run_pinn_curriculum"),
+    ("lstm", "real_run", "run_lstm_curriculum"),
+])
+@pytest.mark.parametrize("flag, frozen, tag", [
+    (None, None, None),
+    ("none", (), "none"),
+    ("encoder", ("encoder",), "encoder"),
+])
+def test_cmd_train_stage_b_frozen_reaches_the_curriculum_and_the_tags(
+    tmp_path, monkeypatch, model, module, runner, flag, frozen, tag,
+):
+    captured: dict = {}
+
+    def fake(*a, **k):
+        captured.update(k)
+        return _fake_curriculum_run(model)
+
+    monkeypatch.setattr(f"anemoi.training.{module}.{runner}", fake)
+    _fake_checkpoint_store(monkeypatch)
+    monkeypatch.setattr("anemoi.data.hurdat2.parse_hurdat2_file", lambda path: [])
+    registry_root = tmp_path / "registry"
+    args = argparse.Namespace(
+        model=model, hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
+        era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
+        registry_root=str(registry_root), streaming=True, batch_size=None,
+        num_workers=0, register_only=True, stage_b_frozen=flag,
+    )
+    assert cli.cmd_train(args) == 0
+    if frozen is None:
+        assert "curriculum_kwargs" not in captured
+    else:
+        assert captured["curriculum_kwargs"] == {"b": {"frozen_modules": frozen}}
+    assert ModelRegistry(registry_root).latest(model).tags.get("stage_b_frozen") == tag
+
+
+def test_stage_b_frozen_rejects_a_name_the_runners_cannot_freeze():
+    with pytest.raises(ValueError):
+        cli._stage_b_frozen("rnn,norm")
+    with pytest.raises(SystemExit):
+        cli.main(["train", "--hurdat2", "x", "--stage-b-frozen", "rnn"])
+
+
+def test_stage_b_frozen_none_builds_an_unfrozen_stage_b():
+    from anemoi.training.curriculum import Curriculum
+
+    assert Curriculum.standard("transformer").stages[-1].frozen_modules == ("encoder",)
+    unfrozen = Curriculum.standard("transformer", b={"frozen_modules": cli._stage_b_frozen("none")})
+    assert unfrozen.stages[-1].frozen_modules == ()
+
+
 # --- cmd_train_schedule dispatch ---------------------------------------------
 
 
