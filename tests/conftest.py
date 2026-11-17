@@ -11,6 +11,22 @@ from anemoi.models.base import torch_available
 TARGET = datetime(2026, 8, 6, 6, tzinfo=UTC)
 
 
+def pytest_sessionstart(session):
+    """With ``ANEMOI_EXPECT_COMPILED=1`` (set by
+    ``.github/scripts/test-compiled-wheel.sh``), refuse to run unless the
+    ``anemoi`` being tested is the compiled wheel: a run that picked up the
+    source tree instead would pass and prove nothing about the compiled one.
+    """
+    if os.environ.get("ANEMOI_EXPECT_COMPILED") != "1":
+        return
+    import anemoi.cli
+
+    if anemoi.cli.__file__.endswith(".py"):
+        raise pytest.UsageError(
+            f"ANEMOI_EXPECT_COMPILED=1 but anemoi was imported from source: {anemoi.cli.__file__}"
+        )
+
+
 def pytest_collection_modifyitems(config, items):
     """Skip torch-marked tests when the optional extra is not installed,
     network-marked tests unless explicitly opted into (they hit real public

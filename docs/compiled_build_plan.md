@@ -2,9 +2,11 @@
 
 Nov 17, 2026
 
-**Status:** phase 1 done (the build script exists and is opt-in); phases 2–6
-not started. Nothing in the package source, the images or CI has changed.
-The aim is **speed** (decided Nov 17), so phase 2's benchmark gate stands.
+**Status:** phases 1 and 2 done. **Phase 2's gate was not met: the compiled
+build behaves identically but is not faster** (see
+[phase 2](#phase-2-prove-it-behaves-the-same--done-gate-not-met)). Phases 3–5
+are on hold pending a decision; nothing in the package source, the images or
+the default CI has changed. The aim is **speed** (decided Nov 17).
 
 ## Goal
 
@@ -141,26 +143,98 @@ torch.
 For phase 3: `docker/multistage.Dockerfile.dockerignore` will need
 `!compile/` and `!.github/scripts/build-compiled-wheel.sh`.
 
-### Phase 2: prove it behaves the same
+### Phase 2: prove it behaves the same — done, gate not met
 
-- [ ] Mark source-reading tests with a new `source` pytest marker.
-- [ ] Add a script that installs the compiled wheel into a clean venv and
-      runs `pytest -m "not source"` against the *installed* package (not
-      `src/`), asserting that `anemoi.cli.__file__` ends in `.so` so the run
-      cannot silently test the source tree.
-- [ ] Run it with the `torch-cpu` extra so the 99 skipped tests execute.
-      Fix or exclude whatever fails; record each exclusion and why.
-- [ ] Parity check: one small seeded training run and one inference cycle,
-      source vs compiled, asserting identical metrics and outputs.
-- [ ] Benchmark: test-suite time, API request latency, one training epoch,
-      source vs compiled. Write the numbers here.
-- [ ] CI: a `compiled` job running the above on pull requests. Note that
-      `ci.yml` today only validates YAML and scans for secrets; it does not
-      run pytest, so this job would be the first test run in CI. Adding a
-      plain source-tree pytest job alongside is recommended.
+- [x] `source` pytest marker on the five tests in `tests/test_sources.py`
+      that parse the package's `.py` files.
+- [x] `.github/scripts/test-compiled-wheel.sh`: builds two environments
+      from `uv.lock` that differ only in where `anemoi` comes from (editable
+      source vs the wheel), runs `pytest -m "not source"` against the
+      installed wheel, then the parity check, and with `--bench` the
+      timings. `tests/conftest.py` refuses to run under
+      `ANEMOI_EXPECT_COMPILED=1` if `anemoi` was imported from source.
+- [x] Run with torch and the extras the images use (`api`, `gridded`,
+      `storage`, `tracking`), on Python 3.12 (the images' version) and 3.13.
+- [x] Parity check (`compile/probe.py parity`): a seeded LSTM capacity
+      ablation, a seeded Stage B LSTM training stage and one forecast
+      cycle, compared value by value.
+- [x] Benchmark (`compile/probe.py bench`).
+- [x] CI: `.github/workflows/compiled-wheel.yml`, on pull requests that
+      touch the build and by manual dispatch. **Not yet run**: it can only
+      run once a pull request exists. It uses the `torch-cpu` extra; the
+      runs below used `torch` because PyTorch's CPU index was unreachable
+      from the sandbox.
 
-**Gate:** stop here if the benchmark shows no gain worth a second build
-artifact, unless the aim is something other than speed.
+**Behaviour: identical.**
+
+- Test suite against the compiled wheel, Python 3.12, all extras:
+  1360 passed, 26 skipped, 5 deselected (`source`), none failed. From
+  source in the same environment: 1365 passed, 26 skipped.
+- No module had to stay interpreted; `KEEP_AS_SOURCE` is still empty. The
+  `torch.compile` risk did not show up in the suite, but the suite runs on
+  CPU and may not exercise `torch.compile` on a real model, so that risk is
+  not closed for GPU training.
+- Parity: all 162 compared values are equal, including the SHA-256 of the
+  trained weights and the full cycle payload.
+
+**Speed: no gain.** Python 3.12, same locked dependencies, 4 cores, CPU
+only; best of three full runs of each build, alternating.
+
+| | source | compiled | speedup |
+|---|---|---|---|
+| import (cli + api + training) | 488 ms | 495 ms | 0.99x |
+| synthetic archive, 46 seasons | 301 ms | 276 ms | 1.09x |
+| build training samples | 2780 ms | 2572 ms | 1.08x |
+| forecast cycle (20 members) | 3.08 ms | 3.09 ms | 1.00x |
+| LSTM capacity ablation, 4 cells x 30 epochs | 491 ms | 506 ms | 0.97x |
+| LSTM stage B, 30 epochs | 126 ms | 134 ms | 0.94x |
+| `GET /v1/health` | 2.02 ms | 2.10 ms | 0.96x |
+| `GET /v1/storms` | 2.49 ms | 2.42 ms | 1.03x |
+| `GET /v1/registry` | 2.63 ms | 2.64 ms | 1.00x |
+| `GET /v1/monitoring/drift` | 4.51 ms | 4.42 ms | 1.02x |
+| `POST /v1/storms/{id}/cycles` | 7.31 ms | 6.15 ms | 1.19x |
+
+Run-to-run spread on the source build alone is 5–15% on most rows, so
+everything here except the two data-preparation rows (about 8%) is noise.
+Whole test suite: 125 s compiled, 129 s source. GPU training was not
+measured, but there the share of time spent in Anemoi's own Python is
+smaller still.
+
+Why: the time is not in interpreting Anemoi's code. A profile of "build
+training samples" shows it in `geo.haversine_nm`, `geo.bearings_deg` and
+`storm_relative.displacement_nm` being called 155,000 times on single
+points, each call a handful of numpy scalar operations. Cython without
+type declarations still makes every one of those numpy calls through the
+Python C-API, so it removes almost nothing.
+
+**Gate: stop.** A second build artifact, a three-minute build and a
+25 MB wheel for 0–8% is not worth carrying. Recommendation:
+
+1. Do not proceed to phases 3–5 for speed.
+2. Get the speed from the source instead: vectorise the per-point geometry
+   in `geo.py` / `data/storm_relative.py` over whole tracks with plain
+   numpy (the first item of phase 6, minus Cython). That is where the
+   measured time is, it should be several times faster on data
+   preparation, it needs no compiler, and it benefits the existing images
+   directly. `compile/probe.py bench` and `parity` are ready to measure
+   and check it.
+3. Keep or remove the build scripts: they are opt-in and inert, and would
+   be the starting point if typed Cython hot loops are ever wanted.
+
+Found along the way, independent of this work:
+
+- `anemoi cycle <label>` fails from source with `TypeError: Object of type
+  bool is not JSON serializable` (a numpy bool in `CycleOutput.payload()`).
+  Not fixed here.
+- With the `gridded` extra, `import eccodes, pyproj` makes the interpreter
+  abort while exiting (`free(): invalid pointer`), on Python 3.12 and 3.13
+  in the sandbox, after all work is done. It turns a passing `pytest` run
+  into exit status 134. `test-compiled-wheel.sh` reads pytest's JUnit
+  result in that case. Not checked in the real images, which use the
+  system `libeccodes0`.
+- `tests/test_real_dropsonde.py::test_parse_mission_tarball_raises_on_a_non_tar_blob`
+  failed without the `gridded` extra; it now carries the file's own
+  `NEEDS_ECCODES` skip (fixed here).
 
 ### Phase 3: compiled images, beside the current ones
 
@@ -209,8 +283,8 @@ Phases 4 and 5 are mostly waiting on real deployments, not on work.
 | Phase | Work | Elapsed | Depends on |
 |---|---|---|---|
 | 1 Build plumbing | done | done | |
-| 2 Parity and benchmark | 1–2 days | 1–2 days | CI (or a machine) that can install torch; longer if `torch.compile` forces exclusions |
-| 3 Compiled images | about 1 day | 1–2 days | image builds in CI |
+| 2 Parity and benchmark | done | done | gate not met: no speed gain |
+| 3 Compiled images (on hold) | about 1 day | 1–2 days | image builds in CI |
 | 4 Trial | under 1 day | about 1 week | a non-production Cloudflare environment; one scheduled training job to compare |
 | 5 Switch the default | half a day | 1–2 days | phase 4 clean |
 | 6 Hot loops / model export | open-ended | 1–2 weeks for typed hot loops; a month or more for C++ model serving | phase 2's profile |

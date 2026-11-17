@@ -205,3 +205,4 @@ graphify-out/*
 
 # Compiled (C extension) wheel: .github/scripts/build-compiled-wheel.sh
 dist-compiled/
+.venv-compiled/

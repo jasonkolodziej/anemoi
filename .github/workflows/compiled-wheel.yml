@@ -1,0 +1,49 @@
+name: Compiled wheel
+
+# Builds the opt-in compiled (C extension) wheel and checks it against the
+# source tree: the test suite run on the installed wheel, and a seeded
+# training run and forecast cycle that must come out byte-identical
+# (docs/compiled_build_plan.md, phase 2). Nothing ships from here.
+#
+# Only on changes to the build itself, or by hand: the build takes a few
+# minutes, and the compiled wheel is not what the images run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bench:
+        description: Also print source-vs-compiled timings
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - compile/**
+      - .github/scripts/build-compiled-wheel.sh
+      - .github/scripts/test-compiled-wheel.sh
+      - .github/workflows/compiled-wheel.yml
+
+jobs:
+  compiled-wheel:
+    name: Build & test compiled wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    permissions:
+      contents: read
+
+    env:
+      # The interpreter both images run (docker/multistage.Dockerfile).
+      PYTHON: "3.12"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Build the compiled wheel
+        run: .github/scripts/build-compiled-wheel.sh
+
+      - name: Test it against the source tree
+        run: .github/scripts/test-compiled-wheel.sh ${{ inputs.bench && '--bench' || '' }}

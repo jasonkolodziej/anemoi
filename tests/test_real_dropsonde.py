@@ -70,6 +70,7 @@ def test_hardcoded_missing_sentinels_match_the_real_eccodes_constants():
     assert _CODES_MISSING_LONG == eccodes.CODES_MISSING_LONG
 
 
+@NEEDS_ECCODES
 def test_parse_mission_tarball_raises_on_a_non_tar_blob():
     from anemoi.data.real_dropsonde import DropsondeFetchError
 

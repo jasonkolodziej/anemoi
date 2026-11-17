@@ -310,6 +310,7 @@ def _parameters(function: ast.FunctionDef) -> set[str]:
     return {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
 
 
+@pytest.mark.source
 def test_every_fetch_adapter_is_classified():
     """The scan below can only look for the adapters it knows. A new
     `data/real_*.py` fails here until it is given its registry source, and a
@@ -322,6 +323,7 @@ def test_every_fetch_adapter_is_classified():
     assert _unread_sources() <= fetched
 
 
+@pytest.mark.source
 def test_an_adapter_is_named_by_other_code_only_if_its_source_is_read():
     """Holds `used_by` to the code where it drifts most easily: an adapter
     gets wired into training or a cycle and its source still reads "not used
@@ -367,6 +369,7 @@ def test_an_adapter_is_named_by_other_code_only_if_its_source_is_read():
     assert read_by_nothing == []
 
 
+@pytest.mark.source
 def test_a_fetch_only_importer_names_the_adapter_it_is_listed_for():
     """A stale entry would excuse a module that no longer exists, or one that
     no longer touches the adapter."""
@@ -376,6 +379,7 @@ def test_a_fetch_only_importer_names_the_adapter_it_is_listed_for():
             assert _names_adapter(_parse(relative), adapter), (adapter, relative)
 
 
+@pytest.mark.source
 def test_no_module_imports_by_a_computed_name():
     """`import_module(f"..data.real_{name}")` would load an adapter without
     naming it, and the scan above would miss it. A literal module name is
@@ -392,6 +396,7 @@ def test_no_module_imports_by_a_computed_name():
     assert computed == COMPUTED_IMPORTS
 
 
+@pytest.mark.source
 def test_model_inputs_match_what_each_runner_and_live_builder_takes():
     """`MODEL_INPUTS` against the two places a model's input is built: its
     curriculum runner (`training/real_run*.py`) and its live builder
