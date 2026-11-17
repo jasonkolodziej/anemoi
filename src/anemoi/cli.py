@@ -802,9 +802,15 @@ def cmd_retrain_check(args: argparse.Namespace) -> int:
         print("no dispatchable trigger fired; nothing to train")
         return 0
 
-    other = [j.reason.value for j in jobs if j.reason not in dispatchable and j.reason != Reason.CASCADE]
+    other = [
+        j.reason.value for j in jobs
+        if j.reason not in dispatchable and j.reason != Reason.CASCADE
+    ]
     if other:
-        print(f"note: also reported but not dispatched (out of this command's scope): {sorted(set(other))}")
+        print(
+            "note: also reported but not dispatched (out of this command's scope): "
+            f"{sorted(set(other))}"
+        )
 
     if args.dry_run:
         print("--dry-run: a dispatchable trigger fired, but not running training")
@@ -975,7 +981,9 @@ def cmd_registry_reconcile(args: argparse.Namespace) -> int:
         if registry.production(model) is not None:
             print(f"{model}: has a production version -- skipped (§5.3 manual gate)")
             continue
-        candidates = [v for v in registry.versions(model) if _finite(v) is not None and _loadable(v)]
+        candidates = [
+            v for v in registry.versions(model) if _finite(v) is not None and _loadable(v)
+        ]
         if not candidates:
             print(
                 f"{model}: no version has a real, finite {args.primary_metric!r} "
@@ -985,7 +993,10 @@ def cmd_registry_reconcile(args: argparse.Namespace) -> int:
         best = min(candidates, key=_finite)
         current = registry.in_stage(model, Stage.STAGING)
         if current is not None and current.version == best.version:
-            print(f"{model}: v{best.version} already staging ({args.primary_metric}={_finite(best):.2f})")
+            print(
+                f"{model}: v{best.version} already staging "
+                f"({args.primary_metric}={_finite(best):.2f})"
+            )
             continue
         was = f"v{current.version}" if current is not None else "nothing"
         if args.dry_run:
