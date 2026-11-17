@@ -349,3 +349,59 @@ class TestSetBudget:
                 "or raise the budget deliberately and record why."
             )
         self.log.append((when, model_name, justification.strip()))
+
+    # -- persistence: the log is only a budget if it outlives one job --------
+
+    def to_json(self) -> list[dict]:
+        return [
+            {"date": when.isoformat(), "model": model, "justification": why}
+            for when, model, why in self.log
+        ]
+
+    @classmethod
+    def from_json(cls, entries: list[dict]) -> TestSetBudget:
+        budget = cls()
+        budget.log = [
+            (date.fromisoformat(e["date"]), str(e["model"]), str(e["justification"]))
+            for e in entries
+        ]
+        return budget
+
+
+#: Where the test-set budget's log is kept in the durable store, beside the
+#: registry's mirror: every job that looks at the test split reads and
+#: extends the same log.
+TEST_SET_BUDGET_KEY = "test_set_budget.json"
+
+
+def spend_test_set_budget(
+    checkpoint_store, model_name: str, justification: str, when: date | None = None,
+) -> dict:
+    """Spend one test-set evaluation from the durable budget (read from and
+    written back to ``checkpoint_store`` under `TEST_SET_BUDGET_KEY`) and
+    return the record of it. Raises `PromotionError` without spending when
+    the justification is blank or the season's budget is used up, and when
+    there is no durable store to keep the log in."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    if checkpoint_store is None:
+        raise PromotionError("test-set evaluation needs the durable store to log it in")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / TEST_SET_BUDGET_KEY
+        entries: list[dict] = []
+        if checkpoint_store.exists(TEST_SET_BUDGET_KEY):
+            bucket = checkpoint_store.config.bucket
+            checkpoint_store.download(f"s3://{bucket}/{TEST_SET_BUDGET_KEY}", path)
+            entries = json.loads(path.read_text())
+        budget = TestSetBudget.from_json(entries)
+        budget.spend(model_name, justification, when)
+        path.write_text(json.dumps(budget.to_json(), indent=2))
+        checkpoint_store.upload(path, TEST_SET_BUDGET_KEY)
+    spent_on, model, why = budget.log[-1]
+    return {
+        "date": spent_on.isoformat(), "model": model, "justification": why,
+        "used_this_season": budget.evaluations_in(spent_on.year),
+        "max_per_season": budget.max_evaluations_per_season,
+    }

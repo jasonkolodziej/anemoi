@@ -717,3 +717,151 @@ def test_an_extra_version_is_loaded_from_its_registry_entry(cases, archive, monk
         collect_validation_forecasts(
             tracks, Registry(), None, "/gdas", extra_versions={"fusion": 1},
         )
+
+
+# --- the held-out test split ---------------------------------------------------
+
+
+def test_test_split_windows_are_drawn_after_and_leave_the_validation_windows_alone(archive):
+    from anemoi.data.splits import Split
+    from anemoi.training.real_latents import scored_windows
+
+    tracks, _ = archive
+    _, val = joint_stage_windows(tracks, seed=7, n_augment=1)
+    val_again = scored_windows(tracks, Split.VAL, seed=7, n_augment=1)
+    test = scored_windows(tracks, Split.TEST, seed=7, n_augment=1)
+
+    assert [w.current for w in val_again] == [w.current for w in val]
+    assert test and {w.storm_id for w in test} == {"AL012025"}
+    with pytest.raises(ValueError):
+        scored_windows(tracks, Split.TRAIN)
+
+
+def test_test_split_cases_are_the_test_season(archive):
+    from anemoi.data.splits import Split
+
+    tracks, statuses = archive
+    test_cases = validation_cases(tracks, statuses, split=Split.TEST)
+    assert set(test_cases.storm_ids) == {"AL012025"}
+    assert test_cases.seasons == (2025, 2025)
+    assert test_cases.split == "test"
+    assert validation_cases(tracks, statuses).split == "val"
+
+
+def test_a_forecast_file_is_only_scored_on_its_own_split(archive):
+    from types import SimpleNamespace
+
+    from anemoi.data.splits import Split
+
+    tracks, statuses = archive
+    val_file = SimpleNamespace(header={"split": "val"})
+    with pytest.raises(BaselineBacktestError, match="val split, not test"):
+        run_baseline_backtest(
+            tracks, statuses, {}, model_forecasts=val_file, split=Split.TEST,
+        )
+
+
+class _FakeStore:
+    """The durable store, in memory: enough for the test-set budget."""
+
+    def __init__(self):
+        self.objects: dict[str, bytes] = {}
+        self.config = type("C", (), {"bucket": "b"})()
+
+    def exists(self, key):
+        return key in self.objects
+
+    def download(self, uri, path):
+        path.write_bytes(self.objects[uri.split("/", 3)[-1]])
+
+    def upload(self, path, key):
+        self.objects[key] = path.read_bytes()
+        return f"s3://b/{key}"
+
+
+def test_the_test_set_budget_outlives_one_job_and_runs_out():
+    from datetime import date
+
+    from anemoi.training.promotion import (
+        TEST_SET_BUDGET_KEY,
+        PromotionError,
+        TestSetBudget,
+        spend_test_set_budget,
+    )
+
+    store = _FakeStore()
+    when = date(2026, 11, 17)
+    limit = TestSetBudget().max_evaluations_per_season
+    with pytest.raises(PromotionError, match="justification"):
+        spend_test_set_budget(store, "gnn v10", "  ", when)
+    assert not store.exists(TEST_SET_BUDGET_KEY)
+    for i in range(limit):
+        record = spend_test_set_budget(store, "gnn v10", f"look {i}", when)
+        assert record["used_this_season"] == i + 1
+    with pytest.raises(PromotionError, match="exhausted"):
+        spend_test_set_budget(store, "gnn v10", "one more", when)
+    logged = json.loads(store.objects[TEST_SET_BUDGET_KEY])
+    assert [e["justification"] for e in logged] == [f"look {i}" for i in range(limit)]
+    with pytest.raises(PromotionError, match="durable store"):
+        spend_test_set_budget(None, "gnn v10", "why", when)
+
+
+def test_a_test_split_export_needs_a_justification_before_any_model_runs(
+    tmp_path, monkeypatch, capsys,
+):
+    import argparse
+
+    from anemoi import cli
+    from anemoi.tracking import checkpoint_store
+
+    store = _FakeStore()
+    monkeypatch.setattr(checkpoint_store.S3Config, "from_env", classmethod(lambda cls: None))
+    monkeypatch.setattr(checkpoint_store, "CheckpointStore", lambda config: store)
+    ran = []
+
+    def fake_dump(*a, **k):
+        ran.append(1)
+        raise BaselineBacktestError("stop here")
+
+    monkeypatch.setattr("anemoi.training.baseline_backtest.dump_validation_forecasts", fake_dump)
+    monkeypatch.setattr(cli, "_training_tracks", lambda path: [])
+    (tmp_path / "h.txt").write_text("")
+    args = argparse.Namespace(
+        hurdat2=str(tmp_path / "h.txt"), gdas_cache_dir=str(tmp_path), seed=1, n_augment=1,
+        fusion_version=14, also=[], steering_cache_dir=None,
+        registry_root=str(tmp_path / "reg"), out=str(tmp_path / "o.json"),
+        split="test", justification=None,
+    )
+    assert cli.cmd_validation_forecasts(args) == 1
+    assert not ran
+    assert "requires a written justification" in capsys.readouterr().out
+    assert not store.objects  # nothing spent
+
+    args.justification = "the shrunk AVNI-prior GNN, once"
+    assert cli.cmd_validation_forecasts(args) == 1  # the fake export stops after the spend
+    assert ran == [1]
+    assert "test-set budget: spent 1" in capsys.readouterr().out
+
+
+def test_test_split_reports_say_so_and_refuse_registered_errors(archive):
+    from anemoi.data.splits import Split
+    from anemoi.training.baseline_backtest import (
+        SAMPLES,
+        TEST_SAMPLE_A,
+        RegisteredError,
+        _notes,
+        samples_for,
+    )
+
+    tracks, statuses = archive
+    test_cases = validation_cases(tracks, statuses, split=Split.TEST)
+    notes = _notes(test_cases, has_models=True)
+    assert notes[0].startswith("Held-out test season")
+    assert not any("One validation season" in n for n in notes)
+    assert samples_for("test")["A"] == TEST_SAMPLE_A
+    assert samples_for("val") is SAMPLES
+    with pytest.raises(BaselineBacktestError, match="validation split's"):
+        run_baseline_backtest(
+            tracks, statuses, {}, split=Split.TEST,
+            registered=[RegisteredError.parse("fusion:AL:48=231")],
+        )

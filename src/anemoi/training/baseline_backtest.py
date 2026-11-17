@@ -88,7 +88,7 @@ from ..metrics.homogeneous import (
 )
 from ..models.base import DEFAULT_LEADS
 from .capacity_ablation import SEQUENCE_LENGTH
-from .real_latents import GROUP1_ORDER, joint_stage_windows
+from .real_latents import GROUP1_ORDER, scored_windows
 from .real_run import (
     LEAD_STEPS,
     StageWindow,
@@ -141,6 +141,18 @@ SAMPLES: dict[str, str] = {
     "C": "B, and a tropical or subtropical cyclone (TD, TS, HU, SD, SS) at both the "
          "initial and the verifying time: NHC's status rule",
 }
+
+#: Sample A on the held-out test split: no registered metric describes it.
+TEST_SAMPLE_A = (
+    "every window of the held-out test season (the same rule as the registry's "
+    "validation windows; no registered metric is a mean over these cases)"
+)
+
+
+def samples_for(split: str) -> dict[str, str]:
+    """`SAMPLES`, with sample A described for ``split``."""
+    return SAMPLES if split == "val" else {**SAMPLES, "A": TEST_SAMPLE_A}
+
 
 #: What a basin's rows are, where it is not what NHC's own tables are.
 BASIN_NOTES: dict[str, str] = {
@@ -251,6 +263,8 @@ class ValidationCases:
     seasons: tuple[int, int]
     seed: int
     n_augment: int
+    #: Which held-out split the cases are: "val" (the registry's) or "test".
+    split: str = "val"
 
     def __len__(self) -> int:
         return len(self.storm_ids)
@@ -270,11 +284,11 @@ class ValidationCases:
         return tuple(sorted({storm_basin(s) for s in self.storm_ids}))
 
 
-def validation_tracks(tracks: list[Track]) -> list[Track]:
-    """The storms of Stage B's validation split: the storms the cases come
-    from, and the ones a-decks are needed for."""
+def validation_tracks(tracks: list[Track], split: Split = Split.VAL) -> list[Track]:
+    """The storms of Stage B's validation split (or ``split``): the storms
+    the cases come from, and the ones a-decks are needed for."""
     boundaries = boundaries_for_tracks(Flavor.GDAS_FINETUNE, tracks)
-    return filter_tracks(tracks, assign_splits(tracks, boundaries), Split.VAL)
+    return filter_tracks(tracks, assign_splits(tracks, boundaries), split)
 
 
 def validation_cases(
@@ -283,8 +297,11 @@ def validation_cases(
     *,
     seed: int = 20260806,
     n_augment: int = 1,
+    split: Split = Split.VAL,
 ) -> ValidationCases:
-    """Enumerate the validation windows fusion and diffusion are scored on.
+    """Enumerate the validation windows fusion and diffusion are scored on
+    (or, with ``split=Split.TEST``, the held-out test storms' windows:
+    `real_latents.scored_windows`).
 
     ``tracks`` are the training storms (`cli._training_tracks`), in the
     file's order; ``statuses`` is `data.hurdat2.parse_hurdat2_statuses` of
@@ -292,13 +309,13 @@ def validation_cases(
     (`real_orchestrator._run_latents`: the run's seed, and 1), or the cases
     are the same and the working fixes are not.
     """
-    _train, windows = joint_stage_windows(tracks, seed=seed, n_augment=n_augment)
+    windows = scored_windows(tracks, split, seed=seed, n_augment=n_augment)
     if not windows:
-        raise BaselineBacktestError("the validation split has no windows")
+        raise BaselineBacktestError(f"the {split.value} split has no windows")
     finals = {t.storm_id: t for t in tracks}
     positions = {
         t.storm_id: {f.valid_time: i for i, f in enumerate(t.fixes)}
-        for t in validation_tracks(tracks)
+        for t in validation_tracks(tracks, split)
     }
     n, n_leads = len(windows), len(LEAD_STEPS)
 
@@ -337,7 +354,7 @@ def validation_cases(
 
     best_lat = np.array([bw.current.lat for bw in best_windows])
     best_lon = np.array([bw.current.lon for bw in best_windows])
-    seasons = boundaries_for_tracks(Flavor.GDAS_FINETUNE, tracks)[Split.VAL]
+    seasons = boundaries_for_tracks(Flavor.GDAS_FINETUNE, tracks)[split]
     return ValidationCases(
         storm_ids=tuple(sw.storm_id for sw in windows),
         init_times=tuple(sw.current.valid_time for sw in windows),
@@ -353,7 +370,7 @@ def validation_cases(
         ),
         init_status=tuple(init_status), verif_status=tuple(verif_status),
         lead_hours=LEAD_HOURS, seasons=(int(seasons[0]), int(seasons[1])),
-        seed=seed, n_augment=n_augment,
+        seed=seed, n_augment=n_augment, split=split.value,
     )
 
 
@@ -937,13 +954,14 @@ class BaselineReport:
     adecks_missing: list[str] = field(default_factory=list)
     official_errors: list[dict] = field(default_factory=list)
     git_commit: str | None = None
+    split: str = "val"
 
     def to_dict(self) -> dict:
         noise = WorkingTrackNoise()
         return {
             "kind": "homogeneous_baseline",
             "git_commit": self.git_commit,
-            "split": "val",
+            "split": self.split,
             "seasons": list(self.seasons),
             "seed": self.seed,
             "n_augment": self.n_augment,
@@ -955,7 +973,7 @@ class BaselineReport:
                 "pressure_rms_mb": noise.pressure_rms_mb,
                 "quantise": noise.quantise,
             },
-            "samples": SAMPLES,
+            "samples": samples_for(self.split),
             "basin_notes": {b: BASIN_NOTES[b] for b in self.registry_sample if b in BASIN_NOTES},
             "decision_rule": DECISION_RULE,
             "references": list(self.references),
@@ -1174,6 +1192,15 @@ def _notes(cases: ValidationCases, has_models: bool) -> list[str]:
         "between two orders of drawing (335.0 against 337.9 nm, Atlantic 48 h, in the "
         "first multi-basin run): a model difference of that size is draw noise.",
     ]
+    if cases.split != "val":
+        notes[0] = (
+            "Held-out test season: these are not the registry's validation cases, and no "
+            "registered metric is a mean over them; a number here is comparable only with "
+            "another on the same sample (A, B or C) of this split."
+        )
+        notes = [
+            n.replace("One validation season.", "One test season.") for n in notes
+        ]
     mismatched = int((cases.mask & ~cases.time_ok).sum())
     if mismatched:
         notes.append(
@@ -1206,15 +1233,28 @@ def run_baseline_backtest(
     registered: Sequence[RegisteredError] = (),
     seed: int = 20260806,
     n_augment: int = 1,
+    split: Split = Split.VAL,
 ) -> BaselineReport:
     """Score ``techniques`` (and, given ``model_forecasts``, ``models``) on
-    the validation windows of ``tracks``. See the module docstring.
+    the validation windows of ``tracks`` (``split=Split.TEST``: the held-out
+    test storms'). See the module docstring.
 
     ``adecks`` maps a storm id to its parsed a-deck; a storm without one
     has no technique forecast, and no B or C case. ``official_errors``
     (basin -> NHC's per-forecast errors) adds the reconciliation.
     """
-    cases = validation_cases(tracks, statuses, seed=seed, n_augment=n_augment)
+    if registered and split is not Split.VAL:
+        raise BaselineBacktestError(
+            "registered errors are the validation split's; they bound nothing on the "
+            f"{split.value} split (drop --registered-error)"
+        )
+    if model_forecasts is not None:
+        file_split = model_forecasts.header.get("split", "val")
+        if file_split != split.value:
+            raise BaselineBacktestError(
+                f"the model forecasts are for the {file_split} split, not {split.value}"
+            )
+    cases = validation_cases(tracks, statuses, seed=seed, n_augment=n_augment, split=split)
     specs = [TechniqueSpec.parse(t) for t in techniques]
     always = persistence_members(cases)
     member_rows: list[dict] = []
@@ -1269,8 +1309,9 @@ def run_baseline_backtest(
         key: homogeneous_mask(everyone, eligible[key], cases.storm_ids, TRACK)
         for key in ("B", "C")
     }
-    val_tracks = validation_tracks(tracks)
+    val_tracks = validation_tracks(tracks, Split(cases.split))
     return BaselineReport(
+        split=cases.split,
         seasons=cases.seasons, seed=seed, n_augment=n_augment, lead_hours=cases.lead_hours,
         members=member_rows,
         registry_sample=_registry_sample(cases),
@@ -1300,11 +1341,12 @@ def format_report(report: BaselineReport) -> str:
     the leads as columns, under the number of cases and storms."""
     kinds = {m["name"]: m["kind"] for m in report.members}
     lines = [
-        f"Homogeneous baseline -- validation seasons {report.seasons[0]}-{report.seasons[1]}, "
-        f"seed {report.seed}",
+        f"Homogeneous baseline -- "
+        f"{'validation' if report.split == 'val' else 'held-out TEST'} seasons "
+        f"{report.seasons[0]}-{report.seasons[1]}, seed {report.seed}",
         "",
         "Samples:",
-        *(f"  {key}: {text}" for key, text in SAMPLES.items()),
+        *(f"  {key}: {text}" for key, text in samples_for(report.split).items()),
         "",
         "Decision rule: " + DECISION_RULE,
     ]
@@ -1443,8 +1485,12 @@ def assemble_validation_forecasts(
         ).values
 
     recomputed = {name: scored(pred) for name, pred in forecasts.items() if name != PERSISTENCE}
+    split = Split(cases.split)
     checks = []
-    for key, value in sorted(registered.get("fusion", {}).items()):
+    # Registered metrics are the validation split's: there is nothing to
+    # check a test-split file against, so it records none.
+    to_check = registered.get("fusion", {}) if split is Split.VAL else {}
+    for key, value in sorted(to_check.items()):
         if key not in recomputed["fusion"]:
             continue
         name = key.rsplit("/", 1)[-1]
@@ -1463,7 +1509,7 @@ def assemble_validation_forecasts(
     header = {
         "kind": "validation_forecasts",
         "git_commit": git_commit,
-        "split": "val",
+        "split": split.value,
         "seasons": list(cases.seasons),
         "seed": cases.seed,
         "n_augment": cases.n_augment,
@@ -1482,7 +1528,7 @@ def assemble_validation_forecasts(
         "n_cases": len(val),
         "n_enumerated": len(cases),
         "n_without_forecast": len(cases) - len(rows),
-        "consistent": bool(checks) and not failed,
+        "consistent": (bool(checks) and not failed) if split is Split.VAL else None,
         "n_checks": len(checks),
         "failed_checks": failed,
         "registered": {
@@ -1544,10 +1590,16 @@ def format_forecast_check(forecasts: ValidationForecasts) -> str:
             f"MISMATCH {check['metric']}: registered {check['registered']:.3f}, "
             f"recomputed {check['recomputed']:.3f}"
         )
-    lines.append(
-        f"consistent with the registry: {'yes' if forecasts.consistent else 'NO'} "
-        f"({header.get('n_checks')} metrics compared)"
-    )
+    if header.get("split", "val") != "val":
+        lines.append(
+            f"{header.get('split')} split: no registered numbers to check against "
+            "(the registry's metrics are the validation split's)"
+        )
+    else:
+        lines.append(
+            f"consistent with the registry: {'yes' if forecasts.consistent else 'NO'} "
+            f"({header.get('n_checks')} metrics compared)"
+        )
     return "\n".join(lines)
 
 
@@ -1580,6 +1632,7 @@ def collect_validation_forecasts(
     extra_versions: Mapping[str, int] | None = None,
     steering_cache_dir: Path | str | None = None,
     device=None,
+    split: Split = Split.VAL,
 ):
     """The torch half: load fusion and the Group 1 versions it was trained
     on, and run them on the validation windows. Returns ``(val, fusion_abs,
@@ -1626,9 +1679,10 @@ def collect_validation_forecasts(
     artifacts = {m: load_run_artifacts(m, v, checkpoint_store) for m, v in group1.items()}
     val = extract_validation_latents(
         tracks, artifacts, gdas_cache_dir, seed=seed, n_augment=n_augment, device=device,
+        split=split,
     )
     if len(val) == 0:
-        raise BaselineBacktestError("no validation window had a cached gridded field")
+        raise BaselineBacktestError(f"no {split.value} window had a cached gridded field")
     model, _spec = load_trained_model("fusion", fusion, checkpoint_store)
     with torch.no_grad():
         fusion_abs = model(
@@ -1647,7 +1701,7 @@ def collect_validation_forecasts(
         try:
             other = extract_validation_latents(
                 tracks, swapped, gdas_cache_dir, seed=seed, n_augment=n_augment, device=device,
-                steering_cache_dir=steering_cache_dir,
+                steering_cache_dir=steering_cache_dir, split=split,
             )
         except ValueError as exc:
             raise BaselineBacktestError(f"{model} v{version}: {exc}") from exc
@@ -1691,6 +1745,7 @@ def dump_validation_forecasts(
     hurdat2: Mapping[str, object] | None = None,
     git_commit: str | None = None,
     device=None,
+    split: Split = Split.VAL,
 ) -> ValidationForecasts:
     """`collect_validation_forecasts`, then `assemble_validation_forecasts`."""
     from ..tracking.registry import GROUP1_MODELS
@@ -1699,6 +1754,7 @@ def dump_validation_forecasts(
         tracks, registry, checkpoint_store, gdas_cache_dir,
         seed=seed, n_augment=n_augment, fusion_version=fusion_version,
         extra_versions=extra_versions, steering_cache_dir=steering_cache_dir, device=device,
+        split=split,
     )
     registered = {"fusion": dict(fusion.metrics)}
     for name in GROUP1_MODELS:
@@ -1706,7 +1762,8 @@ def dump_validation_forecasts(
     for label, (model, version, _pred) in extras.items():
         registered[label] = dict(registry.get(model, version).metrics)
     forecasts = assemble_validation_forecasts(
-        val, fusion_abs, validation_cases(tracks, statuses, seed=seed, n_augment=n_augment),
+        val, fusion_abs,
+        validation_cases(tracks, statuses, seed=seed, n_augment=n_augment, split=split),
         versions={**versions, **{label: v for label, (_m, v, _p) in extras.items()}},
         latent_signature=fusion.latent_signature, registered=registered,
         hurdat2=hurdat2, trained_on_hurdat2_sha256=fusion.tags.get("hurdat2_sha256"),
