@@ -142,6 +142,18 @@ SAMPLES: dict[str, str] = {
          "initial and the verifying time: NHC's status rule",
 }
 
+#: Sample A on the held-out test split: no registered metric describes it.
+TEST_SAMPLE_A = (
+    "every window of the held-out test season (the same rule as the registry's "
+    "validation windows; no registered metric is a mean over these cases)"
+)
+
+
+def samples_for(split: str) -> dict[str, str]:
+    """`SAMPLES`, with sample A described for ``split``."""
+    return SAMPLES if split == "val" else {**SAMPLES, "A": TEST_SAMPLE_A}
+
+
 #: What a basin's rows are, where it is not what NHC's own tables are.
 BASIN_NOTES: dict[str, str] = {
     "EP": "storm id EP: includes CPHC-issued forecasts for those storms west of 140W, "
@@ -961,7 +973,7 @@ class BaselineReport:
                 "pressure_rms_mb": noise.pressure_rms_mb,
                 "quantise": noise.quantise,
             },
-            "samples": SAMPLES,
+            "samples": samples_for(self.split),
             "basin_notes": {b: BASIN_NOTES[b] for b in self.registry_sample if b in BASIN_NOTES},
             "decision_rule": DECISION_RULE,
             "references": list(self.references),
@@ -1180,6 +1192,15 @@ def _notes(cases: ValidationCases, has_models: bool) -> list[str]:
         "between two orders of drawing (335.0 against 337.9 nm, Atlantic 48 h, in the "
         "first multi-basin run): a model difference of that size is draw noise.",
     ]
+    if cases.split != "val":
+        notes[0] = (
+            "Held-out test season: these are not the registry's validation cases, and no "
+            "registered metric is a mean over them; a number here is comparable only with "
+            "another on the same sample (A, B or C) of this split."
+        )
+        notes = [
+            n.replace("One validation season.", "One test season.") for n in notes
+        ]
     mismatched = int((cases.mask & ~cases.time_ok).sum())
     if mismatched:
         notes.append(
@@ -1222,6 +1243,11 @@ def run_baseline_backtest(
     has no technique forecast, and no B or C case. ``official_errors``
     (basin -> NHC's per-forecast errors) adds the reconciliation.
     """
+    if registered and split is not Split.VAL:
+        raise BaselineBacktestError(
+            "registered errors are the validation split's; they bound nothing on the "
+            f"{split.value} split (drop --registered-error)"
+        )
     if model_forecasts is not None:
         file_split = model_forecasts.header.get("split", "val")
         if file_split != split.value:
@@ -1315,11 +1341,12 @@ def format_report(report: BaselineReport) -> str:
     the leads as columns, under the number of cases and storms."""
     kinds = {m["name"]: m["kind"] for m in report.members}
     lines = [
-        f"Homogeneous baseline -- validation seasons {report.seasons[0]}-{report.seasons[1]}, "
-        f"seed {report.seed}",
+        f"Homogeneous baseline -- "
+        f"{'validation' if report.split == 'val' else 'held-out TEST'} seasons "
+        f"{report.seasons[0]}-{report.seasons[1]}, seed {report.seed}",
         "",
         "Samples:",
-        *(f"  {key}: {text}" for key, text in SAMPLES.items()),
+        *(f"  {key}: {text}" for key, text in samples_for(report.split).items()),
         "",
         "Decision rule: " + DECISION_RULE,
     ]

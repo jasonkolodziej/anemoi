@@ -1388,6 +1388,13 @@ def cmd_baseline_backtest(args: argparse.Namespace) -> int:
             or (forecasts.header.get("split", "val") if forecasts is not None else "val")
         )
 
+        if (split is Split.TEST and forecasts is not None
+                and "test_set_budget" not in forecasts.header):
+            raise BaselineBacktestError(
+                f"{args.model_forecasts} is a test-split file with no test-set budget record; "
+                "write it with validation-forecasts --split test --justification ..."
+            )
+
         tracks = _training_tracks(args.hurdat2)
         statuses = parse_hurdat2_statuses(Path(args.hurdat2).read_text())
         cached = read_cached_adecks(
@@ -1479,6 +1486,26 @@ def cmd_validation_forecasts(args: argparse.Namespace) -> int:
         return 1
     store = CheckpointStore(S3Config.from_env())
     registry = ModelRegistry(args.registry_root, checkpoint_store=store)
+    split = Split(getattr(args, "split", None) or "val")
+    spent = None
+    if split is Split.TEST:
+        # The held-out season is metered (training.promotion.TestSetBudget):
+        # spent before any model runs, so a failed run still counts.
+        from .training.promotion import PromotionError, spend_test_set_budget
+
+        label = ", ".join(
+            [f"fusion v{args.fusion_version}" if args.fusion_version else "fusion champion",
+             *(f"{m} v{v}" for m, v in extra.items())]
+        )
+        try:
+            spent = spend_test_set_budget(store, label, getattr(args, "justification", "") or "")
+        except PromotionError as exc:
+            print(f"validation-forecasts: {exc}")
+            return 1
+        print(
+            f"test-set budget: spent 1 ({spent['used_this_season']} of "
+            f"{spent['max_per_season']} this season) for {label}: {spent['justification']}"
+        )
     try:
         forecasts = dump_validation_forecasts(
             _training_tracks(args.hurdat2),
@@ -1487,11 +1514,13 @@ def cmd_validation_forecasts(args: argparse.Namespace) -> int:
             seed=args.seed, n_augment=args.n_augment, fusion_version=args.fusion_version,
             extra_versions=extra, steering_cache_dir=getattr(args, "steering_cache_dir", None),
             hurdat2=describe(args.hurdat2), git_commit=git_sha(),
-            split=Split(getattr(args, "split", None) or "val"),
+            split=split,
         )
     except BaselineBacktestError as exc:
         print(f"validation-forecasts: {exc}")
         return 1
+    if spent is not None:
+        forecasts.header["test_set_budget"] = spent
     forecasts.write(args.out)
     print(format_forecast_check(forecasts))
     print(f"\nwrote {args.out}")
@@ -1752,6 +1781,12 @@ def main(argv: list[str] | None = None) -> int:
         "--split", choices=["val", "test"], default=None,
         help=("which held-out split's windows: val (the registry's; default) or test "
               "(the held-out season nothing is trained or tuned on)"),
+    )
+    p.add_argument(
+        "--justification", default=None,
+        help=("--split test only, and required there: why this look at the held-out "
+              "season is needed. Logged with the test-set budget (training.promotion"
+              ".TestSetBudget), which the look spends"),
     )
     p.add_argument("--gdas-cache-dir", dest="gdas_cache_dir", required=True)
     p.add_argument("--seed", type=int, default=20260806,
