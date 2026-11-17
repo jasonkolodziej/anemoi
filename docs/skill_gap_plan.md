@@ -11,7 +11,9 @@ ticked when its work has landed, with what was found written under it. The
 
 ## Where things stand
 
-The track gap is the priority: fusion v12's 48 h Atlantic track error is 231 nm, against a 70 nm promotion gate and NHC's 51 nm 2026 target. The steering spike (Phase 1, step 2) showed forecast-lead GFS steering is a missing input: −77 nm on the Transformer's Atlantic 48 h error, so it becomes a model input next. Ocean inputs mainly improve intensity, so they run alongside the track work instead of ahead of it.
+**2026-11-17:** the staged forecast now reads GFS's own track as a prior (Phase 1, step 4): fusion v15 is 79.5 nm at Atlantic 48 h on sample B against AVNI's 65.9 (fusion v12 was 220), and GNN v12 alone is level with AVNI on the held-out 2025 season. The 70 nm gate is still not met where it counts (2025, where GFS's own track misses it), and production is held (step 4, "Production: held"). The next track lever is a second dynamical track for a consensus.
+
+Earlier: The track gap is the priority: fusion v12's 48 h Atlantic track error is 231 nm, against a 70 nm promotion gate and NHC's 51 nm 2026 target. The steering spike (Phase 1, step 2) showed forecast-lead GFS steering is a missing input: −77 nm on the Transformer's Atlantic 48 h error, so it becomes a model input next. Ocean inputs mainly improve intensity, so they run alongside the track work instead of ahead of it.
 
 Only two of the ten registry sources feed a model today (commit `3838fcc`, 2026-11-12). `Role.OPERATIONAL` means a source is allowed to be read, not that a model reads it. Since `b672fca` the registry
 records the second fact too: `data.sources.used_by`, served as `used_by` by
@@ -160,7 +162,26 @@ This phase answers one question fast: is the 231 nm error a missing-input proble
 
     Paired at 48 h, model minus AVNI: GNN C +0.3 [−7.6, 9.6], B −0.1 [−8.1, 7.5]; Transformer C −2.3 [−12.9, 13.9]; CNN C +9.0 [−8.7, 27.5]. Minus GFST, GNN C −4.4 [−12.0, 8.3]. East Pacific C 48 h: models 55–57 nm against AVNI 48.6 and GFST 53.2 (GNN minus AVNI +8.5 [0.6, 19.6]).
   - **Read it as:** on the held-out season the 2024 gate result does not hold. 2025 was a hard Atlantic year for GFS: AVNI is 80.6 nm at 48 h on sample C and GFST 85.3, so a model that tracks GFS's skill misses the 70 nm gate with it. No model is inside it (Transformer 78.3, GNN 80.9). The 72 h gate is met by GNN and Transformer (6 storms, a description), and 120 h is missed by every member except OFCL. Against AVNI, every Atlantic 48 h interval spans zero: the GFS-track-prior versions forecast at AVNI's level, unlike every earlier Anemoi version (the served fusion v14 is +94 nm behind AVNI on 2024 B). The corrections no longer clearly add error on 2025 (GNN and Transformer are a little better than GFST, intervals spanning zero), but nothing shows they add skill either. Reaching 70 nm needs track information GFS doesn't have (Step 3's reading: ECMWF and the consensus beat it).
-  - **Staging** GNN v12 (and Transformer v13) would replace versions 100+ nm behind AVNI with ones level with it, and needs a fusion retrain on the new Group 1 first. It is the user's decision; the gate is not met by it.
+  - **Staged (2026-11-17), after #262 was deployed** (the API must add the prior back before a prior version serves). `registry-reconcile --primary-metric AL/track_error_48h_nm` (`anemoi-train-gpu-bncgk`) re-staged CNN v13, Transformer v13 and GNN v12 in place of v9, v9 and v8; LSTM v12 and PINN v8 stay. The derived-only retrain (`anemoi-train-gpu-mxlh7`) gave diffusion v15 and fusion v15, both staged.
+  - **Fusion v15 against AVNI** (`docs/backtests/2026-11-17-homogeneous-baseline-val2024-fusion-v15.json`; forecasts from `validation-forecasts --fusion-version 15`, `anemoi-train-gpu-m4fkn`, the registry's 115 metrics reproduced; same HURDAT2 bytes):
+
+    | Atlantic 48 h track, 2024 | fusion v14 | fusion v15 | GNN v12 alone | AVNI |
+    |---|---|---|---|---|
+    | sample B (nm) | 159.9 | 79.5 | 72.8 | 65.9 |
+    | sample C (nm) | 119.2 | 67.8 | 61.5 | 52.7 |
+    | fusion minus AVNI, B | +94 [67, 125] | +13.6 [6.6, 19.8] | | |
+    | fusion minus AVNI, C | +66 [45, 95] | +15.1 [4.6, 25.7] | | |
+
+    Fusion v15 closes 85% of v14's gap to AVNI, but by Decision Log 66's rule it still subtracts value (both intervals exclude zero), and it is about 6 nm worse than its best member, GNN v12. Intensity, Atlantic C 48 h: 23.0 kt against AVNI's 15.6 and the 15 kt gate. East Pacific B 48 h: +10.5 nm [−9.4, 31.4].
+  - **Production: held, for three reasons (2026-11-17).** Staging serves the console; production is the promoted set.
+    1. **The promotion gates are not met.** Fusion v15's 67.8 nm on Atlantic C is on 2024, the season every version was selected on. On held-out 2025 its members score 78–90 nm (above) and AVNI 80.6, so fusion very likely misses 70 nm there too; measuring it would spend a second test-set look on a result that is already clear. Intensity is 8 kt over its gate.
+    2. **The live prior path has not run a real cycle.** These are the first served versions that track the storm through 21 GFS leads at serving time (`real_inference_live.fetch_live_track_prior`). It is unit-tested and the replayed validation cycles reproduce the registry, but no live staging cycle with an active storm has produced all three Group 1 tracks yet. A cycle missing a lead skips the model with a reason rather than serving a wrong forecast.
+    3. **Fusion makes the forecast worse than its best member.** GNN v12 alone is about 6 nm better than fusion v15 at Atlantic 48 h on both samples, so the forecast production would lead with is not Anemoi's best.
+  - **Next steps, in order:**
+    1. **Watch the first live staging cycle with an active storm** (no cost): CNN, Transformer and GNN each produce a track and none is skipped for a missing GFS lead. This clears reason 2.
+    2. **A second dynamical track the cycle has, for a consensus (Phase 1, step 3).** GFS alone misses 70 nm in 2025 (AVNI 80.6), and every learned correction to it is noise, so the gate needs track information GFS lacks. The a-decks show where it is (EMXI/EMX2 and OFCL's consensus beat AVNI), but they are verification only (Decision Log 66). The legal form is Step 4's again: Anemoi's own tracker run on ECMWF's open-data fields (experimental AIFS covers the 2024 validation season, operational AIFS the 2025 test season; step 3 above), giving a member computed the same way in scoring and serving. First as an untrained equal-weight mean with GFST, which needs no training years and is scored against AVNI, TVCN and HCCA on 2024; only if it holds, as a model input, which needs Stage B to handle the years without AIFS. This addresses reason 1 for track.
+    3. **Fusion's place (reason 3)**: decide after step 2, since a consensus member changes what fusion combines. Until then GNN v12 is the best single Anemoi track.
+    4. **Intensity: Phase 2 (ocean inputs)** below is unchanged by this step and is the plan's lever for the intensity gates.
 
 ## Phase 2: Ocean inputs (runs alongside Phase 1)
 
@@ -297,6 +318,10 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-17.** #262 deployed; CNN v13, Transformer v13 and GNN v12
+  staged, diffusion v15 and fusion v15 retrained and staged. Fusion v15
+  minus AVNI at Atlantic 48 h: +13.6 nm on B, +15.1 on C (v14: +94, +66).
+  Production held for three reasons; next steps recorded under Step 4.
 - **2026-11-17.** The 2025 look (#262, budget 1 of 4): no version inside
   the 70 nm gate on held-out Atlantic C (GNN v12 80.9 nm, Transformer v13
   78.3), because GFS itself misses it (AVNI 80.6, GFST 85.3). The versions
