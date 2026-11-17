@@ -31,7 +31,9 @@ def haversine_nm(
     lon2: float | np.ndarray,
 ) -> float | np.ndarray:
     """Great-circle distance in nautical miles. Broadcasts over arrays."""
-    lat1, lon1, lat2, lon2 = (np.radians(np.asarray(v, dtype=float)) for v in (lat1, lon1, lat2, lon2))
+    lat1, lon1, lat2, lon2 = (
+        np.radians(np.asarray(v, dtype=float)) for v in (lat1, lon1, lat2, lon2)
+    )
     dlat = lat2 - lat1
     dlon = lon2 - lon1
     a = np.sin(dlat / 2.0) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2.0) ** 2
@@ -91,7 +93,9 @@ def offset_positions(
     return np.degrees(phi2), wrap_longitude(np.degrees(lam2))
 
 
-def offset_position(lat: float, lon: float, distance_nm: float, bearing: float) -> tuple[float, float]:
+def offset_position(
+    lat: float, lon: float, distance_nm: float, bearing: float,
+) -> tuple[float, float]:
     """Displace a position by ``distance_nm`` along ``bearing`` (deg from north)."""
     lat2, lon2 = offset_positions(lat, lon, distance_nm, bearing)
     return float(lat2), float(lon2)

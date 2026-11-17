@@ -481,6 +481,13 @@ For the other three, swap `transformer` for `cnn`, `gnn` or `pinn`; each is its 
 
 Serving such a version fetches the t−6 GFS run's f006–f054 each cycle (`real_inference_live.fetch_live_steering`, cached under the cycle cache's `live_steering/`, one fetch shared by every model that reads it). If any lead is missing, each model that reads steering skips the cycle with a reason, with no stale fallback. Every job that rebuilds its input from the caches (latents, `spread-backtest`, `validation-forecasts`) reads the steering cache from `ANEMOI_STEERING_CACHE_DIR`, which the entrypoint sets to `/cache/steering_f006` (and localises, for training).
 
+**AVNI's track as a prior** (`training.track_prior`). With `--adeck-dir`, a CNN, Transformer or GNN trains Stage B on its *correction* to AVNI's track (NHC's interpolated GFS track for the cycle) instead of the whole track, and its forecast is AVNI plus that correction. The a-decks come from `anemoi adeck-fetch` (cached at `/cache/adeck` for the train, val and test splits). A lead AVNI doesn't reach falls back to persistence; a window with no AVNI for its cycle is dropped, and a served cycle without one skips that model with a reason. The version records `track_prior: AVNI` in `arch_params`. Jobs that rebuild forecasts from the caches read the a-decks from `ANEMOI_ADECK_DIR` (entrypoint default `/cache/adeck`). The PINN isn't included: it already corrects its own candidate track.
+
+```bash
+gcloud beta run jobs execute anemoi-train-gpu --region us-east4 --async \
+  --args=train,--model,transformer,--hurdat2,/app/data/hurdat2-atl.txt,--era5-cache-dir,/cache/era5_cache,--gdas-cache-dir,/cache/gdas_cache_f006,--steering-cache-dir,/cache/steering_f006,--adeck-dir,/cache/adeck,--registry-root,/tmp/registry,--streaming,--num-workers,7,--localize-to,/tmp/anemoi-cache,--register-only
+```
+
 Fusion's forecast for every validation window, for the homogeneous baseline (wiki [Verification Metrics](../../wiki/Verification-Metrics.md), "Homogeneous baseline"). Inference only: it loads fusion and the five Group 1 versions its latent signature names from the registry and runs them on the validation windows alone (the training windows, 2,733 with the 2025 HURDAT2, are enumerated for the noise draw but not run); it trains, registers and promotes nothing. CPU is enough, as for `spread-backtest`, and the image needs the commit that added the command (CI rebuilds it on `main`):
 
 ```bash

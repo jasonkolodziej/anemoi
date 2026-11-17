@@ -184,10 +184,14 @@ def _item_stat(name: str, value: np.ndarray) -> np.ndarray:
     return value
 
 
-def _run_group1_model(name: str, model, raw, stats: dict, current: Fix) -> np.ndarray | None:
+def _run_group1_model(
+    name: str, model, raw, stats: dict, current: Fix, prior: np.ndarray | None = None,
+) -> np.ndarray | None:
     """One real model's (n_leads, 3) absolute (lat, lon, wind) prediction,
     or ``None`` if it doesn't have the real standardisation stats a
-    correct prediction needs (a version registered before #78)."""
+    correct prediction needs (a version registered before #78). ``prior``
+    (`training.track_prior`) is added to a version's output when that
+    version predicts corrections to it."""
     import torch
 
     from .real_run import displacement_to_latlon
@@ -217,6 +221,8 @@ def _run_group1_model(name: str, model, raw, stats: dict, current: Fix) -> np.nd
         pred_z = out[0].cpu().numpy()
 
     pred_disp = pred_z * stats["y_std"] + stats["y_mean"]
+    if prior is not None:
+        pred_disp = pred_disp + prior
     abs_pred = np.zeros_like(pred_disp)
     for li in range(pred_disp.shape[0]):
         lat, lon = displacement_to_latlon(current.lat, current.lon, *pred_disp[li, :2])
@@ -263,6 +269,54 @@ def shared_steering(steering_fetcher: SteeringFetcher | None) -> SteeringFetcher
         return seen[key]
 
     return fetcher
+
+
+def shared_prior(prior_fetcher):
+    """One forecast invocation's track-prior source: ``prior_fetcher`` (or
+    `real_inference_live.fetch_live_track_prior`), called at most once per
+    storm and time, its result kept, ``None`` included, as `shared_steering`
+    does for steering: every model trained with the prior shares one a-deck
+    download, and a failed one isn't retried per model."""
+    from .real_inference_live import fetch_live_track_prior
+
+    fetch = prior_fetcher or fetch_live_track_prior
+    seen: dict = {}
+
+    def fetcher(track, current, cache_dir):
+        key = (track.storm_id, current.valid_time)
+        if key not in seen:
+            seen[key] = fetch(track, current, cache_dir)
+        return seen[key]
+
+    return fetcher
+
+
+def _live_prior_for(
+    version, track: Track, current: Fix, cache_dir: Path | str,
+    prior_fetcher,
+) -> tuple[np.ndarray | None, str | None]:
+    """``(prior, reason)`` for one served version: ``(None, None)`` when it
+    wasn't trained with the AVNI track prior; the prior when it was and the
+    cycle has one; ``(None, reason)`` when it was and the cycle doesn't
+    (AVNI not written yet), in which case the model skips the cycle."""
+    import json
+
+    from .real_inference_live import fetch_live_track_prior
+    from .track_prior import prior_name
+
+    try:
+        technique = prior_name(json.loads(version.tags.get("arch_params", "{}")))
+    except ValueError:
+        return None, None  # an unreadable arch_params fails the model load, with its own reason
+    if technique is None:
+        return None, None
+    prior = (prior_fetcher or fetch_live_track_prior)(track, current, cache_dir)
+    if prior is None:
+        return None, (
+            f"corrects {technique}'s track, which NHC hasn't written for this cycle yet "
+            "(or the a-deck couldn't be read)"
+        )
+    return prior, None
 
 
 def _live_steering_for(
@@ -378,6 +432,7 @@ def build_real_deterministic_fn(
     cache_dir: Path | str,
     *, fields_fetcher: FieldsFetcher | None = None,
     steering_fetcher: SteeringFetcher | None = None,
+    prior_fetcher=None,
 ) -> Callable[[CyclePlan, Fix], DeterministicForecast]:
     """A real `deterministic_fn` closure over ``track`` (the storm's real
     known history) -- `inference.cycle.run_cycle`'s own
@@ -455,6 +510,7 @@ def build_real_deterministic_fn(
             track, current, cache_dir, fields_fetcher=shared_fetcher,
         )
         steering_once = shared_steering(steering_fetcher)
+        prior_once = shared_prior(prior_fetcher)
 
         for name in _GROUP1_LIVE_MODELS:
             if name == "pinn":
@@ -487,10 +543,16 @@ def build_real_deterministic_fn(
                         name, version, track, current, cache_dir, steering_once,
                     ) if version is not None else (None, None)
                 )
+                prior, prior_reason = (
+                    _live_prior_for(version, track, current, cache_dir, prior_once)
+                    if version is not None and steering_reason is None else (None, None)
+                )
                 if version is None:
                     reasons[name] = "no registered staging/production version"
                 elif steering_reason is not None:
                     reasons[name] = steering_reason
+                elif prior_reason is not None:
+                    reasons[name] = prior_reason
                 else:
                     raw = _build_live_x(
                         name, track, current, cache_dir, fields_fetcher=shared_fetcher,
@@ -504,12 +566,16 @@ def build_real_deterministic_fn(
                                 "(typical latency ~3.5h); should resolve on a later cycle"
                             )
                         else:
-                            reasons[name] = "no real live feature (no cache, on-demand fetch failed)"
+                            reasons[name] = (
+                                "no real live feature (no cache, on-demand fetch failed)"
+                            )
                     else:
                         try:
                             model, _spec = load_trained_model(name, version, checkpoint_store)
                             stats = load_standardization_stats(version)
-                            abs_pred = _run_group1_model(name, model, raw, stats, current)
+                            abs_pred = _run_group1_model(
+                                name, model, raw, stats, current, prior=prior,
+                            )
                             if abs_pred is None:
                                 reasons[name] = "missing x/y standardisation stats (predates #82)"
                         except InferenceLoadError as exc:

@@ -7,11 +7,11 @@ import pytest
 from anemoi.data.availability import LatencyOracle
 from anemoi.inference.scheduler import (
     ADVISORY_MARGIN,
-    CycleAbandoned,
     DEFAULT_BUDGETS,
     REDUCED_BUDGETS,
-    Stage,
     VITALS_TIMEOUT,
+    CycleAbandoned,
+    Stage,
     derive_vitals_timeout,
     plan_cycle,
     plan_day,
@@ -106,7 +106,7 @@ def test_core_is_ready_before_spread():
 
 def test_stages_are_contiguous():
     plan = plan_cycle(T, LatencyOracle())
-    for earlier, later in zip(plan.stages, plan.stages[1:]):
+    for earlier, later in zip(plan.stages, plan.stages[1:], strict=False):
         assert later.start == earlier.end_target
 
 

@@ -2,8 +2,6 @@
 
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
 from anemoi.data.availability import (
     LatencyOracle,
     earliest_ready_time,

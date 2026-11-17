@@ -78,6 +78,72 @@ def gdas_likely_unpublished(
     return valid_time - timedelta(hours=lead) + latency > now
 
 
+PriorFetcher = Callable[["Track", "Fix", "Path | str"], "np.ndarray | None"]
+AdeckFetcher = Callable[[str], "object | None"]
+
+
+def fetch_live_adeck(storm_id: str):
+    """The storm's a-deck as NHC publishes it now (``aid_public`` for the
+    season in progress, then the archive), AVNI rows only, or None when
+    neither has it or it can't be read."""
+    import gzip
+    import io
+
+    from ..data.adeck_source import MAX_ADECK_TEXT_BYTES, _get, adeck_urls
+    from ..data.atcf import parse_adeck
+    from ..data.atcf_archive import NotPublished
+    from .track_prior import TRACK_PRIOR_TECHNIQUE
+
+    archive_url, current_url = adeck_urls(storm_id)
+    for url in (current_url, archive_url):
+        try:
+            body = _get(url)
+        except NotPublished:
+            continue
+        except Exception:  # noqa: BLE001 - unreachable now: the model skips this cycle
+            return None
+        try:
+            # Read at most the cap from the stream: decompressing first would
+            # let a small download expand without bound before any check.
+            with gzip.GzipFile(fileobj=io.BytesIO(body)) as fh:
+                text = fh.read(MAX_ADECK_TEXT_BYTES + 1)
+            if len(text) > MAX_ADECK_TEXT_BYTES:
+                return None
+            return parse_adeck(
+                text.decode("ascii", errors="replace"), storm_id, [TRACK_PRIOR_TECHNIQUE],
+            )
+        except Exception:  # noqa: BLE001 - a malformed file is treated as absent
+            return None
+    return None
+
+
+def fetch_live_track_prior(
+    track: Track, current: Fix, cache_dir: Path | str,
+    *, adeck_fetcher: AdeckFetcher | None = None,
+) -> np.ndarray | None:
+    """AVNI's track as the prior a version trained with one corrects
+    (`training.track_prior`): ``(n_leads, 3)`` displacements from
+    ``current``, built exactly as training builds them, or None when the
+    cycle has no AVNI row yet (NHC writes it after the cycle's own
+    position; the model then skips the cycle, as training never saw a
+    window without one). ``cache_dir`` is unused: the a-deck changes every
+    cycle, so it is read fresh."""
+    from ..data.storm_relative import displacement_nm
+    from .real_run import LEAD_STEPS
+    from .track_prior import prior_from_adeck
+
+    window = _current_window(track, current, 2)
+    if window is None:
+        return None
+    dx, dy = displacement_nm(window[-2], window[-1])
+    steps = np.array(LEAD_STEPS, dtype=float)
+    persistence = np.stack(
+        [dx * steps, dy * steps, np.full(len(steps), current.max_wind_kt)], axis=1,
+    )
+    adeck = (adeck_fetcher or fetch_live_adeck)(track.storm_id)
+    return prior_from_adeck(adeck, current.valid_time, current.lat, current.lon, persistence)
+
+
 def _current_window(track: Track, current: Fix, length: int) -> tuple[Fix, ...] | None:
     return track.window_ending(current.valid_time, length)
 

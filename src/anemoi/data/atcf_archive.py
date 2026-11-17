@@ -107,7 +107,8 @@ def _digest(body: bytes) -> str:
 
 def snapshot_key(year: int, storm_id: str, product: str, fetched_at: datetime, body: bytes) -> str:
     ext = PRODUCTS[product][1]
-    return f"{ARCHIVE_PREFIX}{year}/{storm_id}/{product}/{fetched_at:%Y%m%dT%H%M%SZ}_{_digest(body)}{ext}"
+    stamp = f"{fetched_at:%Y%m%dT%H%M%SZ}"
+    return f"{ARCHIVE_PREFIX}{year}/{storm_id}/{product}/{stamp}_{_digest(body)}{ext}"
 
 
 def currentstorms_key(year: int, fetched_at: datetime, body: bytes) -> str:
@@ -216,7 +217,8 @@ def archive_atcf(
                 report.failed[label] = f"fetch: {exc}"
                 continue
             prefix = f"{ARCHIVE_PREFIX}{season}/{storm_id}/{product}/"
-            _write_if_new(store, snapshot_key(season, storm_id, product, now, body), body, prefix, report)
+            key = snapshot_key(season, storm_id, product, now, body)
+            _write_if_new(store, key, body, prefix, report)
 
     try:
         _put_bytes(store, RECENT_KEY, json.dumps(recent, sort_keys=True).encode())

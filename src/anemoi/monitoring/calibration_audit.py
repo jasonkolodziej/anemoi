@@ -427,7 +427,8 @@ def calibrate_products(samples: list[CalibrationSample]) -> list[LeadProductCali
 
     reports: list[LeadProductCalibration] = []
     for lead in sorted(by_lead):
-        for quantity, nominal in (("cone", CONE_NOMINAL_RATE), ("intensity", INTENSITY_NOMINAL_RATE)):
+        nominal_rates = (("cone", CONE_NOMINAL_RATE), ("intensity", INTENSITY_NOMINAL_RATE))
+        for quantity, nominal in nominal_rates:
             hits = by_lead[lead][quantity]
             n = len(hits)
             rate = float(sum(hits)) / n if n else None

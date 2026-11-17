@@ -9,6 +9,9 @@ GDAS_CACHE_DIR="${GDAS_CACHE_DIR:-/cache/gdas}"
 # for a Transformer version that was trained with it, by every job that
 # builds that Transformer's input from the caches (latents, backtests).
 export ANEMOI_STEERING_CACHE_DIR="${ANEMOI_STEERING_CACHE_DIR:-/cache/steering_f006}"
+# The a-decks a version trained with the AVNI track prior reads its prior
+# from (training.track_prior; anemoi adeck-fetch --cache-dir /cache/adeck).
+export ANEMOI_ADECK_DIR="${ANEMOI_ADECK_DIR:-/cache/adeck}"
 REGISTRY_ROOT="${REGISTRY_ROOT:-/cache/registry}"
 SEED="${SEED:-20260806}"
 N_AUGMENT="${N_AUGMENT:-3}"

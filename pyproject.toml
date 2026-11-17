@@ -111,6 +111,25 @@ filterwarnings = ["error::DeprecationWarning"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Installed agent skills (third-party scripts), not this project's code.
+extend-exclude = [".agents"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+# UP042 (`class X(str, Enum)` -> `StrEnum`) changes what str() and format()
+# return for a member ("Stage.STAGING" -> "staging"), so converting is a
+# change to every log line and stored string that formats one, not a style
+# fix. Off until that is done on purpose.
+ignore = ["UP042"]
+
+[tool.ruff.lint.per-file-ignores]
+# Raw ATCF records in fixtures: fixed-width lines that can't be wrapped.
+"tests/test_atcf.py" = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI resolves these per request: a call as an argument default is how
+# a route declares a dependency or parameter, not a shared mutable default.
+extend-immutable-calls = [
+    "fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Header",
+    "fastapi.Body", "fastapi.Security",
+]

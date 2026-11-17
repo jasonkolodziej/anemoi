@@ -62,7 +62,9 @@ pytestmark = pytest.mark.gridded
 # --- _crop_box ---------------------------------------------------------------
 
 
-def _global_grid_with_marker(marker_lat: float, marker_lon: float, value: float = 999.0) -> np.ndarray:
+def _global_grid_with_marker(
+    marker_lat: float, marker_lon: float, value: float = 999.0,
+) -> np.ndarray:
     grid = np.zeros((GRID_NLAT, GRID_NLON))
     lat_idx = round((90.0 - marker_lat) / 0.25)
     lon_idx = round((marker_lon % 360.0) / 0.25)
@@ -230,10 +232,17 @@ def _synthetic_era5_dataset():
             "geopotential": (("level", "latitude", "longitude"), 57500.0 * np.ones(shape3d)),
             "temperature": (("level", "latitude", "longitude"), 281.0 * np.ones(shape3d)),
             "specific_humidity": (("level", "latitude", "longitude"), 0.008 * np.ones(shape3d)),
-            "mean_sea_level_pressure": (("latitude", "longitude"), 101200.0 * np.ones((len(lat), len(lon)))),
-            "sea_surface_temperature": (("latitude", "longitude"), 301.65 * np.ones((len(lat), len(lon)))),
+            "mean_sea_level_pressure": (
+                ("latitude", "longitude"), 101200.0 * np.ones((len(lat), len(lon))),
+            ),
+            "sea_surface_temperature": (
+                ("latitude", "longitude"), 301.65 * np.ones((len(lat), len(lon))),
+            ),
         },
-        coords={"level": levels, "latitude": lat, "longitude": lon, "time": np.datetime64("2026-08-06T06:00:00")},
+        coords={
+            "level": levels, "latitude": lat, "longitude": lon,
+            "time": np.datetime64("2026-08-06T06:00:00"),
+        },
     )
 
 

@@ -296,7 +296,9 @@ def test_track_input_appends_the_storms_basin_to_every_step():
     x = track_input(window, "EP011985", ("AL", "EP", "CP"))
     assert x.shape == (SEQUENCE_LENGTH, plain.shape[1] + 3)
     np.testing.assert_array_equal(x[:, : plain.shape[1]], plain)
-    np.testing.assert_array_equal(x[:, plain.shape[1] :], np.tile([0.0, 1.0, 0.0], (SEQUENCE_LENGTH, 1)))
+    np.testing.assert_array_equal(
+        x[:, plain.shape[1] :], np.tile([0.0, 1.0, 0.0], (SEQUENCE_LENGTH, 1)),
+    )
     # A basin the model has no column for: all zeros, not an error.
     unknown = track_input(window, "WP011985", ("AL", "EP", "CP"))
     assert not unknown[:, plain.shape[1] :].any()

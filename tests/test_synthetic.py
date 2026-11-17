@@ -37,7 +37,7 @@ def test_intensity_rises_and_falls():
 def test_fixes_are_six_hourly_and_synoptic():
     track = generate_season(2020, n_storms=1, seed=4)[0]
     times = [f.valid_time for f in track.fixes]
-    for earlier, later in zip(times, times[1:]):
+    for earlier, later in zip(times, times[1:], strict=False):
         assert (later - earlier).total_seconds() == 6 * 3600
         assert later.hour in (0, 6, 12, 18)
 

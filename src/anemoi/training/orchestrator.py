@@ -164,7 +164,8 @@ def build_schedule(mode: Mode, models: tuple[str, ...] = GROUP1_MODELS) -> Sched
             task = _train_task(model, ExecutionMode.SEQUENTIAL, prev)
             waves.append(Wave(index=i, tasks=(task,)))
             prev = (model,)
-        waves.append(Wave(index=len(waves), tasks=(_latent_task(ordered, ExecutionMode.SEQUENTIAL),)))
+        latent = _latent_task(ordered, ExecutionMode.SEQUENTIAL)
+        waves.append(Wave(index=len(waves), tasks=(latent,)))
         for model in DERIVED_MODELS:
             waves.append(
                 Wave(

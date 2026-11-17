@@ -14,7 +14,9 @@ from fastapi import APIRouter, Depends
 from .. import convert, schemas
 from ..deps import require_api_key, state_dependency
 
-router = APIRouter(prefix="/retraining", tags=["retraining"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/retraining", tags=["retraining"], dependencies=[Depends(require_api_key)],
+)
 
 
 @router.get("/triggers", response_model=list[schemas.RetrainJobOut])

@@ -240,6 +240,47 @@ def _steering_source(trained_artifacts, steering_cache_dir):
     return (lambda storm_id, valid_time: steering_vector(cache, storm_id, valid_time)), readers
 
 
+#: Where a version trained with the AVNI track prior (training.track_prior)
+#: finds each storm's a-deck (``anemoi adeck-fetch``'s --cache-dir), set
+#: once in the image's entrypoint like `STEERING_CACHE_ENV`.
+ADECK_DIR_ENV = "ANEMOI_ADECK_DIR"
+
+
+def _prior_source(trained_artifacts):
+    """``(window -> prior | None, readers)``: the AVNI track prior and the
+    models whose forecasts are corrections to it, or ``(None,
+    frozenset())`` when none is. Raises when one is and no a-deck
+    directory is configured."""
+    import os
+
+    from .track_prior import load_adecks, prior_name, window_prior_fn
+
+    readers = frozenset(
+        name for name in ("cnn", "transformer", "gnn")
+        if name in trained_artifacts
+        and prior_name(getattr(trained_artifacts[name], "arch_params", None))
+    )
+    if not readers:
+        return None, readers
+    adeck_dir = os.environ.get(ADECK_DIR_ENV)
+    if not adeck_dir:
+        raise ValueError(
+            f"{', '.join(sorted(readers))} forecast corrections to AVNI's track "
+            f"(arch_params track_prior); set {ADECK_DIR_ENV}"
+        )
+    adecks: dict = {}  # storm id -> a-deck, read on first use; a missing one stays out
+    loaded: set[str] = set()
+    prior_fn = window_prior_fn(adecks)
+
+    def prior_of(sw):
+        if sw.storm_id not in loaded:
+            adecks.update(load_adecks(adeck_dir, [sw.storm_id]))
+            loaded.add(sw.storm_id)
+        return prior_fn(sw)
+
+    return prior_of, readers
+
+
 def _extract_for_tracks(
     windows: Iterable[StageWindow],
     trained_artifacts: dict[str, RunArtifacts],
@@ -276,11 +317,13 @@ def _extract_for_tracks(
     storm_ids: list[str] = []
     valid_times: list[datetime] = []
     persistence_rows: list[np.ndarray] = []
+    prior_rows: list[np.ndarray] = []
 
     topo = None
     shape: tuple[int, int] | None = None
     gh, gw = GRID_SIZE
     steering_of, readers = _steering_source(trained_artifacts, steering_cache_dir)
+    prior_of, prior_readers = _prior_source(trained_artifacts)
 
     def steering_for(name, vec):
         return vec if name in readers else None
@@ -312,6 +355,11 @@ def _extract_for_tracks(
         # Each model's input is built with the basins *it* was trained
         # with (`basin_input`): none, for a version from before the basin
         # input existed.
+        prior = None
+        if prior_of is not None:
+            prior = prior_of(sw)
+            if prior is None:
+                continue  # its forecast is a correction to AVNI, so it can't run without it
         steering = None
         if steering_of is not None:
             steering = steering_of(sw.storm_id, sw.current.valid_time)
@@ -350,6 +398,8 @@ def _extract_for_tracks(
         storm_ids.append(sw.storm_id)
         valid_times.append(sw.current.valid_time)
         persistence_rows.append(sw.persistence)
+        if prior is not None:
+            prior_rows.append(prior)
 
     latent_dims = (
         lstm_a.model.norm.normalized_shape[0],
@@ -366,6 +416,10 @@ def _extract_for_tracks(
     base_lat = np.array(base_lat_rows)
     base_lon = np.array(base_lon_rows)
     context = np.stack(context_rows).astype(np.float32)
+    priors = np.stack(prior_rows) if prior_rows else None
+
+    def with_prior(name: str, pred: np.ndarray) -> np.ndarray:
+        return pred + priors if name in prior_readers else pred
 
     def to_t(arr: np.ndarray) -> object:
         return torch.as_tensor(arr, dtype=torch.float32, device=device)
@@ -391,7 +445,7 @@ def _extract_for_tracks(
         cx_z = to_t((cnn_x - cnn_a.x_mean) / cnn_a.x_std)
         latents.append(cnn_a.model.encode(cx_z).cpu().numpy())
         pred_z = cnn_a.model(cx_z).cpu().numpy() * cnn_a.y_std + cnn_a.y_mean
-    preds_abs.append(_displacement_to_absolute(pred_z, base_lat, base_lon))
+    preds_abs.append(_displacement_to_absolute(with_prior("cnn", pred_z), base_lat, base_lon))
 
     # --- Transformer -------------------------------------------------------
     trf_x = np.stack(trf_x_rows)
@@ -401,7 +455,9 @@ def _extract_for_tracks(
         latents.append(transformer_a.model.encode(tx_z).cpu().numpy())
         pred_z, _regime = transformer_a.model(tx_z)
         pred_z = pred_z.cpu().numpy() * transformer_a.y_std + transformer_a.y_mean
-    preds_abs.append(_displacement_to_absolute(pred_z, base_lat, base_lon))
+    preds_abs.append(
+        _displacement_to_absolute(with_prior("transformer", pred_z), base_lat, base_lon)
+    )
 
     # --- GNN -----------------------------------------------------------
     gnn_x = np.stack(gnn_x_rows)
@@ -416,7 +472,7 @@ def _extract_for_tracks(
         latents.append(gnn_a.model.encode(xf_t, ei_t, ea_t, center_index=ci_t).cpu().numpy())
         pred_z = gnn_a.model(xf_t, ei_t, ea_t, center_index=ci_t).cpu().numpy()
         pred_z = pred_z * gnn_a.y_std + gnn_a.y_mean
-    preds_abs.append(_displacement_to_absolute(pred_z, base_lat, base_lon))
+    preds_abs.append(_displacement_to_absolute(with_prior("gnn", pred_z), base_lat, base_lon))
 
     # --- PINN ------------------------------------------------------------
     env = np.stack(env_rows)

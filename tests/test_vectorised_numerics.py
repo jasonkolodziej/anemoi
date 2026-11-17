@@ -388,6 +388,7 @@ def test_haversine_broadcasts_a_single_point_against_many():
     lats, lons = np.array([25.0, 26.0, 27.0]), np.array([-80.0, -81.0, -82.0])
     got = haversine_nm(25.0, -80.0, lats, lons)
     assert isinstance(got, np.ndarray) and got.shape == (3,)
-    assert got == pytest.approx([ref_haversine(25.0, -80.0, a, b) for a, b in zip(lats, lons, strict=True)])
+    want = [ref_haversine(25.0, -80.0, a, b) for a, b in zip(lats, lons, strict=True)]
+    assert got == pytest.approx(want)
     assert isinstance(haversine_nm(25.0, -80.0, 26.0, -81.0), float)
     assert isinstance(haversine_nm(np.float64(25.0), -80.0, 26.0, -81.0), float)

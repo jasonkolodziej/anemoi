@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 
 from anemoi.inference.postprocess import (
+    RI_THRESHOLD_KT,
+    RI_WINDOW_HOURS,
     EnsembleMember,
     build_cone,
     build_products,
@@ -11,7 +13,6 @@ from anemoi.inference.postprocess import (
     landfall_probability,
     rapid_intensification_probability,
 )
-from anemoi.inference.postprocess import RI_THRESHOLD_KT, RI_WINDOW_HOURS
 from anemoi.models.diffusion import DEFAULT_LEADS
 
 # The real production schedule, not a convenient subset. These tests used
@@ -67,7 +68,7 @@ def test_empty_ensemble_is_refused():
 
 def test_intensity_pdf_percentiles_are_ordered():
     pdf = intensity_pdf(members())
-    for lead, percentiles in pdf.items():
+    for percentiles in pdf.values():
         values = [percentiles[q] for q in sorted(percentiles)]
         assert values == sorted(values)
 
@@ -119,7 +120,10 @@ def test_wilson_interval_brackets_the_estimate_and_stays_in_the_unit_range():
     assert wilson_interval(0, 20)[1] > 0.0
     assert wilson_interval(20, 20)[0] < 1.0
     # The interval must actually narrow as the ensemble grows.
-    width = lambda n: (lambda b: b[1] - b[0])(wilson_interval(round(0.27 * n), n))
+    def width(n: int) -> float:
+        low, high = wilson_interval(round(0.27 * n), n)
+        return high - low
+
     assert width(20) > width(50) > width(200)
 
 
@@ -194,7 +198,7 @@ def test_ri_window_is_exactly_24h_at_every_lead_in_the_real_schedule():
     assert set(DEFAULT_LEADS) - starts - ends == set()
 
     # And the searchsorted target is never a wider window than intended.
-    for i, lead_i in enumerate(leads):
+    for lead_i in leads:
         j = np.searchsorted(leads, lead_i + RI_WINDOW_HOURS)
         if j < len(leads):
             assert leads[j] - lead_i >= RI_WINDOW_HOURS  # never narrower
@@ -216,7 +220,7 @@ def test_a_36_hour_gain_is_not_counted_as_24_hour_intensification():
 
     # Sanity: the 36->72 gain really is >= the threshold, and no exact 24h
     # window is.
-    idx = {l: i for i, l in enumerate(DEFAULT_LEADS)}
+    idx = {lead: i for i, lead in enumerate(DEFAULT_LEADS)}
     assert winds[idx[72]] - winds[idx[36]] >= RI_THRESHOLD_KT
     for a, b in ((12, 36), (24, 48), (48, 72), (72, 96), (96, 120)):
         assert winds[idx[b]] - winds[idx[a]] < RI_THRESHOLD_KT

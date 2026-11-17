@@ -144,7 +144,9 @@ def test_the_cli_archives_lists_and_needs_credentials(store, monkeypatch, capsys
     archive_atcf(store, now=NOW, fetch=_fetcher({
         "CurrentStorms.json": INDEX, "al092026-tcvitals-arch.dat": VITALS_2,
     }))
-    monkeypatch.setattr(checkpoint_store.S3Config, "from_env", classmethod(lambda cls: store.config))
+    monkeypatch.setattr(
+        checkpoint_store.S3Config, "from_env", classmethod(lambda cls: store.config),
+    )
     monkeypatch.setattr(checkpoint_store, "CheckpointStore", lambda config: store)
 
     assert cli.main(["atcf-archive", "--list", "2026"]) == 0
@@ -220,7 +222,9 @@ def test_real_state_reports_rather_than_raises(monkeypatch, tmp_path, store, s3)
 
     hurdat2 = tmp_path / "h.txt"
     radii = ", ".join(["-999"] * 12)
-    hurdat2.write_text(f"AL012026, T, 1,\n20260901, 0000,  , TS, 20.0N,  60.0W,  40, 1005, {radii},\n")
+    hurdat2.write_text(
+        f"AL012026, T, 1,\n20260901, 0000,  , TS, 20.0N,  60.0W,  40, 1005, {radii},\n"
+    )
     state = RealState(hurdat2_path=str(hurdat2), registry_root=str(tmp_path / "r"),
                       checkpoint_store=store, cache_dir=str(tmp_path / "g"))
     real = atcf_archive.archive_atcf

@@ -195,7 +195,9 @@ class DemoState:
     def _seed_registry(self) -> None:
         if self.registry.versions("lstm"):
             return  # already seeded on a previous startup (persisted to disk)
-        run_id = lambda: "".join(random.choices(string.hexdigits.lower(), k=12))
+        def run_id() -> str:
+            return "".join(random.choices(string.hexdigits.lower(), k=12))
+
         group1_versions: dict[str, int] = {}
         for name in GROUP1_MODELS:
             v = self.registry.register(
@@ -248,7 +250,9 @@ class DemoState:
         if track_delta > SKEW_ALERT_TRACK_NM:
             reasons.append(f"mean track delta {track_delta:.1f}nm exceeds {SKEW_ALERT_TRACK_NM}nm")
         if intensity_delta > SKEW_ALERT_INTENSITY_KT:
-            reasons.append(f"mean intensity delta {intensity_delta:.1f}kt exceeds {SKEW_ALERT_INTENSITY_KT}kt")
+            reasons.append(
+                f"mean intensity delta {intensity_delta:.1f}kt exceeds {SKEW_ALERT_INTENSITY_KT}kt"
+            )
         return SkewReport(
             lead_hours=lead_hours,
             n=n,
@@ -278,10 +282,15 @@ class DemoState:
             # Cone containment drifts down at longer leads -- the same
             # real underdispersion shape #166 actually found, echoed here
             # only as a plausible demo curve, not a re-assertion of it.
-            cone_rate = float(np.clip(CONE_NOMINAL_RATE - 0.003 * lead + rng.normal(0.0, 0.03), 0.05, 1.0))
-            intensity_rate = float(np.clip(INTENSITY_NOMINAL_RATE + rng.normal(0.0, 0.03), 0.05, 1.0))
+            cone_rate = float(
+                np.clip(CONE_NOMINAL_RATE - 0.003 * lead + rng.normal(0.0, 0.03), 0.05, 1.0)
+            )
+            intensity_rate = float(
+                np.clip(INTENSITY_NOMINAL_RATE + rng.normal(0.0, 0.03), 0.05, 1.0)
+            )
             for quantity, rate, nominal in (
-                ("cone", cone_rate, CONE_NOMINAL_RATE), ("intensity", intensity_rate, INTENSITY_NOMINAL_RATE),
+                ("cone", cone_rate, CONE_NOMINAL_RATE),
+                ("intensity", intensity_rate, INTENSITY_NOMINAL_RATE),
             ):
                 if rate < nominal - 0.15:
                     verdict = "too narrow"

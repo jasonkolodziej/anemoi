@@ -59,6 +59,17 @@ class ModelSpec:
 
 DEFAULT_LEADS: tuple[int, ...] = (12, 24, 36, 48, 72, 96, 120)
 
+#: ``arch_params`` keys that record how a version was trained or what its
+#: output means, not how its network is built, so they are never passed to
+#: ``build_<model>``. ``track_prior``: the forecast technique the version's
+#: output is a correction to (`training.track_prior`).
+NON_BUILD_ARCH_PARAMS: frozenset[str] = frozenset({"track_prior"})
+
+
+def build_kwargs(arch_params: dict) -> dict:
+    """``arch_params`` without `NON_BUILD_ARCH_PARAMS`: what ``build_<model>`` takes."""
+    return {k: v for k, v in arch_params.items() if k not in NON_BUILD_ARCH_PARAMS}
+
 
 def extra_input_conv(base, n_extra: int):
     """A conv that takes ``n_extra`` more input channels than ``base`` (an

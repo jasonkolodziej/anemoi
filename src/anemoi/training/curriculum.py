@@ -20,7 +20,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .. import config
-from ..data.sources import Flavor, Role, get as get_source
+from ..data.sources import Flavor, Role
+from ..data.sources import get as get_source
 
 
 class CurriculumError(RuntimeError):
@@ -182,7 +183,8 @@ class Curriculum:
 
     @classmethod
     def standard(cls, model_name: str, **kwargs) -> Curriculum:
-        return cls(model_name=model_name, stages=(stage_a(**kwargs.get("a", {})), stage_b(**kwargs.get("b", {}))))
+        stages = (stage_a(**kwargs.get("a", {})), stage_b(**kwargs.get("b", {})))
+        return cls(model_name=model_name, stages=stages)
 
 
 @dataclass(slots=True)

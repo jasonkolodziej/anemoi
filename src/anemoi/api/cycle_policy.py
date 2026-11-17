@@ -135,7 +135,9 @@ def check_run(
         existing_source = _existing_source(cycles, label)
         if request.source == SCHEDULED:
             if existing_source == SCHEDULED:
-                raise CycleConflict("exists", f"the scheduled {label} cycle for {storm_id} has already run")
+                raise CycleConflict(
+                    "exists", f"the scheduled {label} cycle for {storm_id} has already run",
+                )
             return  # the official run replaces a manual one
         if not (request.replace and request.operator):
             raise CycleConflict(

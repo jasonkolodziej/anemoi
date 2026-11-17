@@ -49,7 +49,9 @@ def make_storm_spec(rng: np.random.Generator, season: int, index: int) -> StormS
     """Draw a plausible Atlantic storm."""
     genesis_day = int(rng.integers(150, 300))  # June through late October
     genesis = datetime(season, 1, 1, tzinfo=UTC) + timedelta(days=genesis_day)
-    genesis = genesis.replace(hour=int(rng.choice([0, 6, 12, 18])), minute=0, second=0, microsecond=0)
+    genesis = genesis.replace(
+        hour=int(rng.choice([0, 6, 12, 18])), minute=0, second=0, microsecond=0,
+    )
     duration = int(rng.integers(8, 40)) * 6  # 2 to 10 days
     return StormSpec(
         storm_id=f"AL{index:02d}{season}",

@@ -32,7 +32,10 @@ _STATIC_DIR = Path(__file__).parent / "static"
 
 TAGS_METADATA = [
     {"name": "meta", "description": "Health, the model/god catalog, and the data source registry."},
-    {"name": "schedule", "description": "Cycle timing -- the HTTP equivalent of `anemoi schedule`."},
+    {
+        "name": "schedule",
+        "description": "Cycle timing -- the HTTP equivalent of `anemoi schedule`.",
+    },
     {"name": "storms", "description": "Storms, and running or retrieving forecast cycles."},
     {"name": "registry", "description": "Model versions, stages, and the active model-set pin."},
     {"name": "monitoring", "description": "Train/serve drift and skew audits."},
@@ -59,7 +62,10 @@ def create_app() -> FastAPI:
     app = FastAPI(
         lifespan=_lifespan,
         title="Anemoi-API",
-        description="Many winds. One forecast. Developer interface over the Anemoi reference implementation.",
+        description=(
+            "Many winds. One forecast. Developer interface over the Anemoi reference "
+            "implementation."
+        ),
         version=__api_version__,
         openapi_tags=TAGS_METADATA,
         # The default /redoc is unstyled (fastapi.openapi.docs.get_redoc_html
