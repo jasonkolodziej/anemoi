@@ -771,6 +771,9 @@ class _FakeStore:
     def exists(self, key):
         return key in self.objects
 
+    def list(self, prefix=""):
+        return [k for k in self.objects if k.startswith(prefix)]
+
     def download(self, uri, path):
         path.write_bytes(self.objects[uri.split("/", 3)[-1]])
 
@@ -783,7 +786,7 @@ def test_the_test_set_budget_outlives_one_job_and_runs_out():
     from datetime import date
 
     from anemoi.training.promotion import (
-        TEST_SET_BUDGET_KEY,
+        TEST_SET_BUDGET_PREFIX,
         PromotionError,
         TestSetBudget,
         spend_test_set_budget,
@@ -794,16 +797,52 @@ def test_the_test_set_budget_outlives_one_job_and_runs_out():
     limit = TestSetBudget().max_evaluations_per_season
     with pytest.raises(PromotionError, match="justification"):
         spend_test_set_budget(store, "gnn v10", "  ", when)
-    assert not store.exists(TEST_SET_BUDGET_KEY)
+    assert not store.list(TEST_SET_BUDGET_PREFIX)
     for i in range(limit):
         record = spend_test_set_budget(store, "gnn v10", f"look {i}", when)
         assert record["used_this_season"] == i + 1
     with pytest.raises(PromotionError, match="exhausted"):
         spend_test_set_budget(store, "gnn v10", "one more", when)
-    logged = json.loads(store.objects[TEST_SET_BUDGET_KEY])
+    logged = [json.loads(store.objects[k]) for k in sorted(store.list(TEST_SET_BUDGET_PREFIX))]
     assert [e["justification"] for e in logged] == [f"look {i}" for i in range(limit)]
     with pytest.raises(PromotionError, match="durable store"):
         spend_test_set_budget(None, "gnn v10", "why", when)
+
+
+def test_two_jobs_spending_the_last_slot_at_once_both_log_and_only_one_proceeds():
+    from datetime import date
+
+    from anemoi.training.promotion import (
+        TEST_SET_BUDGET_PREFIX,
+        PromotionError,
+        TestSetBudget,
+        spend_test_set_budget,
+    )
+
+    store = _FakeStore()
+    when = date(2026, 11, 17)
+    limit = TestSetBudget().max_evaluations_per_season
+    for i in range(limit - 1):
+        spend_test_set_budget(store, "gnn v10", f"look {i}", when)
+
+    # Another job's spend lands, with an earlier key, between this job's
+    # check and its own write: both read limit - 1 entries.
+    upload = store.upload
+
+    def racing_upload(path, key):
+        rival = f"{TEST_SET_BUDGET_PREFIX}00000000T000000000000Z-rival.json"
+        store.objects[rival] = json.dumps(
+            {"date": when.isoformat(), "model": "cnn v11", "justification": "rival"},
+        ).encode()
+        store.upload = upload
+        return upload(path, key)
+
+    store.upload = racing_upload
+    with pytest.raises(PromotionError, match="another job"):
+        spend_test_set_budget(store, "gnn v10", "late", when)
+    logged = [json.loads(store.objects[k]) for k in store.list(TEST_SET_BUDGET_PREFIX)]
+    assert len(logged) == limit + 1  # nothing overwritten: the refused attempt is logged too
+    assert {e["justification"] for e in logged} >= {"rival", "late"}
 
 
 def test_a_test_split_export_needs_a_justification_before_any_model_runs(
