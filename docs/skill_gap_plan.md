@@ -111,7 +111,19 @@ This phase answers one question fast: is the 231 nm error a missing-input proble
 - **Built for CNN, GNN and PINN (2026-11-14):** the same input and curriculum, each through its own zero-initialised layer (Decision Log 68, "Carried to CNN, GNN and PINN"). Next: train each with `--register-only` on the GPU job, compare each with its served version on the same validation windows, then decide on staging the four with one fusion retrain.
 - **Trained, staged and fusion retrained (2026-11-17).** CNN v9, GNN v8 and PINN v8 trained with steering and `--register-only` (Atlantic 48 h on the registry's validation windows: CNN 225 → 191 nm, GNN 291 → 229, PINN 299 → 274; East Pacific equal or better for all three). The four steering versions were staged together (`registry-reconcile --primary-metric AL/track_error_48h_nm`, `anemoi-train-schedule-vk9wz`), then diffusion and fusion retrained once, derived-only with `DIFFUSION_DROPOUT=0.1` (`anemoi-train-schedule-2mk62`): diffusion v14 and fusion v14, both staged.
   - **Fusion v14 against AVNI, Atlantic 48 h** (`docs/backtests/2026-11-17-homogeneous-baseline-val2024-fusion-v14.json`, same HURDAT2 bytes `d1debf35…`, forecasts from `validation-forecasts --fusion-version 14`, `anemoi-train-schedule-bn6ft`): sample B **+94 nm [67, 125]** (250 cases, 15 storms; fusion 160 nm, AVNI 66), C **+66 nm [45, 95]**. Fusion v12 was +154 and +122, so the steering set closes about 40% of fusion's gap to GFS's own track. Fusion beats AVNI on 21% of B cases. By Decision Log 66's rule the ML forecast still subtracts value against AVNI. East Pacific B: +51 nm [20, 86].
-  - **Next (both running, `--register-only`):** step 2, Stage B fine-tunes the whole model instead of the head and the steering layer only (`train --stage-b-frozen none`, #255); step 3, the CNN, Transformer and GNN predict their correction to AVNI's track instead of the whole track (`train --adeck-dir`, #256).
+- **Step 2, unfrozen Stage B (2026-11-17): worse; not adopted.** `train --stage-b-frozen none` (#255), all four models `--register-only`. Atlantic 48 h against the staged steering versions: Transformer v10 188 nm (v9 186), CNN v10 209 (v9 191), GNN v9 243 (v8 229), PINN v9 285 (v8 274). East Pacific mixed (CNN better, the rest worse). Fine-tuning the whole network on Stage B's 116 storms overfits; the frozen encoder keeps Stage A's ERA5 representation. The spike's "only the head and the conv train" caveat is answered: training more of the model doesn't help.
+- **Step 3, AVNI's track as a prior (2026-11-17): ties AVNI to 48 h, worse beyond.** `train --adeck-dir` (#256): CNN, Transformer and GNN predict their correction to AVNI's track (`training.track_prior`), each with the default and the unfrozen Stage B. Atlantic 48 h on the registry's validation windows (those with AVNI, 330 of 352): GNN v10 69 nm, CNN v11 75, Transformer v12 77 (unfrozen: 89, 84, 87, worse again). All `--register-only`, none staged.
+  - **Against AVNI** (`docs/backtests/2026-11-17-homogeneous-baseline-val2024-avni-prior.json`; forecasts from `validation-forecasts --fusion-version 14 --also=cnn=11 --also=gnn=10 --also=transformer=12`, `anemoi-train-schedule-gz825`; same HURDAT2 bytes): Atlantic sample B, model minus AVNI, nm:
+
+    | | 24 h | 48 h | 72 h | 120 h |
+    |---|---|---|---|---|
+    | GNN v10 | +1 [−2, 4] | **+4 [−4, 11]** | +15 [4, 25] | +64 [33, 83] |
+    | CNN v11 | +1 [−1, 4] | +9 [3, 15] | +17 [4, 30] | +49 [0, 93] |
+    | Transformer v12 | +4 [1, 6] | +12 [5, 20] | +31 [19, 44] | +82 [43, 133] |
+    | fusion v14 | +31 | +94 | +171 | +260 |
+
+    Sample C agrees (GNN 48 h +6 [−1, 14]). East Pacific B 24–48 h: GNN −2 and −3 nm, intervals spanning zero.
+  - **Read it as:** with AVNI as the prior, the GNN is the first ML forecast statistically level with AVNI at 48 h (69.5 nm on B, AVNI 65.9; the 70 nm gate is met only because AVNI meets it). The models' corrections add error that grows with lead: by Decision Log 66's rule they still don't add value against AVNI, and at 72–120 h they subtract it. Next: shrink the corrections (regularise the correction toward zero, or learn a per-lead weight on it), measured on held-out 2025 rather than the validation year it would be tuned on; and the live question before any staging, how often AVNI is written after a cycle runs (a prior version skips that cycle).
 
 ## Phase 2: Ocean inputs (runs alongside Phase 1)
 
@@ -248,6 +260,10 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-17.** Unfrozen Stage B (#255) is worse for all four models;
+  not adopted. AVNI-prior versions (#256): GNN v10 +4 nm [−4, 11] against
+  AVNI at Atlantic 48 h (level with it), worse at 72–120 h. Nothing new
+  staged.
 - **2026-11-17.** Steering CNN v9, GNN v8 and PINN v8 trained; all four
   steering models staged with diffusion v14 and fusion v14. Fusion v14 is
   +94 nm [67, 125] behind AVNI on Atlantic 48 h sample B (v12: +154).
