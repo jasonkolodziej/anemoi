@@ -990,32 +990,32 @@ def test_the_gfs_track_members_are_the_prior_and_its_two_diagnostics(archive, ca
     from anemoi.training.baseline_backtest import (
         GFS_TRACK_BESTFIX,
         GFS_TRACK_MEMBER,
-        GFS_TRACK_RAW,
+        GFS_TRACK_WORKFIX,
         gfs_track_members,
     )
 
     tracks, _ = archive
     first = (cases.storm_ids[0], cases.init_times[0])
-    prior, raw, bestfix = gfs_track_members(
+    prior, workfix, bestfix = gfs_track_members(
         cases, _gfs_track_cache(tmp_path, tracks, cases, skip=[first]),
     )
 
     assert (prior.name, prior.kind) == (GFS_TRACK_MEMBER, "prior")
-    assert (raw.name, bestfix.name) == (GFS_TRACK_RAW, GFS_TRACK_BESTFIX)
-    for member in (prior, raw, bestfix):
+    assert (workfix.name, bestfix.name) == (GFS_TRACK_WORKFIX, GFS_TRACK_BESTFIX)
+    for member in (prior, workfix, bestfix):
         assert np.isnan(member.pred_abs[0]).all()          # no cached track: no forecast
         assert np.isnan(member.pred_abs[..., 2]).all()     # track only
-    # The cached track is the truth. Unshifted, and shifted to the
-    # best-track fix (where it already starts), it is the truth; shifted to
-    # the working fix it carries that fix's offset to every lead it reaches.
+    # The cached track is the truth. As it is (the prior), and shifted to
+    # the best-track fix (where it already starts), it is the truth;
+    # shifted to the working fix it carries that fix's offset to every lead.
     i = 1
     ok = cases.mask[i] & cases.time_ok[i]
-    np.testing.assert_allclose(raw.pred_abs[i, ok, :2], cases.obs_abs[i, ok, :2], atol=1e-4)
-    np.testing.assert_allclose(bestfix.pred_abs[i, ok, :2], cases.obs_abs[i, ok, :2], atol=0.02)
+    np.testing.assert_allclose(prior.pred_abs[i, ok, :2], cases.obs_abs[i, ok, :2], atol=1e-4)
+    np.testing.assert_allclose(bestfix.pred_abs[i, ok, :2], cases.obs_abs[i, ok, :2], atol=1e-4)
     shift_lat = cases.base_lat[i] - cases.best_lat[i]
     assert abs(shift_lat) > 0.01
     np.testing.assert_allclose(
-        prior.pred_abs[i, ok, 0], cases.obs_abs[i, ok, 0] + shift_lat, atol=0.02,
+        workfix.pred_abs[i, ok, 0], cases.obs_abs[i, ok, 0] + shift_lat, atol=1e-4,
     )
 
 
@@ -1027,7 +1027,7 @@ def test_the_backtest_scores_the_gfs_track_beside_the_guidance(archive, adecks, 
         tracks, statuses, adecks, gfs_track_dir=_gfs_track_cache(tmp_path, tracks, cases),
     )
     names = [m["name"] for m in report.members]
-    assert {GFS_TRACK_MEMBER, "GFST_raw", "GFST_bestfix"} <= set(names)
+    assert {GFS_TRACK_MEMBER, "GFST_workfix", "GFST_bestfix"} <= set(names)
     row = _row_of(report, "B", "AL", 12)
     assert row.scores[GFS_TRACK_MEMBER].mean_error < row.scores["XTRP"].mean_error
 

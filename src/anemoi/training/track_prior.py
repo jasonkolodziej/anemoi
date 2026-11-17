@@ -1,9 +1,12 @@
 """GFS's own forecast track as a prior the Group 1 models correct.
 
 A cycle reads the GFS run of 6 h before. `data.gfs_track` follows the storm
-through that run's forecast fields; shifted so it starts at the cycle's
-current fix (what NHC's interpolator does to make AVNI from the same run),
-that track is the prior. A model trained with it predicts its *correction*:
+through that run's forecast fields, and that track, where GFS has the storm,
+is the prior. It is not shifted to start at the cycle's fix, as NHC's
+interpolator shifts AVNO into AVNI: on the 2024 validation cases the shift
+to the working fix cost 2-3.5 nm at 24-120 h (Atlantic C, 48 h: 56.5 nm
+shifted, 53.9 unshifted, AVNI 52.7), because it carries the fix's own error
+into every lead. A model trained with it predicts its *correction*:
 its training target is the observed displacement minus the prior's, and its
 forecast is the prior's displacement plus what it predicts.
 
@@ -61,13 +64,15 @@ def prior_from_track(
     persistence: np.ndarray,
     lead_hours: Sequence[int] = DEFAULT_LEADS,
 ) -> np.ndarray | None:
-    """``(n_leads, 3)``: the tracked storm's displacement (dx east, dy
-    north, nm) at each lead, as from ``(base_lat, base_lon)``; a wind of 0;
-    and ``persistence``'s displacement for a lead the track doesn't reach.
+    """``(n_leads, 3)``: from ``(base_lat, base_lon)``, the displacement
+    (dx east, dy north, nm) to where GFS has the storm at each lead; a wind
+    of 0; and ``persistence``'s displacement for a lead the track doesn't
+    reach.
 
     ``positions`` is `data.gfs_track`'s ``(len(TRACK_LEADS_H), 2)`` (lat,
-    lon). The track is shifted so its position at the cycle's valid time is
-    the base fix. None when it has no position then or at the first lead.
+    lon), used as they are (see the module docstring for why not shifted).
+    None when the track has no position at the valid time or at the first
+    lead.
     """
     if positions is None:
         return None
@@ -80,10 +85,7 @@ def prior_from_track(
     for i, lead in enumerate(lead_hours):
         pos = positions[at[int(lead)]]
         if np.isfinite(pos).all():
-            prior[i, 0], prior[i, 1] = _offset_nm(
-                base_lat, base_lon,
-                base_lat + (pos[0] - start[0]), base_lon + (pos[1] - start[1]),
-            )
+            prior[i, 0], prior[i, 1] = _offset_nm(base_lat, base_lon, pos[0], pos[1])
         else:
             prior[i, 0], prior[i, 1] = persistence[i, 0], persistence[i, 1]
     return prior

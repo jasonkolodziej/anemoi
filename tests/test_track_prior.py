@@ -35,23 +35,26 @@ def _positions(until_h: int = 120, start=(21.0, -61.0), dlat_6h=0.5, dlon_6h=0.0
     return pos
 
 
-def test_prior_is_the_tracks_displacement_shifted_to_the_fix():
-    # GFS has the storm 1 deg north and west of the fix; the prior is its
-    # motion from there, applied from the fix: 1 deg north per 12 h.
+def test_prior_is_the_displacement_to_where_gfs_has_the_storm():
+    # GFS has the storm 1 deg north and west of the fix, moving 1 deg north
+    # per 12 h. The prior is not shifted to the fix: it points at GFS's
+    # positions, so the fix's own error stays out of every lead.
     prior = tp.prior_from_track(_positions(), 20.0, -60.0, _persistence())
 
     assert prior.shape == (len(DEFAULT_LEADS), 3)
     for i, lead in enumerate(DEFAULT_LEADS):
-        assert prior[i, 0] == pytest.approx(0.0, abs=1e-6)
-        assert prior[i, 1] == pytest.approx(
-            haversine_nm(20.0, -60.0, 20.0 + lead / 12, -60.0), rel=1e-6,
-        )
+        lat, lon = 21.0 + lead / 12, -61.0
+        want = haversine_nm(20.0, -60.0, lat, lon)
+        assert np.hypot(*prior[i, :2]) == pytest.approx(want, rel=1e-6)
+        assert prior[i, 0] < 0  # west
     np.testing.assert_array_equal(prior[:, 2], 0.0)  # intensity stays the model's own
 
 
 def test_a_lead_gfs_has_lost_the_storm_by_falls_back_to_persistence():
     prior = tp.prior_from_track(_positions(until_h=24), 20.0, -60.0, _persistence())
-    assert prior[1, 1] == pytest.approx(haversine_nm(20.0, -60.0, 22.0, -60.0), rel=1e-6)
+    assert np.hypot(*prior[1, :2]) == pytest.approx(
+        haversine_nm(20.0, -60.0, 23.0, -61.0), rel=1e-6,
+    )
     np.testing.assert_allclose(prior[2:, :2], _persistence()[2:, :2])
 
 
