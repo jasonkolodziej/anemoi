@@ -717,3 +717,45 @@ def test_an_extra_version_is_loaded_from_its_registry_entry(cases, archive, monk
         collect_validation_forecasts(
             tracks, Registry(), None, "/gdas", extra_versions={"fusion": 1},
         )
+
+
+# --- the held-out test split ---------------------------------------------------
+
+
+def test_test_split_windows_are_drawn_after_and_leave_the_validation_windows_alone(archive):
+    from anemoi.data.splits import Split
+    from anemoi.training.real_latents import scored_windows
+
+    tracks, _ = archive
+    _, val = joint_stage_windows(tracks, seed=7, n_augment=1)
+    val_again = scored_windows(tracks, Split.VAL, seed=7, n_augment=1)
+    test = scored_windows(tracks, Split.TEST, seed=7, n_augment=1)
+
+    assert [w.current for w in val_again] == [w.current for w in val]
+    assert test and {w.storm_id for w in test} == {"AL012025"}
+    with pytest.raises(ValueError):
+        scored_windows(tracks, Split.TRAIN)
+
+
+def test_test_split_cases_are_the_test_season(archive):
+    from anemoi.data.splits import Split
+
+    tracks, statuses = archive
+    test_cases = validation_cases(tracks, statuses, split=Split.TEST)
+    assert set(test_cases.storm_ids) == {"AL012025"}
+    assert test_cases.seasons == (2025, 2025)
+    assert test_cases.split == "test"
+    assert validation_cases(tracks, statuses).split == "val"
+
+
+def test_a_forecast_file_is_only_scored_on_its_own_split(archive):
+    from types import SimpleNamespace
+
+    from anemoi.data.splits import Split
+
+    tracks, statuses = archive
+    val_file = SimpleNamespace(header={"split": "val"})
+    with pytest.raises(BaselineBacktestError, match="val split, not test"):
+        run_baseline_backtest(
+            tracks, statuses, {}, model_forecasts=val_file, split=Split.TEST,
+        )

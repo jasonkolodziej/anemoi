@@ -1350,6 +1350,7 @@ def cmd_baseline_backtest(args: argparse.Namespace) -> int:
     from .data.hurdat2 import parse_hurdat2_statuses
     from .data.hurdat2_source import describe
     from .data.nhc_verification import OfficialErrorsError
+    from .data.splits import Split
     from .provenance import git_sha
     from .training.baseline_backtest import (
         DEFAULT_REFERENCES,
@@ -1382,11 +1383,15 @@ def cmd_baseline_backtest(args: argparse.Namespace) -> int:
             seed, n_augment = file_seed, file_augment
         seed = 20260806 if seed is None else seed
         n_augment = 1 if n_augment is None else n_augment
+        split = Split(
+            getattr(args, "split", None)
+            or (forecasts.header.get("split", "val") if forecasts is not None else "val")
+        )
 
         tracks = _training_tracks(args.hurdat2)
         statuses = parse_hurdat2_statuses(Path(args.hurdat2).read_text())
         cached = read_cached_adecks(
-            args.adeck_dir, [t.storm_id for t in validation_tracks(tracks)],
+            args.adeck_dir, [t.storm_id for t in validation_tracks(tracks, split)],
             techniques_to_read(techniques),
         )
         for storm_id in cached.missing:
@@ -1414,7 +1419,7 @@ def cmd_baseline_backtest(args: argparse.Namespace) -> int:
             models=tuple(m for m in args.models.split(",") if m),
             official_errors=official,
             registered=[RegisteredError.parse(r) for r in args.registered_error],
-            seed=seed, n_augment=n_augment,
+            seed=seed, n_augment=n_augment, split=split,
         )
     except (BaselineBacktestError, OfficialErrorsError) as exc:
         print(f"baseline-backtest: {exc}")
@@ -1457,6 +1462,7 @@ def cmd_validation_forecasts(args: argparse.Namespace) -> int:
     registered numbers (the file is still written, to be looked at)."""
     from .data.hurdat2 import parse_hurdat2_statuses
     from .data.hurdat2_source import describe
+    from .data.splits import Split
     from .provenance import git_sha
     from .tracking.checkpoint_store import CheckpointStore, S3Config
     from .tracking.registry import ModelRegistry
@@ -1481,6 +1487,7 @@ def cmd_validation_forecasts(args: argparse.Namespace) -> int:
             seed=args.seed, n_augment=args.n_augment, fusion_version=args.fusion_version,
             extra_versions=extra, steering_cache_dir=getattr(args, "steering_cache_dir", None),
             hurdat2=describe(args.hurdat2), git_commit=git_sha(),
+            split=Split(getattr(args, "split", None) or "val"),
         )
     except BaselineBacktestError as exc:
         print(f"validation-forecasts: {exc}")
@@ -1488,7 +1495,8 @@ def cmd_validation_forecasts(args: argparse.Namespace) -> int:
     forecasts.write(args.out)
     print(format_forecast_check(forecasts))
     print(f"\nwrote {args.out}")
-    return 0 if forecasts.consistent else 1
+    # A test-split file has nothing registered to check against.
+    return 0 if forecasts.consistent or forecasts.header.get("split") != "val" else 1
 
 
 def cmd_consistency_distill(args: argparse.Namespace) -> int:
@@ -1694,6 +1702,12 @@ def main(argv: list[str] | None = None) -> int:
         help="score OFCL/GFS/CLIPER from the a-decks on the registry's validation windows",
     )
     p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
+    p.add_argument(
+        "--split", choices=["val", "test"], default=None,
+        help=("which held-out split's windows: val (the registry's; default) or test "
+              "(the held-out season nothing is trained or tuned on); "
+              "default: the --model-forecasts file's"),
+    )
     p.add_argument("--adeck-dir", dest="adeck_dir", required=True,
                    help="directory `adeck-fetch` filled (read only)")
     p.add_argument(
@@ -1734,6 +1748,11 @@ def main(argv: list[str] | None = None) -> int:
              "(inference only; needs checkpoints)",
     )
     p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
+    p.add_argument(
+        "--split", choices=["val", "test"], default=None,
+        help=("which held-out split's windows: val (the registry's; default) or test "
+              "(the held-out season nothing is trained or tuned on)"),
+    )
     p.add_argument("--gdas-cache-dir", dest="gdas_cache_dir", required=True)
     p.add_argument("--seed", type=int, default=20260806,
                    help="must match training's seed to reproduce its val windows")

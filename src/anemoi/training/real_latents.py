@@ -185,6 +185,18 @@ def joint_stage_windows(
     anything that must name the same cases (`training.baseline_backtest`)
     calls this rather than repeating it.
     """
+    train_windows, val_windows, _test = _draw_stage_windows(
+        tracks, seed=seed, n_augment=n_augment, with_test=False,
+    )
+    return train_windows, val_windows
+
+
+def _draw_stage_windows(
+    tracks: list[Track], *, seed: int, n_augment: int, with_test: bool,
+) -> tuple[list[StageWindow], list[StageWindow], list[StageWindow]]:
+    """`joint_stage_windows`' draw, and the test storms' windows after it:
+    drawn last, from the same generator, so the train and validation
+    windows (and their working fixes) are the same with or without them."""
     boundaries = boundaries_for_tracks(Flavor.GDAS_FINETUNE, tracks)
     assignment = assign_splits(tracks, boundaries)
     train_tracks = filter_tracks(tracks, assignment, Split.TRAIN)
@@ -193,7 +205,26 @@ def joint_stage_windows(
     rng = np.random.default_rng(seed)
     train_windows = list(iter_stage_windows(train_tracks, rng, n_augment))
     val_windows = list(iter_stage_windows(val_tracks, rng, 1))
-    return train_windows, val_windows
+    test_windows: list[StageWindow] = []
+    if with_test:
+        test_tracks = filter_tracks(tracks, assignment, Split.TEST)
+        test_windows = list(iter_stage_windows(test_tracks, rng, 1))
+    return train_windows, val_windows, test_windows
+
+
+def scored_windows(
+    tracks: list[Track], split: Split = Split.VAL, *, seed: int = 20260806, n_augment: int = 1,
+) -> list[StageWindow]:
+    """The windows a held-out split is scored on: `joint_stage_windows`'
+    validation windows for ``Split.VAL``; for ``Split.TEST``, the test
+    storms' windows drawn after them (`_draw_stage_windows`), the held-out
+    season nothing is trained or tuned on."""
+    if split not in (Split.VAL, Split.TEST):
+        raise ValueError(f"no scored windows for the {split.value} split")
+    _train, val, test = _draw_stage_windows(
+        tracks, seed=seed, n_augment=n_augment, with_test=split is Split.TEST,
+    )
+    return val if split is Split.VAL else test
 
 
 #: Where a Transformer that reads forecast-lead steering (Decision Log 68)
@@ -559,17 +590,20 @@ def extract_validation_latents(
     n_augment: int = 1,
     device=None,
     steering_cache_dir: Path | str | None = None,
+    split: Split = Split.VAL,
 ) -> JointLatentSamples:
     """`extract_joint_latents`' ``val`` alone, for a job that only scores
     the validation windows: the same windows and working fixes, without
     loading fields for and running the five models on every training
     window. The training windows are still enumerated, because the
     generator draws their working tracks before the validation storms'.
+    ``split=Split.TEST`` scores the held-out test storms instead
+    (`scored_windows`).
     """
     _require_group1(trained_artifacts)
-    _train, val_windows = joint_stage_windows(tracks, seed=seed, n_augment=n_augment)
+    windows = scored_windows(tracks, split, seed=seed, n_augment=n_augment)
     return _extract_for_tracks(
-        val_windows, trained_artifacts, gdas_cache_dir, device=device,
+        windows, trained_artifacts, gdas_cache_dir, device=device,
         steering_cache_dir=steering_cache_dir,
     )
 
