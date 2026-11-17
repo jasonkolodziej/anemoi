@@ -51,7 +51,9 @@ def build_pinn(
     class PhysicsCorrector(nn.Module):
         def __init__(self) -> None:
             super().__init__()
-            layers: list[nn.Module] = [nn.Linear(input_dim + spec.output_dim, hidden_dim), nn.Tanh()]
+            layers: list[nn.Module] = [
+                nn.Linear(input_dim + spec.output_dim, hidden_dim), nn.Tanh(),
+            ]
             for _ in range(n_layers - 1):
                 layers += [nn.Linear(hidden_dim, hidden_dim), nn.Tanh()]
             if n_steering:

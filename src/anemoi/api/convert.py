@@ -69,7 +69,9 @@ def cycle_plan_out(plan: CyclePlan) -> s.CyclePlanOut:
         load_shed=plan.load_shed,
         degraded=plan.degraded,
         stages=[
-            s.StageOut(stage=st.stage.value, start=st.start, end_target=st.end_target, end_max=st.end_max)
+            s.StageOut(
+                stage=st.stage.value, start=st.start, end_target=st.end_target, end_max=st.end_max,
+            )
             for st in plan.stages
         ],
     )
@@ -82,7 +84,10 @@ def cycle_payload_out(output: CycleOutput) -> s.CyclePayload:
 def cycle_products_out(output: CycleOutput) -> s.CycleProducts:
     det = output.deterministic
     track = [
-        s.TrackPointOut(lead_hours=lh, lat=round(float(lat), 3), lon=round(float(lon), 3), wind_kt=round(float(w), 1))
+        s.TrackPointOut(
+            lead_hours=lh, lat=round(float(lat), 3), lon=round(float(lon), 3),
+            wind_kt=round(float(w), 1),
+        )
         for lh, lat, lon, w in zip(det.lead_hours, det.lats, det.lons, det.winds_kt, strict=True)
     ]
     per_model_tracks = {

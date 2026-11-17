@@ -9,13 +9,17 @@ from ...tracking.registry import ALL_MODELS
 from .. import convert, schemas
 from ..deps import require_api_key, state_dependency
 
-router = APIRouter(prefix="/monitoring", tags=["monitoring"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/monitoring", tags=["monitoring"], dependencies=[Depends(require_api_key)],
+)
 
 
 @router.get("/drift/{model}", response_model=schemas.DriftReportOut)
 def drift(model: str, state=Depends(state_dependency)) -> schemas.DriftReportOut:
     if model not in ALL_MODELS:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown model {model!r}; expected one of {ALL_MODELS}")
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, f"unknown model {model!r}; expected one of {ALL_MODELS}",
+        )
     report = state.drift_report(model)
     return convert.drift_report_out(model, Flavor.GDAS_FINETUNE.value, report)
 

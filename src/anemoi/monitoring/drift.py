@@ -140,7 +140,9 @@ def detect_feature_drift(
             name=name,
             standardized_shift=float(s),
             variance_ratio=float(r),
-            drifted=bool(abs(s) > shift_sigma or r > variance_ratio_limit or r < 1 / variance_ratio_limit),
+            drifted=bool(
+                abs(s) > shift_sigma or r > variance_ratio_limit or r < 1 / variance_ratio_limit
+            ),
         )
         for name, s, r in zip(reference.feature_names, shift, ratio, strict=True)
     )

@@ -156,7 +156,9 @@ def parse_bdeck(text: str) -> list[Track]:
     tracks: list[Track] = []
     for storm_id, fixes in fixes_by_storm.items():
         fixes.sort(key=lambda f: f.valid_time)
-        deduped = [f for i, f in enumerate(fixes) if i == 0 or f.valid_time != fixes[i - 1].valid_time]
+        deduped = [
+            f for i, f in enumerate(fixes) if i == 0 or f.valid_time != fixes[i - 1].valid_time
+        ]
         tracks.append(Track(storm_id=storm_id, fixes=tuple(deduped)))
     return tracks
 
@@ -383,4 +385,6 @@ def pair_by_valid_time(working: Track, final: Track) -> list[tuple[Fix, Fix]]:
             f"storm_id mismatch: working={working.storm_id!r} final={final.storm_id!r}"
         )
     final_by_time = {f.valid_time: f for f in final.fixes}
-    return [(w, final_by_time[w.valid_time]) for w in working.fixes if w.valid_time in final_by_time]
+    return [
+        (w, final_by_time[w.valid_time]) for w in working.fixes if w.valid_time in final_by_time
+    ]

@@ -1036,7 +1036,9 @@ def test_calibration_report_reflects_persisted_samples(client):
         )
         for i in range(5)
     ]
-    save_calibration_samples(samples, Path(state.registry.root) / "calibration" / "calibration_samples.json")
+    save_calibration_samples(
+        samples, Path(state.registry.root) / "calibration" / "calibration_samples.json",
+    )
     state._calibration_samples = None  # force a reload from the file just written
 
     reports = state.calibration_report()
@@ -1058,7 +1060,11 @@ def test_audit_calibration_due_persists_and_is_idempotent_across_a_restart():
     from anemoi.api.cycle_store import save_cycle_result
     from anemoi.api.real_state import RealStormState
     from anemoi.api.schemas import (
-        ConeSegmentOut, CyclePayload, CycleProducts, CycleResult, IntensityPercentiles,
+        ConeSegmentOut,
+        CyclePayload,
+        CycleProducts,
+        CycleResult,
+        IntensityPercentiles,
     )
     from anemoi.data.besttrack import Fix, Track, TrackQuality
 
@@ -1069,13 +1075,17 @@ def test_audit_calibration_due_persists_and_is_idempotent_across_a_restart():
             cycle="20260901_00Z", issued_at=target, advisory_deadline=target + timedelta(hours=3),
             nwp_cycle_lag_hours=6, vitals="observed", ensemble_size=20,
             rapid_intensification=False, ri_probability=0.0,
-            cone=[ConeSegmentOut(lead_hours=12, lat=20.05, lon=-60.05, radius_nm=50.0, basis="ensemble")],
+            cone=[ConeSegmentOut(
+                lead_hours=12, lat=20.05, lon=-60.05, radius_nm=50.0, basis="ensemble",
+            )],
             flags=[],
         ),
         products=CycleProducts(
             deterministic_track=[], contributors={"lstm": 1.0}, per_model_tracks={},
             missing_model_reasons={},
-            intensity_pdf=[IntensityPercentiles(lead_hours=12, p10=50.0, p25=55.0, p50=60.0, p75=65.0, p90=70.0)],
+            intensity_pdf=[IntensityPercentiles(
+                lead_hours=12, p10=50.0, p25=55.0, p50=60.0, p75=65.0, p90=70.0,
+            )],
             landfall_probability=None, notes=[], degraded=False,
         ),
         on_time=True,
