@@ -376,6 +376,16 @@ def cmd_steering_spike(args: argparse.Namespace) -> int:
     return 0
 
 
+def _stage_b_frozen(value: str | None) -> tuple[str, ...] | None:
+    """``--stage-b-frozen``: None keeps curriculum.yaml's Stage B freezing;
+    ``none`` freezes nothing; otherwise a comma-separated module list."""
+    if value is None:
+        return None
+    if value.strip().lower() == "none":
+        return ()
+    return tuple(m.strip() for m in value.split(",") if m.strip())
+
+
 def cmd_train(args: argparse.Namespace) -> int:
     """Run a real Stage A/B curriculum against a real HURDAT2 file (#22).
 
@@ -453,6 +463,14 @@ def cmd_train(args: argparse.Namespace) -> int:
     streaming_kwargs: dict = {"streaming": args.streaming, "num_workers": args.num_workers}
     if args.batch_size is not None:
         streaming_kwargs["batch_size"] = args.batch_size
+    # Stage B freezes everything outside the head (curriculum.yaml
+    # stage_b.frozen_modules), so a new input such as steering is learnt by
+    # its own layer and the head alone. `--stage-b-frozen none` fine-tunes
+    # the whole model at Stage B's learning rate instead (skill-gap plan,
+    # Phase 1: the spike's "only the head and the conv train" caveat).
+    stage_b_frozen = _stage_b_frozen(getattr(args, "stage_b_frozen", None))
+    if stage_b_frozen is not None:
+        streaming_kwargs["curriculum_kwargs"] = {"b": {"frozen_modules": stage_b_frozen}}
 
     if args.model == "lstm":
         from .training.real_run import run_lstm_curriculum
@@ -552,6 +570,8 @@ def cmd_train(args: argparse.Namespace) -> int:
     tag_dict.update(gridded_input_tags(args.gdas_cache_dir))
     tag_dict.update(training_data_tags(args.hurdat2, tracks))
     tag_dict.update(basin_tags(val_metrics))
+    if stage_b_frozen is not None:
+        tag_dict["stage_b_frozen"] = ",".join(stage_b_frozen) or "none"
     version = registry.register(
         args.model,
         run_id=f"cli-{datetime.now(UTC):%Y%m%dT%H%M%S}",
@@ -1942,6 +1962,14 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "--streaming only; real DataLoader worker processes (default: 0, "
             "main-process loading) -- training.streaming.make_dataloader"
+        ),
+    )
+    p.add_argument(
+        "--stage-b-frozen", dest="stage_b_frozen", default=None,
+        help=(
+            "Stage B's frozen modules: 'none' fine-tunes the whole model; "
+            "default: curriculum.yaml stage_b.frozen_modules (the encoder). "
+            "Recorded in the version's tags as stage_b_frozen"
         ),
     )
     p.set_defaults(func=cmd_train)
