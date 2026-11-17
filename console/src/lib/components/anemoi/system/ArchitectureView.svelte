@@ -1,7 +1,14 @@
 <script lang="ts">
 	import type { ArchitectureOut } from '$lib/api/types';
 	import { colorFor, god } from '$lib/branding';
-	import { displayShape, formatParams, formatShape, stagesOf, type Stage } from './shapes';
+	import {
+		displayShape,
+		formatParamValue,
+		formatParams,
+		formatShape,
+		stagesOf,
+		type Stage
+	} from './shapes';
 
 	let {
 		arch,
@@ -260,7 +267,7 @@
 				<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 font-data text-xs">
 					{#each params as [k, v] (k)}
 						<dt class="text-text-muted">{k}</dt>
-						<dd class="text-text">{Array.isArray(v) ? v.join(' × ') : String(v)}</dd>
+						<dd class="text-text">{formatParamValue(v)}</dd>
 					{/each}
 					<dt class="text-text-muted">lead_hours</dt>
 					<dd class="text-text">{arch.lead_hours.join(', ')}</dd>

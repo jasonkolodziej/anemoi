@@ -131,6 +131,10 @@ test.describe('signed in', () => {
 		await expect(cnn).toContainText('blocks.3');
 		// The demo versions predate arch_params, and the page says so.
 		await expect(popover.getByText(/builder's defaults/)).toBeVisible();
+		// A nested group of settings (the tracker settings a version trained
+		// on the GFS track prior records) is spelled out.
+		await expect(popover).toContainText('smooth_cells: 2 · leads_h: 0, 6');
+		await expect(popover).not.toContainText('[object Object]');
 		// The CNN's path: GDAS/GFS and ERA5 in, through PINN, fusion and
 		// diffusion out. Muted: the working best-track (the CNN doesn't
 		// read it), and the other three models' edges in and out.
@@ -166,6 +170,8 @@ test.describe('signed in', () => {
 		await expect(source('besttrack_working')).toHaveAttribute('data-use', 'input');
 		await expect(source('besttrack_working')).toContainText('LSTM · PINN');
 		await expect(source('gdas_gfs')).toContainText('CNN · Transformer · GNN · PINN');
+		// The models read the t−6 run's forecast leads too, and the node says so.
+		await expect(source('gdas_gfs')).toContainText('+ leads');
 		// ERA5 feeds the same models, in Stage A pretraining only.
 		await expect(source('era5')).toHaveAttribute('data-use', 'input');
 		await expect(source('era5')).toContainText('pretraining only');

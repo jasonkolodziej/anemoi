@@ -103,6 +103,18 @@ export function sourceName(key: string): string {
 	return SOURCE_NAMES[key] ?? key;
 }
 
+/** A short note drawn after a source's name, and the same note in full
+ * for the node's spoken label. GDAS/GFS: the models read the t−6 run's
+ * forecast leads as well as its f006 fields -- steering to 54 h, and the
+ * storm's track in that run to 126 h for a model that corrects it. */
+const SOURCE_TAGS: Record<string, { tag: string; spoken: string }> = {
+	gdas_gfs: { tag: '+ leads', spoken: 'with its forecast leads' }
+};
+
+export function sourceTag(key: string): { tag: string; spoken: string } | undefined {
+	return SOURCE_TAGS[key];
+}
+
 const ORDER: SourceUse[] = ['input', 'reference', 'unused', 'unknown'];
 
 /** The sources in the order the graph stacks them: what feeds a model

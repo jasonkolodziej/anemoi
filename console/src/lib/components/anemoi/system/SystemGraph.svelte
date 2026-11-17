@@ -2,7 +2,17 @@
 	import type { ActivePin, ArchitectureOut, ModelVersionOut, RegistryEntry, SourceOut } from '$lib/api/types';
 	import { colorFor, god } from '$lib/branding';
 	import { displayShape, formatParams, formatShape } from './shapes';
-	import { byUse, hasUnknownEntry, readersOf, sourceName, usedBySpoken, usedByText, useOf, type SourceUse } from './source-use';
+	import {
+		byUse,
+		hasUnknownEntry,
+		readersOf,
+		sourceName,
+		sourceTag,
+		usedBySpoken,
+		usedByText,
+		useOf,
+		type SourceUse
+	} from './source-use';
 
 	let {
 		registry,
@@ -89,8 +99,14 @@
 			cycle: s.is_operational,
 			// ERA5 and GDAS/GFS have the same readers; only the role says ERA5
 			// is read in Stage A pretraining and never in a cycle.
-			tag: s.role === 'pretrain_only' ? 'pretraining only' : undefined,
-			spoken: `${sourceName(s.key)}: ${usedBySpoken(s)}${s.role === 'pretrain_only' ? ', in pretraining only' : ''}`
+			tag: s.role === 'pretrain_only' ? 'pretraining only' : sourceTag(s.key)?.tag,
+			spoken: `${sourceName(s.key)}: ${usedBySpoken(s)}${
+				s.role === 'pretrain_only'
+					? ', in pretraining only'
+					: sourceTag(s.key)
+						? `, ${sourceTag(s.key)!.spoken}`
+						: ''
+			}`
 		}));
 	});
 

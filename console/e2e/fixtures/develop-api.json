@@ -1064,6 +1064,14 @@
  ],
  "/v1/registry/cnn/architecture": {
   "arch_params": {
+   "track_prior": "gfs_track",
+   "track_prior_inputs": {
+    "smooth_cells": 2,
+    "leads_h": [
+     0,
+     6
+    ]
+   },
    "base_width": 32,
    "depth": 4,
    "in_channels": 5,
