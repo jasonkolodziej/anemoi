@@ -124,6 +124,8 @@ This phase answers one question fast: is the 231 nm error a missing-input proble
 
     Sample C agrees (GNN 48 h +6 [−1, 14]). East Pacific B 24–48 h: GNN −2 and −3 nm, intervals spanning zero.
   - **Read it as:** with AVNI as the prior, the GNN is the first ML forecast whose 48 h difference from AVNI is inconclusive rather than worse: its interval spans zero on both B and C, so by Decision Log 66's rule this season doesn't decide (it doesn't show the two are equal). On sample C, the one comparable with the 70 nm gate (wiki Verification Metrics), GNN v10 is 59.1 nm against AVNI's 52.7, so the gate is met by AVNI too. The CNN and Transformer are worse than AVNI at 48 h, and all three corrections add error that grows with lead: at 72–120 h they subtract value. Next: shrink the corrections (regularise the correction toward zero, or learn a per-lead weight on it), measured on held-out 2025 rather than the validation year it would be tuned on; and the live question before any staging, how often AVNI is written after a cycle runs (a prior version skips that cycle).
+  - **Shrinking the corrections can't close the gap (2026-11-17).** Forecast = AVNI + w × (model − AVNI), one weight per model and lead, fitted on 2024 by grid search (`docs/backtests/2026-11-17-avni-prior-shrinkage-weights.json`). The fitted weights are 0.25–0.40 at 12–36 h, 0.15–0.30 at 48 h and 0 from 72 h on (GNN: 0.1 at 72 h): the corrections are worth about a third of themselves at short leads and nothing later. Scored on the same 2024 cases the weights were fitted on (in-sample, so the gain is optimistic in expectation; `docs/backtests/2026-11-17-homogeneous-baseline-val2024-avni-prior-shrunk.json`), the best is under 1 nm better than AVNI at Atlantic 24–48 h (GNN B 48 h −0.5 [−3.0, 1.7]; CNN B 24 h −0.8 [−1.7, −0.0]), and C is level or worse. 2025 is unmeasured: frozen weights could do better or worse on another season, and only `--split test` (#259) on the held-out storms would say. It wasn't run, because even the fitted 2024 gain is too small to matter (under 1 nm against a 10–15 nm 48 h gap to EMXI and OFCL), so a 2025 look would spend test-set budget on a result that changes nothing.
+  - **Read it as:** the Group 1 models carry almost no track information AVNI doesn't already have. Beating AVNI needs information it lacks, and the a-decks show where it is: ECMWF's interpolated track (EMXI/EMX2) beats AVNI on the same Atlantic B cases (48 h 58.8 against 65.9 nm, 120 h 250 against 293), and NHC's official forecast, built on consensus, beats both (56.8 at 48 h). The next lever is a learned consensus of the interpolated guidance available at the cycle (AVNI, EMXI/EMX2, and other early models), with the Group 1 models as extra members, scored against TVCN and HCCA as well as AVNI.
 
 ## Phase 2: Ocean inputs (runs alongside Phase 1)
 
@@ -260,6 +262,10 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-17.** Per-lead shrinkage of the AVNI-prior corrections:
+  fitted weights 0.25–0.40 to 36 h, 0 from 72 h; on the fitting season,
+  under 1 nm better than AVNI (2025 unmeasured). Next lever: a learned consensus of the early
+  guidance (EMXI beats AVNI by 7 nm at 48 h on the same cases).
 - **2026-11-17.** Unfrozen Stage B (#255) is worse for all four models;
   not adopted. AVNI-prior versions (#256): GNN v10 +4 nm [−4, 11] against
   AVNI at Atlantic 48 h (inconclusive), worse at 72–120 h. Nothing new
