@@ -475,46 +475,88 @@ def technique_member(
     return Member(spec.name, spec.kind, pred, spec.description), used
 
 
-#: The member name of Anemoi's own GFS track (`gfs_track_member`).
+#: The member name of Anemoi's own GFS track (`gfs_track_members`), and of
+#: its two diagnostics: the same track unshifted, and shifted to the
+#: best-track fix instead of the working one.
 GFS_TRACK_MEMBER = "GFST"
+GFS_TRACK_RAW = "GFST_raw"
+GFS_TRACK_BESTFIX = "GFST_bestfix"
 
 
-def gfs_track_member(cases: ValidationCases, gfs_track_dir: Path | str) -> Member:
-    """Anemoi's own track of the t-6 GFS run (`data.gfs_track`), shifted to
-    each case's working fix: exactly the prior a model trained with one
-    corrects (`training.track_prior.prior_from_track`), with no persistence
-    fallback, so a lead GFS has lost the storm by has no forecast. Track
-    only. Comparable with AVNI (the same run, NHC's tracker, shifted to the
-    as-issued fix) and AVNO-6 (unshifted)."""
-    from ..data.gfs_track import cached_track, require_meta
+def gfs_track_members(cases: ValidationCases, gfs_track_dir: Path | str) -> list[Member]:
+    """Anemoi's own track of the t-6 GFS run (`data.gfs_track`), three ways.
+
+    `GFS_TRACK_MEMBER` is the prior a model trained with one corrects
+    (`training.track_prior.prior_from_track`): the track shifted to start
+    at each case's working fix, with no persistence fallback, so a lead GFS
+    has lost the storm by has no forecast. Comparable with AVNI (the same
+    run, NHC's tracker, shifted to the as-issued fix).
+
+    The shift puts the working fix's own error into every lead, and
+    training's emulated fix is noisier than NHC's real one. The two
+    diagnostics bracket what that costs: `GFS_TRACK_RAW` is the track
+    where GFS has it (no shift: GFS's own initial position error instead;
+    comparable with AVNO-6), and `GFS_TRACK_BESTFIX` is the track shifted
+    to the best-track fix (a fix with no error at all). A live cycle's fix
+    lies between the working and the best-track one. Track only.
+    """
+    from ..data.gfs_track import TRACK_LEADS_H, cached_track, require_meta
     from .track_prior import prior_from_track
 
     try:
         require_meta(gfs_track_dir)
     except ValueError as exc:
         raise BaselineBacktestError(str(exc)) from exc
-    disp = np.full(cases.obs_abs.shape, np.nan)
+    at = {lead: i for i, lead in enumerate(TRACK_LEADS_H)}
+    shape = cases.obs_abs.shape
     no_fallback = np.full((len(cases.lead_hours), 3), np.nan)
+    disp = {name: np.full(shape, np.nan) for name in (GFS_TRACK_MEMBER, GFS_TRACK_BESTFIX)}
+    bases = {
+        GFS_TRACK_MEMBER: (cases.base_lat, cases.base_lon),
+        GFS_TRACK_BESTFIX: (cases.best_lat, cases.best_lon),
+    }
+    raw = np.full(shape, np.nan)
     for i, (storm_id, init) in enumerate(zip(cases.storm_ids, cases.init_times, strict=True)):
-        prior = prior_from_track(
-            cached_track(gfs_track_dir, storm_id, init),
-            cases.base_lat[i], cases.base_lon[i], no_fallback, cases.lead_hours,
+        positions = cached_track(gfs_track_dir, storm_id, init)
+        if positions is None:
+            continue
+        for name, (lat, lon) in bases.items():
+            prior = prior_from_track(positions, lat[i], lon[i], no_fallback, cases.lead_hours)
+            if prior is not None:
+                disp[name][i, :, :2] = prior[:, :2]
+        for li, lead in enumerate(cases.lead_hours):
+            raw[i, li, :2] = positions[at[int(lead)]]
+
+    def shifted(name: str) -> np.ndarray:
+        lat0, lon0 = bases[name]
+        d = disp[name]
+        have = np.isfinite(d[..., 0])
+        lat, lon = displacements_to_latlon(
+            lat0[:, None], lon0[:, None],
+            np.where(have, d[..., 0], 0.0), np.where(have, d[..., 1], 0.0),
         )
-        if prior is not None:
-            disp[i, :, :2] = prior[:, :2]
-    pred = np.full(cases.obs_abs.shape, np.nan)
-    have = np.isfinite(disp[..., 0])
-    lat, lon = displacements_to_latlon(
-        cases.base_lat[:, None], cases.base_lon[:, None],
-        np.where(have, disp[..., 0], 0.0), np.where(have, disp[..., 1], 0.0),
-    )
-    pred[..., 0] = np.where(have, lat, np.nan)
-    pred[..., 1] = np.where(have, lon, np.nan)
-    return Member(
-        GFS_TRACK_MEMBER, "prior", pred,
-        "Anemoi's own track of the t-6 GFS run (data.gfs_track), shifted to the working fix: "
-        "the prior the gridded models correct",
-    )
+        pred = np.full(shape, np.nan)
+        pred[..., 0] = np.where(have, lat, np.nan)
+        pred[..., 1] = np.where(have, lon, np.nan)
+        return pred
+
+    return [
+        Member(
+            GFS_TRACK_MEMBER, "prior", shifted(GFS_TRACK_MEMBER),
+            "Anemoi's own track of the t-6 GFS run (data.gfs_track), shifted to the working "
+            "fix: the prior the gridded models correct",
+        ),
+        Member(
+            GFS_TRACK_RAW, "diagnostic", raw,
+            "the same track where GFS has it, unshifted: GFS's own initial position error "
+            "in place of the working fix's",
+        ),
+        Member(
+            GFS_TRACK_BESTFIX, "diagnostic", shifted(GFS_TRACK_BESTFIX),
+            "the same track shifted to the best-track fix: what the prior scores with a fix "
+            "that has no error",
+        ),
+    ]
 
 
 def persistence_members(cases: ValidationCases) -> list[Member]:
@@ -1323,7 +1365,7 @@ def run_baseline_backtest(
             "n_without_model_forecast": n_without,
         }
     if gfs_track_dir is not None:
-        project = [gfs_track_member(cases, gfs_track_dir), *project]
+        project = [*gfs_track_members(cases, gfs_track_dir), *project]
     for member in (*always, *project):
         member_rows.append({
             "name": member.name, "kind": member.kind, "description": member.description,
