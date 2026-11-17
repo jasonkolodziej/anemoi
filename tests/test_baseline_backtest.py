@@ -845,6 +845,64 @@ def test_two_jobs_spending_the_last_slot_at_once_both_log_and_only_one_proceeds(
     assert {e["justification"] for e in logged} >= {"rival", "late"}
 
 
+def test_an_earlier_key_landing_late_cannot_take_a_slot_already_spent():
+    from datetime import date
+
+    from anemoi.training.promotion import (
+        TEST_SET_BUDGET_PREFIX,
+        PromotionError,
+        TestSetBudget,
+        spend_test_set_budget,
+    )
+
+    store = _FakeStore()
+    when = date(2026, 11, 17)
+    limit = TestSetBudget().max_evaluations_per_season
+    for i in range(limit - 1):
+        spend_test_set_budget(store, "gnn v10", f"look {i}", when)
+    # Job A checked (limit - 1 used) and paused; job B took the last slot
+    # with a later key. A's write lands now, with the earlier key.
+    spend_test_set_budget(store, "cnn v11", "B", when)
+    b_key = max(store.list(TEST_SET_BUDGET_PREFIX))
+    upload = store.upload
+
+    def early_key(path, key):
+        store.upload = upload
+        return upload(path, f"{TEST_SET_BUDGET_PREFIX}00000000T000000000000Z-a.json")
+
+    store.upload = early_key
+    list_all = store.list
+    calls = []
+
+    def stale_first_list(prefix=""):  # A's check ran before B's write
+        calls.append(1)
+        keys = list_all(prefix)
+        return [k for k in keys if k != b_key] if len(calls) == 1 else keys
+
+    store.list = stale_first_list
+    with pytest.raises(PromotionError, match="another job"):
+        spend_test_set_budget(store, "gnn v10", "A", when)
+
+
+def test_a_legacy_single_file_ledger_still_counts(tmp_path):
+    from datetime import date
+
+    from anemoi.training.promotion import (
+        LEGACY_TEST_SET_BUDGET_KEY,
+        PromotionError,
+        TestSetBudget,
+        spend_test_set_budget,
+    )
+
+    store = _FakeStore()
+    limit = TestSetBudget().max_evaluations_per_season
+    legacy = [{"date": "2026-11-01", "model": "x", "justification": f"old {i}"}
+              for i in range(limit)]
+    store.objects[LEGACY_TEST_SET_BUDGET_KEY] = json.dumps(legacy).encode()
+    with pytest.raises(PromotionError, match="exhausted"):
+        spend_test_set_budget(store, "gnn v10", "new", date(2026, 11, 17))
+
+
 def test_a_test_split_export_needs_a_justification_before_any_model_runs(
     tmp_path, monkeypatch, capsys,
 ):

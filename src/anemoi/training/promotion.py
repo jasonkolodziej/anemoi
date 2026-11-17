@@ -374,6 +374,9 @@ class TestSetBudget:
 #: shared file.
 TEST_SET_BUDGET_PREFIX = "test_set_budget/"
 
+#: The single-file log the first version kept; its entries still count.
+LEGACY_TEST_SET_BUDGET_KEY = "test_set_budget.json"
+
 
 def _budget_entries(checkpoint_store, workdir) -> list[tuple[str, dict]]:
     """Every logged spend, ``(key, entry)``, in key (spend) order."""
@@ -382,6 +385,11 @@ def _budget_entries(checkpoint_store, workdir) -> list[tuple[str, dict]]:
 
     bucket = checkpoint_store.config.bucket
     out = []
+    if checkpoint_store.exists(LEGACY_TEST_SET_BUDGET_KEY):
+        path = Path(workdir) / LEGACY_TEST_SET_BUDGET_KEY
+        checkpoint_store.download(f"s3://{bucket}/{LEGACY_TEST_SET_BUDGET_KEY}", path)
+        out += [(f"{LEGACY_TEST_SET_BUDGET_KEY}#{i}", e)
+                for i, e in enumerate(json.loads(path.read_text()))]
     for key in sorted(checkpoint_store.list(TEST_SET_BUDGET_PREFIX)):
         path = Path(workdir) / key.replace("/", "_")
         checkpoint_store.download(f"s3://{bucket}/{key}", path)
@@ -397,11 +405,13 @@ def spend_test_set_budget(
     when there is no durable store to keep the log in, or when the season's
     budget is used up.
 
-    The log is append-only (`TEST_SET_BUDGET_PREFIX`): this spend writes its
-    own entry, then counts the season's entries in key order, and goes ahead
-    only if its own is within the budget. Two jobs spending at once therefore
-    both stay in the log, and at most the budget's worth of them proceed; one
-    refused this way keeps its entry, which counts as spent.
+    The log is append-only (`TEST_SET_BUDGET_PREFIX`, plus any entries in
+    the first version's single file): this spend writes its own entry, then
+    recounts the season's entries, and goes ahead only if the total is
+    within the budget. Of any jobs that go ahead, the last to write counted
+    every earlier one, so at most the budget's worth proceed, whatever the
+    order their writes land in. Jobs that race for the last slot may both
+    refuse; a refused attempt keeps its entry, which counts as spent.
     """
     import json
     import tempfile
@@ -435,10 +445,10 @@ def spend_test_set_budget(
         path.write_text(json.dumps(entry, indent=2))
         checkpoint_store.upload(path, key)
         keys = season_keys()
-        if key not in keys[:limit]:
+        if len(keys) > limit:
             raise PromotionError(
                 f"test-set evaluation budget for {when.year} was used up by another job "
                 f"spending at the same time; this attempt is logged ({key}) and counts"
             )
-        used = keys.index(key) + 1
+        used = len(keys)
     return {**entry, "key": key, "used_this_season": used, "max_per_season": limit}
