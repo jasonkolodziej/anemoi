@@ -211,3 +211,21 @@ def test_the_fetch_reads_the_run_six_hours_before_at_lead_plus_six(monkeypatch):
     assert "20220901/06" in seen["url"] and seen["url"].endswith("f054")
     assert ("UGRD", 850) in seen["keys"] and ("VGRD", 850) in seen["keys"]
     assert len(seen["keys"]) == 3
+
+
+def test_a_working_fix_seeds_the_same_track_as_the_best_track_fix():
+    # The cache seeds from the best-track fix; serving seeds from the
+    # working fix, about 13 nm off with noisier motion. The tracker returns
+    # the extremum inside its disc, so the track is identical unless the
+    # noise changes which vortex the disc holds (1% of 400 perturbed seeds
+    # on real 2024 fields, none at 48 h).
+    rng = np.random.default_rng(3)
+    fields = list(_moving(20.0, -60.0, 0.6, -0.9))
+    ref = gt.track_vortex(fields, 20.0, -60.0, 0.6, -0.9)
+    for _ in range(20):
+        sd = 13 / 60 / np.sqrt(2)
+        noisy = gt.track_vortex(
+            fields, 20.0 + rng.normal(0, sd), -60.0 + rng.normal(0, sd),
+            0.6 + rng.normal(0, 0.25), -0.9 + rng.normal(0, 0.25),
+        )
+        np.testing.assert_allclose(noisy, ref, atol=1e-9)

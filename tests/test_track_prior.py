@@ -214,6 +214,22 @@ def test_live_prior_is_the_training_prior_and_is_cached(tmp_path, monkeypatch):
     assert len(calls) == n
 
 
+def test_an_unwritable_cache_still_returns_the_track(tmp_path, monkeypatch):
+    from anemoi.data import gfs_track
+    from anemoi.training import real_inference_live as live
+
+    monkeypatch.setattr(live, "_TRACK_FIELD_MEMO", {})
+    fetch, _calls = _fake_fields(lambda lead: (20.0 + 0.4 * lead / 6, -60.0))
+
+    def full_disk(*a, **k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(gfs_track, "save_track", full_disk)
+    track = _track()
+    pos = live.fetch_live_gfs_track(track, track.fixes[-1], tmp_path, field_fetcher=fetch)
+    assert pos is not None and np.isfinite(pos).all()
+
+
 def test_a_corrected_previous_fix_is_tracked_again_not_read_from_the_cache(
     tmp_path, monkeypatch,
 ):

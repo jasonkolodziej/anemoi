@@ -144,8 +144,13 @@ def fetch_live_gfs_track(
         positions = track_many(fields(), [task])[0]
     except Exception:  # noqa: BLE001 - not published (yet): skip the model this cycle
         return None
-    save_track(path, positions, task)
-    return load_track(path)  # as stored (float32): the same on every later read
+    # float32, as stored: the same positions on every later read
+    positions = positions.astype(np.float32).astype(np.float64)
+    try:
+        save_track(path, positions, task)
+    except OSError:
+        pass  # an unwritable cache only costs a recomputation next time
+    return positions
 
 
 def fetch_live_track_prior(

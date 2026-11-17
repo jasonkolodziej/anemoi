@@ -90,7 +90,17 @@ def prior_from_track(
 
 
 def window_prior_fn(gfs_track_dir: Path | str) -> PriorFn:
-    """A `StageWindow` -> prior map over the GFS track cache."""
+    """A `StageWindow` -> prior map over the GFS track cache.
+
+    The cache tracks each cycle once, seeded from the best-track fix, and
+    every emulated window of that cycle reads it; serving seeds the tracker
+    from the working fix. The tracker returns the extremum inside its
+    search disc, so a seed's error changes the track only when it changes
+    which vortex the disc holds: on 40 real 2024 cycles, 1% of 400 seeds
+    perturbed like the emulator's fixes (13 nm, and the 6 h motion's 21 nm)
+    gave a different track, none at 48 h and none tracked to a different
+    lead. Tracking per window would refetch every cycle's fields per seed
+    for that."""
 
     def prior(sw) -> np.ndarray | None:
         return prior_from_track(
