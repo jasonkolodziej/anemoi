@@ -1036,3 +1036,11 @@ def test_a_gfs_track_cache_with_other_settings_is_refused(archive, adecks, tmp_p
     tracks, statuses = archive
     with pytest.raises(BaselineBacktestError, match="GFS track cache"):
         run_baseline_backtest(tracks, statuses, adecks, gfs_track_dir=tmp_path)
+
+
+def test_the_gfs_track_alone_still_says_no_model_was_scored(archive, adecks, cases, tmp_path):
+    tracks, statuses = archive
+    report = run_baseline_backtest(
+        tracks, statuses, adecks, gfs_track_dir=_gfs_track_cache(tmp_path, tracks, cases),
+    )
+    assert any(n.startswith("No per-case model forecasts were given") for n in report.notes)

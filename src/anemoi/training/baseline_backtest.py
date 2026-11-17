@@ -1409,7 +1409,7 @@ def run_baseline_backtest(
             "working_fix": working_fix_diagnostics(cases, val_tracks, adecks),
             "techniques": technique_diagnostics(cases, adecks),
         },
-        notes=_notes(cases, bool(project)),
+        notes=_notes(cases, model_forecasts is not None),
         references=tuple(present), skill_baseline=skill_baseline,
         reconciliation=(
             reconcile_official_errors(val_tracks, statuses, adecks, official_errors)
