@@ -52,6 +52,14 @@ def test_locate_finds_the_centre_between_grid_points(lat, lon):
     assert abs(((fix[1] - lon + 180) % 360) - 180) < 0.1
 
 
+def test_locate_searches_the_whole_disc_at_high_latitude():
+    # At 60N a centre 6 deg of longitude east is 3 deg away on the ground:
+    # inside the search radius, though further in degrees than it is wide.
+    fix = gt.locate(field_with((60.0, -34.0)), 60.0, -40.0)
+    assert fix is not None
+    assert abs(fix[0] - 60.0) < 0.15 and abs(fix[1] + 34.0) < 0.3
+
+
 def test_locate_is_none_in_a_resting_field_and_outside_the_radius():
     assert gt.locate(field_with(), 20.0, -60.0) is None
     far = field_with((20.0, -60.0))

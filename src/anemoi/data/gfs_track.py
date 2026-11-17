@@ -72,7 +72,7 @@ AGREE_DEG = 2.0
 #: the disc's median they are, to place the centre between grid points.
 CENTROID_DEG = 1.0
 
-TRACK_VERSION = 1
+TRACK_VERSION = 2
 _EARTH_RADIUS_M = 6_371_008.8
 
 
@@ -143,11 +143,17 @@ def _window(fld: LeadField, lat: float, lon: float, radius_deg: float):
     margin) of (lat, lon): ``(lats, lons, u, v, p)``, longitudes continuous
     across the dateline and Greenwich."""
     res = GRID_RESOLUTION_DEG
-    half = int(np.ceil(radius_deg / res)) + SMOOTH_CELLS + 1
+    margin = SMOOTH_CELLS + 1
+    half = int(np.ceil(radius_deg / res)) + margin
+    # The search disc measures east-west distance on the ground, so in
+    # degrees of longitude it is 1/cos(lat) wider than it is tall: at 60N a
+    # centre 6 deg east is 3 deg away. Never more than the whole circle.
+    stretch = max(np.cos(np.radians(lat)), 1e-6)
+    half_lon = min(int(np.ceil(radius_deg / (res * stretch))) + margin, GRID_NLON // 2 - 1)
     i0 = int(round((90.0 - lat) / res))
     j0 = int(round((lon % 360.0) / res))
     rows = np.arange(max(i0 - half, 0), min(i0 + half, GRID_NLAT - 1) + 1)
-    cols = np.arange(j0 - half, j0 + half + 1)
+    cols = np.arange(j0 - half_lon, j0 + half_lon + 1)
     lats = 90.0 - rows * res
     lons = cols * res
     lons = lons - 360.0 * np.round((lons.mean() - lon) / 360.0)

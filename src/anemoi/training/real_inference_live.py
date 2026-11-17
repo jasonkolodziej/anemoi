@@ -29,6 +29,7 @@ treat ``None`` as "this model can't contribute to this cycle," the same
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -85,13 +86,20 @@ PriorFetcher = Callable[["Track", "Fix", "Path | str"], "np.ndarray | None"]
 _TRACK_FIELD_MEMO: dict[tuple[datetime, int], object] = {}
 
 
-def live_gfs_track_path(cache_dir: Path | str, storm_id: str, current: Fix) -> Path:
-    """Where a live cycle's tracked positions are kept: by storm, time and
-    position, under a directory named by this build's tracker settings, as
-    `live_steering_path` keeps the steering features."""
+def live_gfs_track_path(
+    cache_dir: Path | str, storm_id: str, current: Fix, dlat_6h: float = 0.0, dlon_6h: float = 0.0,
+) -> Path:
+    """Where a live cycle's tracked positions are kept: by storm, time,
+    position and the 6 h motion that seeded the tracker (a corrected
+    previous fix is a different track), under a directory named by this
+    build's tracker settings, as `live_steering_path` keeps the steering
+    features."""
     from ..data.gfs_track import gfs_track_meta_digest
 
-    name = f"{current.valid_time:%Y%m%d%H}_{current.lat:+.2f}_{current.lon:+.2f}.npz"
+    name = (
+        f"{current.valid_time:%Y%m%d%H}_{current.lat:+.2f}_{current.lon:+.2f}"
+        f"_{dlat_6h:+.2f}_{dlon_6h:+.2f}.npz"
+    )
     return Path(cache_dir) / "live_gfs_track" / gfs_track_meta_digest() / storm_id / name
 
 
@@ -115,27 +123,22 @@ def fetch_live_gfs_track(
 
     if current.valid_time < GDAS_ARCHIVE_START:
         return None
-    path = live_gfs_track_path(cache_dir, track.storm_id, current)
+    window = _current_window(track, current, 2)
+    dlat = dlon = 0.0
+    if window is not None and window[-1].valid_time - window[-2].valid_time == timedelta(hours=6):
+        dlat, dlon = window[-1].lat - window[-2].lat, window[-1].lon - window[-2].lon
+    path = live_gfs_track_path(cache_dir, track.storm_id, current, dlat, dlon)
     if path.exists():
         try:
             return load_track(path)
         except Exception:  # noqa: BLE001 - a corrupt or outdated entry is recomputed
             pass
-    window = _current_window(track, current, 2)
-    dlat = dlon = 0.0
-    if window is not None and window[-1].valid_time - window[-2].valid_time == timedelta(hours=6):
-        dlat, dlon = window[-1].lat - window[-2].lat, window[-1].lon - window[-2].lon
     task = TrackTask(track.storm_id, current.valid_time, current.lat, current.lon, dlat, dlon)
     fetcher = field_fetcher or fetch_lead_field
 
     def fields():
         for lead in TRACK_LEADS_H:
-            key = (current.valid_time, lead)
-            if key not in _TRACK_FIELD_MEMO:
-                if any(t != current.valid_time for t, _ in _TRACK_FIELD_MEMO):
-                    _TRACK_FIELD_MEMO.clear()
-                _TRACK_FIELD_MEMO[key] = fetcher(current.valid_time, lead)
-            yield _TRACK_FIELD_MEMO[key]
+            yield _memoised_lead(_TRACK_FIELD_MEMO, current.valid_time, lead, fetcher)
 
     try:
         positions = track_many(fields(), [task])[0]
@@ -304,6 +307,24 @@ SteeringFetcher = Callable[["Track", "Fix", "Path | str"], "np.ndarray | None"]
 #: The flows of the last valid time fetched, shared by every storm in that
 #: cycle: each lead is a global grid, the same for all of them.
 _FLOW_MEMO: dict[tuple[datetime, int], object] = {}
+#: One lock for the per-cycle field memos (`_FLOW_MEMO`,
+#: `_TRACK_FIELD_MEMO`): the API runs cycles for different storms at once.
+_MEMO_LOCK = threading.Lock()
+
+
+def _memoised_lead(memo: dict, valid_time: datetime, lead: int, fetch):
+    """``memo[(valid_time, lead)]``, fetched once. Entries for any other
+    valid time are dropped first. Held under `_MEMO_LOCK`, fetch included,
+    so concurrent cycles neither fetch a lead twice nor evict an entry
+    between another cycle's check and its read; the caller keeps the
+    returned object, which a later eviction can't take from it."""
+    key = (valid_time, lead)
+    with _MEMO_LOCK:
+        if key not in memo:
+            if any(t != valid_time for t, _ in memo):
+                memo.clear()
+            memo[key] = fetch(valid_time, lead)
+        return memo[key]
 
 
 def live_steering_path(cache_dir: Path | str, storm_id: str, current: Fix) -> Path:
@@ -354,14 +375,10 @@ def fetch_live_steering(
     if feats is None:
         fetcher = flow_fetcher or fetch_lead_flow
         try:
-            flows = []
-            for lead in STEERING_LEADS_H:
-                key = (current.valid_time, lead)
-                if key not in _FLOW_MEMO:
-                    if any(t != current.valid_time for t, _ in _FLOW_MEMO):
-                        _FLOW_MEMO.clear()
-                    _FLOW_MEMO[key] = fetcher(current.valid_time, lead)
-                flows.append(_FLOW_MEMO[key])
+            flows = [
+                _memoised_lead(_FLOW_MEMO, current.valid_time, lead, fetcher)
+                for lead in STEERING_LEADS_H
+            ]
             feats = steering_features(flows, current.lat, current.lon)
         except Exception:  # noqa: BLE001 - not published (yet), or no flow: skip the model
             return None

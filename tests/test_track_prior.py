@@ -214,6 +214,65 @@ def test_live_prior_is_the_training_prior_and_is_cached(tmp_path, monkeypatch):
     assert len(calls) == n
 
 
+def test_a_corrected_previous_fix_is_tracked_again_not_read_from_the_cache(
+    tmp_path, monkeypatch,
+):
+    from anemoi.training import real_inference_live as live
+
+    monkeypatch.setattr(live, "_TRACK_FIELD_MEMO", {})
+    fetch, calls = _fake_fields(lambda lead: (20.0 + 0.4 * lead / 6, -60.0))
+    track = _track()
+    current = track.fixes[-1]
+    live.fetch_live_gfs_track(track, current, tmp_path, field_fetcher=fetch)
+    n = len(calls)
+
+    # The same current fix, but the fix before it has been corrected: the
+    # motion that seeds the tracker is different, so the cached track isn't it.
+    fixes = list(track.fixes)
+    prev = fixes[-2]
+    fixes[-2] = Fix(prev.storm_id, prev.valid_time, prev.lat - 0.3, prev.lon, prev.max_wind_kt,
+                    prev.min_pressure_mb, quality=prev.quality)
+    corrected = Track(storm_id=track.storm_id, fixes=tuple(fixes))
+    live.fetch_live_gfs_track(corrected, current, tmp_path, field_fetcher=fetch)
+    assert len(list(tmp_path.rglob("*.npz"))) == 2
+    assert len(calls) == n  # the fields themselves are still memoised for the cycle
+
+
+def test_the_field_memo_fetches_each_lead_once_under_concurrent_cycles():
+    import threading
+
+    from anemoi.training import real_inference_live as live
+
+    memo: dict = {}
+    fetched = []
+    gate = threading.Barrier(8)
+
+    def fetch(valid_time, lead):
+        fetched.append((valid_time, lead))
+        return object()
+
+    got = []
+
+    def cycle():
+        gate.wait()
+        got.append([live._memoised_lead(memo, T0, lead, fetch) for lead in (0, 6, 12)])
+
+    threads = [threading.Thread(target=cycle) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(fetched) == [(T0, 0), (T0, 6), (T0, 12)]
+    assert all(row == got[0] for row in got)  # every cycle got the same objects
+
+    # Another valid time evicts the old entries; an object already handed
+    # out stays with its caller.
+    kept = got[0][0]
+    live._memoised_lead(memo, T0 + timedelta(hours=6), 0, fetch)
+    assert list(memo) == [(T0 + timedelta(hours=6), 0)]
+    assert kept is got[0][0]
+
+
 def test_live_prior_is_none_when_a_lead_is_not_published_or_gfs_has_no_vortex(
     tmp_path, monkeypatch,
 ):
