@@ -2,9 +2,9 @@
 
 Nov 17, 2026
 
-**Status:** plan only. Nothing in the package, the images or CI has changed.
-The one thing done so far is a throwaway feasibility spike, described under
-[What the spike showed](#what-the-spike-showed).
+**Status:** phase 1 done (the build script exists and is opt-in); phases 2–6
+not started. Nothing in the package source, the images or CI has changed.
+The aim is **speed** (decided Nov 17), so phase 2's benchmark gate stands.
 
 ## Goal
 
@@ -110,19 +110,36 @@ Problems found, each with a known fix:
 
 Each phase is its own PR and leaves the default path untouched until phase 5.
 
-### Phase 1: build plumbing, off by default
+### Phase 1: build plumbing, off by default — done
 
-- [ ] Add `compile/setup.py` (setuptools + Cython, pinned) and
-      `.github/scripts/build-compiled-wheel.sh`. It reads `src/anemoi`,
-      writes a platform wheel to `dist-compiled/`, and touches nothing in
-      `src/`. `pyproject.toml`'s `[build-system]` stays hatchling, so
-      `uv sync`, editable installs and the existing wheel are unchanged.
-- [ ] Directives: `language_level=3`, `binding=True`,
+- [x] `compile/setup.py` (setuptools + Cython 3.3.1, pinned) and
+      `.github/scripts/build-compiled-wheel.sh`. The script copies
+      `src/anemoi` to a temp directory, builds there and writes a platform
+      wheel to `dist-compiled/`; `src/` is never written to.
+      `pyproject.toml`'s `[build-system]` stays hatchling, so `uv sync`,
+      editable installs and the existing wheel are unchanged.
+- [x] Directives: `language_level=3`, `binding=True`,
       `annotation_typing=False`, `always_allow_keywords=True`.
-- [ ] Keep `__init__.py` and `__main__.py` as `.py`; ship
-      `api/static/` as package data; a single exclude list in
-      `compile/setup.py` for modules that must stay interpreted.
-- [ ] `.gitignore` the generated `.c`, `.so` and `dist-compiled/`.
+- [x] `__init__.py` and `__main__.py` stay `.py`; `api/static/` ships as
+      package data; `KEEP_AS_SOURCE` in `compile/setup.py` is the one list
+      of modules that stay interpreted (empty so far).
+- [x] The wheel's name, version, dependencies, extras and entry points are
+      read from `pyproject.toml`, so it installs in place of the ordinary
+      one. The script fails if the wheel holds no compiled modules, holds
+      generated C, lacks the static files, or ships a module both ways.
+- [x] `dist-compiled/` is git-ignored (`*.so` already was).
+
+Found: a full build is 114 extension modules and 11 source modules, in
+3 min 20 s on 4 cores at the default optimisation level. Installed into a
+clean Python 3.13 venv with the `dev` and `api` extras, `anemoi --help`
+runs, the API registers its 14 routes, the MLflow header-provider entry
+point is discovered, and the suite gives the same result as the spike:
+1010 passed, 8 failed (the 4 that fail from source in this sandbox, plus
+the 4 source-reading tests in `test_sources.py`), 99 skipped for lack of
+torch.
+
+For phase 3: `docker/multistage.Dockerfile.dockerignore` will need
+`!compile/` and `!.github/scripts/build-compiled-wheel.sh`.
 
 ### Phase 2: prove it behaves the same
 
@@ -184,6 +201,23 @@ Only if phase 2's numbers justify it:
   C++ runtime, removing Python from the serving path altogether. This
   changes the train-serve consistency story and needs its own plan.
 
+## Time estimate
+
+Working time, assuming no surprises beyond those listed under risks.
+Phases 4 and 5 are mostly waiting on real deployments, not on work.
+
+| Phase | Work | Elapsed | Depends on |
+|---|---|---|---|
+| 1 Build plumbing | done | done | |
+| 2 Parity and benchmark | 1–2 days | 1–2 days | CI (or a machine) that can install torch; longer if `torch.compile` forces exclusions |
+| 3 Compiled images | about 1 day | 1–2 days | image builds in CI |
+| 4 Trial | under 1 day | about 1 week | a non-production Cloudflare environment; one scheduled training job to compare |
+| 5 Switch the default | half a day | 1–2 days | phase 4 clean |
+| 6 Hot loops / model export | open-ended | 1–2 weeks for typed hot loops; a month or more for C++ model serving | phase 2's profile |
+
+Phases 1–5: roughly 4–5 days of work over two to three weeks. Phase 6 is
+only worth starting if phase 2's numbers point at specific hot spots.
+
 ## Alternatives considered
 
 | Option | Why not first choice |
@@ -191,11 +225,3 @@ Only if phase 2's numbers justify it:
 | **Nuitka** (whole program to C, one binary) | Closest to "a C executable", but bundling torch, mlflow, eccodes and gcsfs into a standalone build is slow and fragile, and uvicorn's `module:app` import string and MLflow's entry-point plugin need special handling. Worth revisiting for the API alone if a single binary is wanted. |
 | **mypyc** | Needs strictly typed code and rejects much of what pydantic, FastAPI and dataclass-heavy modules do dynamically. More source changes, so more risk to current behaviour. |
 | **Hand-rewriting in C/C++** | Discards 33k lines of tested Python and the policy checks that are the point of this codebase. |
-
-## Open question
-
-What is the compiled build for: speed, keeping source out of the images, or
-a simpler deployment? The phases above assume speed. If it is source
-protection, phase 2's benchmark gate goes away and `.py` files are left out
-of the image; if it is a single deployable binary, Nuitka for the API moves
-up.

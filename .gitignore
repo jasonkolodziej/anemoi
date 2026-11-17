@@ -202,3 +202,6 @@ build-info.json
 graphify-out/*
 !graphify-out/graph.json
 !graphify-out/GRAPH_REPORT.md
+
+# Compiled (C extension) wheel: .github/scripts/build-compiled-wheel.sh
+dist-compiled/
