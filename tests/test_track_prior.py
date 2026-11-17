@@ -1,4 +1,4 @@
-"""AVNI's track as a prior the gridded models correct (training.track_prior)."""
+"""GFS's own track as a prior the gridded models correct (training.track_prior)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from anemoi.data.atcf import Adeck, AdeckPoint
+from anemoi.data import gfs_track as gt
 from anemoi.data.besttrack import Fix, Track, TrackQuality
 from anemoi.data.sources import Flavor
 from anemoi.geo import haversine_nm
@@ -18,13 +18,7 @@ from anemoi.models.base import DEFAULT_LEADS, NON_BUILD_ARCH_PARAMS, build_kwarg
 from anemoi.training import track_prior as tp
 
 T0 = datetime(2022, 9, 1, 12, tzinfo=UTC)
-
-
-def _adeck(storm_id: str, points: dict) -> Adeck:
-    return Adeck(
-        storm_id=storm_id, points=points, n_rows=len(points), n_skipped=0,
-        n_other_storm=0, n_basin_mismatch=0, conflicts={},
-    )
+AT = {lead: i for i, lead in enumerate(gt.TRACK_LEADS_H)}
 
 
 def _persistence() -> np.ndarray:
@@ -32,32 +26,51 @@ def _persistence() -> np.ndarray:
     return np.stack([10.0 * steps, 5.0 * steps, np.full(len(steps), 50.0)], axis=1)
 
 
-def test_prior_is_avni_displacement_with_persistence_where_avni_stops():
-    # AVNI 1 deg north at 12 h, 1 deg east at 24 h, nothing after.
-    points = {
-        ("AVNI", T0, 12): AdeckPoint(lat=21.0, lon=-60.0, max_wind_kt=55.0),
-        ("AVNI", T0, 24): AdeckPoint(lat=20.0, lon=-59.0, max_wind_kt=60.0),
-    }
-    prior = tp.prior_from_adeck(_adeck("AL012022", points), T0, 20.0, -60.0, _persistence())
+def _positions(until_h: int = 120, start=(21.0, -61.0), dlat_6h=0.5, dlon_6h=0.0) -> np.ndarray:
+    """A tracked storm moving steadily from ``start``, lost after ``until_h``."""
+    pos = np.full((len(gt.TRACK_LEADS_H), 2), np.nan)
+    for lead, i in AT.items():
+        if lead <= until_h:
+            pos[i] = [start[0] + dlat_6h * lead / 6, start[1] + dlon_6h * lead / 6]
+    return pos
+
+
+def test_prior_is_the_displacement_to_where_gfs_has_the_storm():
+    # GFS has the storm 1 deg north and west of the fix, moving 1 deg north
+    # per 12 h. The prior is not shifted to the fix: it points at GFS's
+    # positions, so the fix's own error stays out of every lead.
+    prior = tp.prior_from_track(_positions(), 20.0, -60.0, _persistence())
 
     assert prior.shape == (len(DEFAULT_LEADS), 3)
-    assert prior[0, 0] == pytest.approx(0.0, abs=1e-6)
-    assert prior[0, 1] == pytest.approx(haversine_nm(20.0, -60.0, 21.0, -60.0), rel=1e-6)
-    assert prior[1, 0] == pytest.approx(haversine_nm(20.0, -60.0, 20.0, -59.0), rel=1e-3)
-    assert abs(prior[1, 1]) < 1.0
-    np.testing.assert_allclose(prior[2:, :2], _persistence()[2:, :2])
+    for i, lead in enumerate(DEFAULT_LEADS):
+        lat, lon = 21.0 + lead / 12, -61.0
+        want = haversine_nm(20.0, -60.0, lat, lon)
+        assert np.hypot(*prior[i, :2]) == pytest.approx(want, rel=1e-6)
+        assert prior[i, 0] < 0  # west
     np.testing.assert_array_equal(prior[:, 2], 0.0)  # intensity stays the model's own
 
 
-def test_no_prior_without_avni_at_the_first_lead_or_the_cycle():
-    later = {("AVNI", T0, 24): AdeckPoint(lat=20.0, lon=-59.0, max_wind_kt=60.0)}
-    other_cycle = {("AVNI", T0 - timedelta(hours=6), 12): AdeckPoint(21.0, -60.0, 50.0)}
-    no_position = {("AVNI", T0, 12): AdeckPoint(lat=None, lon=None, max_wind_kt=50.0)}
-    for points in (later, other_cycle, no_position):
-        assert tp.prior_from_adeck(
-            _adeck("AL012022", points), T0, 20.0, -60.0, _persistence(),
-        ) is None
-    assert tp.prior_from_adeck(None, T0, 20.0, -60.0, _persistence()) is None
+def test_a_lead_gfs_has_lost_the_storm_by_falls_back_to_persistence():
+    prior = tp.prior_from_track(_positions(until_h=24), 20.0, -60.0, _persistence())
+    assert np.hypot(*prior[1, :2]) == pytest.approx(
+        haversine_nm(20.0, -60.0, 23.0, -61.0), rel=1e-6,
+    )
+    np.testing.assert_allclose(prior[2:, :2], _persistence()[2:, :2])
+
+
+def test_no_prior_without_a_position_at_the_cycle_or_the_first_lead():
+    lost_at_once = _positions(until_h=6)       # nothing at the first lead (12 h)
+    no_start = _positions()
+    no_start[AT[0]] = np.nan
+    for positions in (None, lost_at_once, no_start):
+        assert tp.prior_from_track(positions, 20.0, -60.0, _persistence()) is None
+
+
+def _cache(tmp_path, storm_id: str, t: datetime, positions: np.ndarray):
+    gt._write_meta(tmp_path, gt.gfs_track_meta())
+    gt.save_track(gt.track_path(tmp_path, storm_id, t), positions,
+                  gt.TrackTask(storm_id, t, 20.0, -60.0))
+    return tmp_path
 
 
 def _window(storm_id: str, t: datetime, y: np.ndarray):
@@ -89,36 +102,61 @@ def test_split_subtracts_the_prior_and_add_priors_restores_the_forecast():
     np.testing.assert_allclose(tp.add_priors(residual[0].y[None], kept, priors)[0], y)
 
 
-def test_the_prior_is_stage_b_only():
-    adecks = {"AL012022": _adeck("AL012022", {})}
-    assert tp.prior_stage_kwargs(SimpleNamespace(flavor=Flavor.ERA5_PRETRAIN), adecks) == {}
+def test_the_window_prior_reads_the_cache(tmp_path):
+    cache = _cache(tmp_path, "AL012022", T0, _positions())
+    y = np.zeros((len(DEFAULT_LEADS), 3))
+    fn = tp.window_prior_fn(cache)
+    sw = _window("AL012022", T0, y)
+    np.testing.assert_allclose(
+        fn(sw), tp.prior_from_track(_positions(), 20.0, -60.0, sw.persistence),
+    )
+    assert fn(_window("AL022022", T0, y)) is None  # no cached track: no prior
+
+
+def test_the_prior_is_stage_b_only(tmp_path):
+    assert tp.prior_stage_kwargs(SimpleNamespace(flavor=Flavor.ERA5_PRETRAIN), tmp_path) == {}
     assert tp.prior_stage_kwargs(SimpleNamespace(flavor=Flavor.GDAS_FINETUNE), None) == {}
-    assert "prior_fn" in tp.prior_stage_kwargs(SimpleNamespace(flavor=Flavor.GDAS_FINETUNE), adecks)
+    assert "prior_fn" in tp.prior_stage_kwargs(
+        SimpleNamespace(flavor=Flavor.GDAS_FINETUNE), tmp_path,
+    )
 
 
-def test_curriculum_adecks_needs_streaming_and_some_adeck(tmp_path):
-    tracks = [SimpleNamespace(storm_id="AL012022")]
-    assert tp.curriculum_adecks(None, tracks, streaming=True) is None
+def test_curriculum_prior_needs_streaming_and_a_cache_with_this_builds_settings(tmp_path):
+    assert tp.curriculum_prior(None, streaming=True) is None
     with pytest.raises(ValueError, match="streaming"):
-        tp.curriculum_adecks(tmp_path, tracks, streaming=False)
-    with pytest.raises(ValueError, match="no a-deck"):
-        tp.curriculum_adecks(tmp_path, tracks, streaming=True)
+        tp.curriculum_prior(tmp_path, streaming=False)
+    with pytest.raises(ValueError, match="no readable"):
+        tp.curriculum_prior(tmp_path, streaming=True)
+    gt._write_meta(tmp_path, gt.gfs_track_meta())
+    assert tp.curriculum_prior(tmp_path, streaming=True) == tmp_path
 
 
-def test_track_prior_is_not_a_builder_kwarg():
-    assert "track_prior" in NON_BUILD_ARCH_PARAMS
-    assert build_kwargs({"d_model": 16, "track_prior": "AVNI"}) == {"d_model": 16}
-    assert tp.prior_name({"track_prior": "AVNI"}) == "AVNI"
+def test_the_prior_keys_are_not_builder_kwargs():
+    recorded = tp.prior_arch_params()
+    assert set(recorded) <= NON_BUILD_ARCH_PARAMS
+    assert build_kwargs({"d_model": 16, **recorded}) == {"d_model": 16}
+    assert tp.prior_name(recorded) == tp.TRACK_PRIOR_NAME
     assert tp.prior_name({}) is None and tp.prior_name(None) is None
 
 
+def test_only_this_builds_gfs_track_prior_can_be_served():
+    assert tp.unservable_reason({"d_model": 16}) is None
+    assert tp.unservable_reason(tp.prior_arch_params()) is None
+    # The first version read AVNI from the a-decks (Decision Log 66).
+    assert "Decision Log 66" in tp.unservable_reason({"track_prior": "AVNI"})
+    other = {**tp.prior_arch_params()}
+    other[tp.TRACK_PRIOR_INPUTS] = {**gt.gfs_track_meta(), "smooth_cells": 9}
+    assert "other settings" in tp.unservable_reason(other)
+    assert "other settings" in tp.unservable_reason({"track_prior": tp.TRACK_PRIOR_NAME})
+
+
 @pytest.mark.torch
-def test_a_version_with_a_prior_is_described_and_loaded():
+def test_a_version_with_a_prior_is_described():
     pytest.importorskip("torch")
     from anemoi.models.architecture import describe
 
-    arch = describe("transformer", {"d_model": 16, "track_prior": "AVNI"})
-    assert arch.arch_params["track_prior"] == "AVNI"
+    arch = describe("transformer", {"d_model": 16, **tp.prior_arch_params()})
+    assert arch.arch_params["track_prior"] == tp.TRACK_PRIOR_NAME
 
 
 # --- serving --------------------------------------------------------------
@@ -133,24 +171,149 @@ def _track(storm_id: str = "AL012022") -> Track:
     return Track(storm_id=storm_id, fixes=fixes)
 
 
-def test_live_prior_matches_training_and_is_none_without_avni(tmp_path):
+def _fake_fields(centre_at):
+    """A field fetcher whose vortex is at ``centre_at(lead)``."""
+    from test_gfs_track import field_with
+
+    calls = []
+
+    def fetch(valid_time, lead):
+        calls.append(lead)
+        return field_with(centre_at(lead))
+
+    return fetch, calls
+
+
+def test_live_prior_is_the_training_prior_and_is_cached(tmp_path, monkeypatch):
+    from anemoi.training import real_inference_live as live
+
+    monkeypatch.setattr(live, "_TRACK_FIELD_MEMO", {})
+    track = _track()
+    current = track.fixes[-1]
+
+    def centre(lead):
+        return 20.3 + 0.4 * lead / 6, -60.2 - 0.3 * lead / 6
+    fetch, calls = _fake_fields(centre)
+
+    got = live.fetch_live_track_prior(track, current, tmp_path, field_fetcher=fetch)
+
+    # What training reads: the same tracker run into the cache.
+    cache = tmp_path / "train"
+    gt.run_gfs_track_cache(
+        [gt.TrackTask(track.storm_id, T0, current.lat, current.lon, 0.1, 0.0)], cache,
+        fetch=fetch, max_workers=1,
+    )
+    sw = _window(track.storm_id, T0, np.zeros((len(DEFAULT_LEADS), 3)))
+    sw = sw.__class__(storm_id=sw.storm_id, window=track.fixes[-2:], current=current,
+                      y=sw.y, mask=sw.mask)
+    np.testing.assert_allclose(got, tp.window_prior_fn(cache)(sw), atol=1e-6)
+    assert got[3, 1] > 150  # 48 h: about 3.2 deg north
+
+    n = len(calls)
+    again = live.fetch_live_track_prior(
+        track, current, tmp_path, field_fetcher=lambda *a: pytest.fail("refetched"),
+    )
+    np.testing.assert_allclose(again, got)
+    assert len(calls) == n
+
+
+def test_an_unwritable_cache_still_returns_the_track(tmp_path, monkeypatch):
+    from anemoi.data import gfs_track
+    from anemoi.training import real_inference_live as live
+
+    monkeypatch.setattr(live, "_TRACK_FIELD_MEMO", {})
+    fetch, _calls = _fake_fields(lambda lead: (20.0 + 0.4 * lead / 6, -60.0))
+
+    def full_disk(*a, **k):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(gfs_track, "save_track", full_disk)
+    track = _track()
+    pos = live.fetch_live_gfs_track(track, track.fixes[-1], tmp_path, field_fetcher=fetch)
+    assert pos is not None and np.isfinite(pos).all()
+
+
+def test_a_corrected_previous_fix_is_tracked_again_not_read_from_the_cache(
+    tmp_path, monkeypatch,
+):
+    from anemoi.training import real_inference_live as live
+
+    monkeypatch.setattr(live, "_TRACK_FIELD_MEMO", {})
+    fetch, calls = _fake_fields(lambda lead: (20.0 + 0.4 * lead / 6, -60.0))
+    track = _track()
+    current = track.fixes[-1]
+    live.fetch_live_gfs_track(track, current, tmp_path, field_fetcher=fetch)
+    n = len(calls)
+
+    # The same current fix, but the fix before it has been corrected: the
+    # motion that seeds the tracker is different, so the cached track isn't it.
+    fixes = list(track.fixes)
+    prev = fixes[-2]
+    fixes[-2] = Fix(prev.storm_id, prev.valid_time, prev.lat - 0.3, prev.lon, prev.max_wind_kt,
+                    prev.min_pressure_mb, quality=prev.quality)
+    corrected = Track(storm_id=track.storm_id, fixes=tuple(fixes))
+    live.fetch_live_gfs_track(corrected, current, tmp_path, field_fetcher=fetch)
+    assert len(list(tmp_path.rglob("*.npz"))) == 2
+    assert len(calls) == n  # the fields themselves are still memoised for the cycle
+
+
+def test_the_field_memo_fetches_each_lead_once_under_concurrent_cycles():
+    import threading
+
+    from anemoi.training import real_inference_live as live
+
+    memo: dict = {}
+    fetched = []
+    gate = threading.Barrier(8)
+
+    def fetch(valid_time, lead):
+        fetched.append((valid_time, lead))
+        return object()
+
+    got = []
+
+    def cycle():
+        gate.wait()
+        got.append([live._memoised_lead(memo, T0, lead, fetch) for lead in (0, 6, 12)])
+
+    threads = [threading.Thread(target=cycle) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(fetched) == [(T0, 0), (T0, 6), (T0, 12)]
+    assert all(row == got[0] for row in got)  # every cycle got the same objects
+
+    # Another valid time evicts the old entries; an object already handed
+    # out stays with its caller.
+    kept = got[0][0]
+    live._memoised_lead(memo, T0 + timedelta(hours=6), 0, fetch)
+    assert list(memo) == [(T0 + timedelta(hours=6), 0)]
+    assert kept is got[0][0]
+
+
+def test_live_prior_is_none_when_a_lead_is_not_published_or_gfs_has_no_vortex(
+    tmp_path, monkeypatch,
+):
+    from test_gfs_track import field_with
+
     from anemoi.training import real_inference_live as live
 
     track = _track()
     current = track.fixes[-1]
-    points = {("AVNI", T0, lead): AdeckPoint(20.0 + lead / 12, -60.0, 50.0)
-              for lead in DEFAULT_LEADS}
-    adeck = _adeck(track.storm_id, points)
 
-    got = live.fetch_live_track_prior(track, current, tmp_path, adeck_fetcher=lambda s: adeck)
-    sw = _window(track.storm_id, T0, np.zeros((len(DEFAULT_LEADS), 3)))
-    sw = sw.__class__(storm_id=sw.storm_id, window=track.fixes[-2:], current=current,
-                      y=sw.y, mask=sw.mask)
-    want = tp.window_prior_fn({track.storm_id: adeck})(sw)
-    np.testing.assert_allclose(got, want)
+    def unpublished(valid_time, lead):
+        if lead >= 60:
+            raise OSError("404")
+        return field_with((20.0, -60.0))
 
+    monkeypatch.setattr(live, "_TRACK_FIELD_MEMO", {})
+    assert live.fetch_live_track_prior(track, current, tmp_path, field_fetcher=unpublished) is None
+    assert not list(tmp_path.rglob("*.npz"))  # nothing cached: the next cycle retries
+
+    monkeypatch.setattr(live, "_TRACK_FIELD_MEMO", {})
     assert live.fetch_live_track_prior(
-        track, current, tmp_path, adeck_fetcher=lambda s: None,
+        track, current, tmp_path / "b", field_fetcher=lambda t, lead: field_with(),
     ) is None
 
 
@@ -173,14 +336,44 @@ def test_serving_gate_only_applies_to_a_version_trained_with_a_prior(tmp_path):
         None, None,
     )
     assert not called
-    prior, reason = _live_prior_for(
-        _version({"track_prior": "AVNI"}), track, current, tmp_path, fetcher,
-    )
+    ok = _version(tp.prior_arch_params())
+    prior, reason = _live_prior_for(ok, track, current, tmp_path, fetcher)
     assert reason is None and prior.shape == (len(DEFAULT_LEADS), 3)
+    prior, reason = _live_prior_for(ok, track, current, tmp_path, lambda *a: None)
+    assert prior is None and "published" in reason
+
+
+def test_a_version_trained_on_the_adecks_is_never_served(tmp_path):
+    from anemoi.training.real_inference_cycle import _live_prior_for
+
+    track = _track()
+    called = []
     prior, reason = _live_prior_for(
-        _version({"track_prior": "AVNI"}), track, current, tmp_path, lambda *a: None,
+        _version({"track_prior": "AVNI"}), track, track.fixes[-1], tmp_path,
+        lambda *a: called.append(1),
     )
-    assert prior is None and "AVNI" in reason
+    assert prior is None and "Decision Log 66" in reason
+    assert not called  # refused before anything is fetched
+
+
+def test_one_prior_fetch_is_shared_by_every_model_in_a_forecast(tmp_path):
+    from anemoi.training.real_inference_cycle import _live_prior_for, shared_prior
+
+    track = _track()
+    current = track.fixes[-1]
+    calls = []
+
+    def fetch(*a):
+        calls.append(1)
+        return None  # e.g. not published: cached too, not retried per model
+
+    once = shared_prior(fetch)
+    for _ in ("cnn", "transformer", "gnn"):
+        prior, reason = _live_prior_for(
+            _version(tp.prior_arch_params()), track, current, tmp_path, once,
+        )
+        assert prior is None and reason
+    assert len(calls) == 1
 
 
 @pytest.mark.torch
@@ -210,61 +403,86 @@ def test_served_forecast_is_the_prior_plus_the_correction():
     np.testing.assert_allclose(shifted[:, 1], current.lon, atol=1e-6)
 
 
+# --- latents ---------------------------------------------------------------
+
+
+def test_latents_refuse_an_adeck_prior_and_need_the_cache(monkeypatch, tmp_path):
+    from anemoi.training.real_latents import GFS_TRACK_DIR_ENV, _prior_source
+
+    def artifacts(arch):
+        return {"gnn": SimpleNamespace(arch_params=arch)}
+
+    assert _prior_source(artifacts({"hidden": 8})) == (None, frozenset())
+    with pytest.raises(ValueError, match="Decision Log 66"):
+        _prior_source(artifacts({"track_prior": "AVNI"}))
+    monkeypatch.delenv(GFS_TRACK_DIR_ENV, raising=False)
+    with pytest.raises(ValueError, match=GFS_TRACK_DIR_ENV):
+        _prior_source(artifacts(tp.prior_arch_params()))
+    monkeypatch.setenv(GFS_TRACK_DIR_ENV, str(tmp_path))
+    with pytest.raises(ValueError, match="no readable"):
+        _prior_source(artifacts(tp.prior_arch_params()))
+    gt._write_meta(tmp_path, gt.gfs_track_meta())
+    fn, readers = _prior_source(artifacts(tp.prior_arch_params()))
+    assert readers == {"gnn"} and callable(fn)
+
+
 # --- training end to end ---------------------------------------------------
 
 
-def _avni_from_truth(track: Track, rng, noise_deg: float) -> Adeck:
-    """An AVNI that is the storm's own future track plus noise: a prior
-    the model only has to correct a little."""
+def _cache_truth(cache, track: Track, rng, noise_deg: float) -> None:
+    """A GFS track that is the storm's own future track plus noise: a
+    prior the model only has to correct a little."""
     by_time = {f.valid_time: f for f in track.fixes}
-    points = {}
     for fix in track.fixes:
-        for lead in DEFAULT_LEADS:
+        pos = np.full((len(gt.TRACK_LEADS_H), 2), np.nan)
+        for lead, i in AT.items():
             future = by_time.get(fix.valid_time + timedelta(hours=lead))
-            if future is None:
-                continue
-            points[("AVNI", fix.valid_time, lead)] = AdeckPoint(
-                lat=future.lat + float(rng.normal(0, noise_deg)),
-                lon=future.lon + float(rng.normal(0, noise_deg)),
-                max_wind_kt=future.max_wind_kt,
-            )
-    return _adeck(track.storm_id, points)
+            if future is not None:
+                pos[i] = [future.lat + rng.normal(0, noise_deg),
+                          future.lon + rng.normal(0, noise_deg)]
+        gt.save_track(gt.track_path(cache, track.storm_id, fix.valid_time), pos,
+                      gt.TrackTask(track.storm_id, fix.valid_time, fix.lat, fix.lon))
 
 
 @pytest.mark.torch
-def test_curriculum_with_a_prior_scores_prior_plus_correction(tmp_path, monkeypatch):
+def test_curriculum_with_a_prior_scores_prior_plus_correction(tmp_path):
     pytest.importorskip("torch")
     from test_steering_input import _curriculum_tracks, _FakeS3Client, cache_all_fixes
 
     from anemoi.tracking.checkpoint_store import CheckpointStore, S3Config
     from anemoi.training.real_run_transformer import run_transformer_curriculum
 
-    era5, gdas = tmp_path / "era5", tmp_path / "gdas"
+    era5, gdas, cache = tmp_path / "era5", tmp_path / "gdas", tmp_path / "gfs_track"
     tracks = _curriculum_tracks()
+    rng = np.random.default_rng(0)
+    gt._write_meta(cache, gt.gfs_track_meta())
     for t in tracks:
         cache_all_fixes(era5, t, Flavor.ERA5_PRETRAIN)
         cache_all_fixes(gdas, t, Flavor.GDAS_FINETUNE)
-    rng = np.random.default_rng(0)
-    adecks = {t.storm_id: _avni_from_truth(t, rng, 0.05) for t in tracks}
-    monkeypatch.setattr(tp, "load_adecks", lambda d, ids: {s: adecks[s] for s in ids})
+        _cache_truth(cache, t, rng, 0.05)
 
-    def run(adeck_dir):
+    def run(gfs_track_dir):
         store = CheckpointStore(S3Config(
             endpoint_url="https://example.r2.cloudflarestorage.com", bucket="anemoi-test",
             access_key_id="key", secret_access_key="secret"), client=_FakeS3Client())
         return run_transformer_curriculum(
             tracks, store, era5, gdas, seed=42, n_augment=1, d_model=16, dropout=0.0,
-            streaming=True, batch_size=4, adeck_dir=adeck_dir,
+            streaming=True, batch_size=4, gfs_track_dir=gfs_track_dir,
             curriculum_kwargs={"a": {"epochs": 1}, "b": {"epochs": 1}},
         )
 
     _r, plain, plain_artifacts = run(None)
-    _r, with_prior, artifacts = run(tmp_path)
+    _r, with_prior, artifacts = run(cache)
 
     assert "track_prior" not in plain_artifacts.arch_params
-    assert artifacts.arch_params["track_prior"] == "AVNI"
-    # One epoch learns little; the near-perfect prior is what's scored.
-    assert with_prior.values["track_error_24h_nm"] < 0.5 * plain.values["track_error_24h_nm"]
+    assert artifacts.arch_params["track_prior"] == tp.TRACK_PRIOR_NAME
+    assert artifacts.arch_params[tp.TRACK_PRIOR_INPUTS] == gt.gfs_track_meta()
+    assert tp.unservable_reason(artifacts.arch_params) is None
+    # One epoch learns little, so what's scored is the prior: the true
+    # track shifted to the emulated working fix, whose noise (about 13 nm)
+    # is then the error at every lead, instead of one that grows with lead.
+    assert with_prior.values["track_error_72h_nm"] < plain.values["track_error_72h_nm"]
+    assert with_prior.values["track_error_72h_nm"] < 30.0
 
 
 # --- CLI ---------------------------------------------------------------------
@@ -278,44 +496,6 @@ def test_cli_train_refuses_the_prior_for_lstm_and_pinn(tmp_path):
             model=model, hurdat2="unused.txt", seed=1, n_augment=1, hidden_dim=8,
             era5_cache_dir=str(tmp_path), gdas_cache_dir=str(tmp_path),
             registry_root=str(tmp_path / "registry"), streaming=True, batch_size=None,
-            num_workers=0, adeck_dir=str(tmp_path),
+            num_workers=0, gfs_track_dir=str(tmp_path),
         )
         assert cli.cmd_train(args) == 1
-
-
-def test_one_prior_fetch_is_shared_by_every_model_in_a_forecast(tmp_path):
-    from anemoi.training.real_inference_cycle import _live_prior_for, shared_prior
-
-    track = _track()
-    current = track.fixes[-1]
-    calls = []
-
-    def fetch(*a):
-        calls.append(1)
-        return None  # e.g. NHC unreachable: cached too, not retried per model
-
-    once = shared_prior(fetch)
-    for _ in ("cnn", "transformer", "gnn"):
-        prior, reason = _live_prior_for(
-            _version({"track_prior": "AVNI"}), track, current, tmp_path, once,
-        )
-        assert prior is None and reason
-    assert len(calls) == 1
-
-
-def test_live_adeck_text_is_capped_while_decompressing(monkeypatch):
-    import gzip
-
-    from anemoi.data import adeck_source
-    from anemoi.training import real_inference_live as live
-
-    monkeypatch.setattr(adeck_source, "MAX_ADECK_TEXT_BYTES", 100)
-    body = gzip.compress(b"x" * 10_000)
-    monkeypatch.setattr(adeck_source, "_get", lambda url: body)
-    assert live.fetch_live_adeck("AL012022") is None
-
-    line = (b"AL, 01, 2022090112, 03, AVNI,  12, 210N,  600W,  50,\n")
-    monkeypatch.setattr(adeck_source, "MAX_ADECK_TEXT_BYTES", 10_000)
-    monkeypatch.setattr(adeck_source, "_get", lambda url: gzip.compress(line))
-    adeck = live.fetch_live_adeck("AL012022")
-    assert adeck is not None and adeck.get("AVNI", T0, 12).lat == pytest.approx(21.0)

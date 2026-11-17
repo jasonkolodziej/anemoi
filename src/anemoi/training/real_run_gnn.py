@@ -74,10 +74,10 @@ from .steering_input import (
     with_constant_columns,
 )
 from .track_prior import (
-    TRACK_PRIOR_TECHNIQUE,
     PriorFn,
     add_priors,
-    curriculum_adecks,
+    curriculum_prior,
+    prior_arch_params,
     prior_stage_kwargs,
     split_by_prior,
 )
@@ -620,7 +620,7 @@ def run_gnn_curriculum(
     num_workers: int = 0,
     basins: Sequence[str] | None = None,
     steering_cache_dir: Path | str | None = None,
-    adeck_dir: Path | str | None = None,
+    gfs_track_dir: Path | str | None = None,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the GNN baseline
     against real cached GriddedFields, treated as a lattice mesh (see
@@ -648,7 +648,7 @@ def run_gnn_curriculum(
     basins = DEFAULT_BASIN_INPUTS if basins is None else tuple(basins)
     node_features = NODE_FEATURES + len(basins)
     n_steering = steering_n(steering_cache_dir, streaming=streaming)
-    adecks = curriculum_adecks(adeck_dir, tracks, streaming=streaming)
+    prior_dir = curriculum_prior(gfs_track_dir, streaming=streaming)
     rng = np.random.default_rng(seed)
     curriculum = Curriculum.standard("gnn", **(curriculum_kwargs or {}))
     run = CurriculumRun(curriculum=curriculum)
@@ -671,7 +671,7 @@ def run_gnn_curriculum(
         stage_fn = train_gnn_stage_streaming if streaming else train_gnn_stage
         stage_kwargs = {"batch_size": batch_size, "num_workers": num_workers} if streaming else {}
         stage_kwargs.update(steering_stage_kwargs("gnn", stage, steering_cache_dir, n_steering))
-        stage_kwargs.update(prior_stage_kwargs(stage, adecks))
+        stage_kwargs.update(prior_stage_kwargs(stage, prior_dir))
         model, train_loss, val_loss, val_metrics, stats = stage_fn(
             model, stage, train_tracks, val_tracks, cache_dir, rng,
             n_augment=n_augment, basins=basins, **stage_kwargs,
@@ -704,8 +704,8 @@ def run_gnn_curriculum(
     }
     if n_steering:
         arch_params["n_steering"] = n_steering
-    if adecks is not None:
-        arch_params["track_prior"] = TRACK_PRIOR_TECHNIQUE
+    if prior_dir is not None:
+        arch_params.update(prior_arch_params())
     artifacts = RunArtifacts(
         model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
         arch_params=arch_params, basins=basins,

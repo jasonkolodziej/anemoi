@@ -124,8 +124,43 @@ This phase answers one question fast: is the 231 nm error a missing-input proble
 
     Sample C agrees (GNN 48 h +6 [−1, 14]). East Pacific B 24–48 h: GNN −2 and −3 nm, intervals spanning zero.
   - **Read it as:** with AVNI as the prior, the GNN is the first ML forecast whose 48 h difference from AVNI is inconclusive rather than worse: its interval spans zero on both B and C, so by Decision Log 66's rule this season doesn't decide (it doesn't show the two are equal). On sample C, the one comparable with the 70 nm gate (wiki Verification Metrics), GNN v10 is 59.1 nm against AVNI's 52.7, so the gate is met by AVNI too. The CNN and Transformer are worse than AVNI at 48 h, and all three corrections add error that grows with lead: at 72–120 h they subtract value. Next: shrink the corrections (regularise the correction toward zero, or learn a per-lead weight on it), measured on held-out 2025 rather than the validation year it would be tuned on; and the live question before any staging, how often AVNI is written after a cycle runs (a prior version skips that cycle).
+  - **Caveat, found after (2026-11-17): this version broke Decision Log 66 and can't be served.** It read AVNI from NHC's a-decks, which are written after the cycle and are verification only. Our cycle is complete at t+1:40 and NHC's early guidance feeds its t+3 advisory, so a live cycle may not have the row the model was trained on. The numbers above show what a GFS track prior is worth; they are not a forecast Anemoi could issue. The six versions (CNN v11–v12, Transformer v11–v12, GNN v10–v11) stay unstaged, and serving, latents and `registry-reconcile` now refuse them.
   - **Shrinking the corrections can't close the gap (2026-11-17).** Forecast = AVNI + w × (model − AVNI), one weight per model and lead, fitted on 2024 by grid search (`docs/backtests/2026-11-17-avni-prior-shrinkage-weights.json`). The fitted weights are 0.25–0.40 at 12–36 h, 0.15–0.30 at 48 h and 0 from 72 h on (GNN: 0.1 at 72 h): the corrections are worth about a third of themselves at short leads and nothing later. Scored on the same 2024 cases the weights were fitted on (in-sample, so the gain is optimistic in expectation; `docs/backtests/2026-11-17-homogeneous-baseline-val2024-avni-prior-shrunk.json`), the best is under 1 nm better than AVNI at Atlantic 24–48 h (GNN B 48 h −0.5 [−3.0, 1.7]; CNN B 24 h −0.8 [−1.7, −0.0]), and C is level or worse. 2025 is unmeasured: frozen weights could do better or worse on another season, and only `--split test` (#259) on the held-out storms would say. It wasn't run, because even the fitted 2024 gain is too small to matter (under 1 nm, against AVNI's 7–9 nm 48 h gap to EMXI and OFCL on the same Atlantic B cases), so a 2025 look would spend test-set budget on a result that changes nothing.
   - **Read it as:** the Group 1 models carry almost no track information AVNI doesn't already have. Beating AVNI needs information it lacks, and the a-decks show where it is: ECMWF's interpolated track (EMXI/EMX2) beats AVNI on the same Atlantic B cases (48 h 58.8 against 65.9 nm, 120 h 250 against 293), and NHC's official forecast, built on consensus, beats both (56.8 at 48 h). The next lever is a learned consensus of the interpolated guidance available at the cycle (AVNI, EMXI/EMX2, and other early models), with the Group 1 models as extra members, scored against TVCN and HCCA as well as AVNI.
+
+- **Step 4, the same prior from Anemoi's own GFS track (2026-11-17): built, the track ties AVNI, and the versions trained on it forecast at AVNI's level; inside the Atlantic 48 h gate on 2024, not on held-out 2025.** `data.gfs_track` follows the storm through the t−6 GFS run's own fields (the 850 hPa vorticity maximum and the sea-level-pressure minimum, every 6 h from f006 to f126), computed the same way in training (`anemoi gfs-track-cache`) and serving, so the prior is an input a live cycle has. `training.track_prior` reads it in place of the a-decks.
+  - **Tracker checked on all 2024 validation cases** (`docs/backtests/2026-11-17-homogeneous-baseline-val2024-gfs-track.json`, 802 cycles, none without a vortex). As member `GFST`, Atlantic 48 h: sample B 67.5 nm against AVNO-6 (NHC's tracker on the same run) 67.1 and AVNI 65.9; sample C 53.9 against 53.7 and 52.7. GFST minus AVNI: B +1.6 nm [−1.6, 6.2], C +1.2 [−1.7, 4.4]. At 120 h on C, GFST is 139.9 nm against AVNI's 145.3.
+  - **The prior is the track unshifted.** NHC shifts AVNO-6 to start at the cycle's fix to make AVNI. Shifted to the emulated working fix (13 nm from the best track, against NHC's 5), the same track scores 2–3.5 nm worse from 24 to 120 h (C, 48 h: 56.5 nm); shifted to the best-track fix, 53.0. The shift's only gain is at 12 h, so the prior uses GFS's own positions and the fix's error stays out of it.
+  - **Training seeds the cache from the best-track fix, serving from the working fix.** On 40 real cycles with 400 seeds perturbed like the emulator's fixes, 99% of tracks were identical and none differed at 48 h.
+  - **Trained on it (2026-11-17), from the branch image `457ab7898df7`, `--register-only`, nothing staged:** GNN v12, CNN v13, Transformer v13; every validation window has a prior (352 of 352 Atlantic). Paired test on 2024 (`docs/backtests/2026-11-17-homogeneous-baseline-val2024-gfs-track-prior.json`; fusion is v14, built on the old Group 1, so its row is not a measure of this step).
+    | Atlantic track, sample C (nm) | 24 h | 48 h | 72 h | 120 h |
+    |---|---|---|---|---|
+    | cases / storms | 251 / 16 | 190 / 15 | 135 / 11 | 63 / 6 |
+    | gate | | ≤ 70 | ≤ 150 | ≤ 250 |
+    | OFCL | 27.1 | 44.2 | 67.8 | 117.3 |
+    | AVNI | 31.4 | 52.7 | 79.0 | 145.3 |
+    | GFST (the prior alone) | 35.1 | 53.9 | 77.2 | 139.9 |
+    | GNN v12 | 35.4 | **61.5** | 105.0 | 222.5 |
+    | CNN v13 | 40.4 | 68.2 | 97.1 | 200.7 |
+    | Transformer v13 | 41.2 | 70.0 | 107.3 | 202.4 |
+
+    Paired, Atlantic 48 h, model minus GFST: GNN B +5.4 [−2.2, 12.6], C +7.6 [−0.9, 15.9]; CNN C +14.3 [6.8, 21.5]; Transformer C +16.1 [5.3, 24.9]. Minus AVNI: GNN C +8.9 [−0.0, 19.0]. At 72 h every model is worse than GFST with an interval excluding zero (GNN C +27.8 [18.0, 37.7]). East Pacific 48 h: all three within ±5 nm of GFST and AVNI, intervals spanning zero.
+  - **Read it as:** GNN v12 is the first servable Anemoi version inside all three Atlantic track gates on sample C (61.5, 105.0 and 222.5 nm; 120 h is 6 storms, a description rather than a sample), and far ahead of the served GNN v8. The gates are met by the prior, though, not by the learning: GFST alone scores 53.9 / 77.2 / 139.9 nm, and the models' corrections add error that grows with lead, as they did on AVNI (Step 3). Intensity is unchanged by this step (Atlantic C 48 h 23.5–25.4 kt against the 15 kt gate).
+  - **The 2025 look (2026-11-17, test-set budget 1 of 4 this season; `docs/backtests/2026-11-17-homogeneous-baseline-test2025-gfs-track-prior.json`).** The cache, export and scoring ran on the GPU job (866 cycles, none without a vortex; 668 of 668 windows forecast).
+    | Atlantic track, 2025 sample C (nm) | 24 h | 48 h | 72 h | 120 h |
+    |---|---|---|---|---|
+    | cases / storms | 162 / 10 | 124 / 9 | 92 / 6 | 52 / 4 |
+    | gate | | ≤ 70 | ≤ 150 | ≤ 250 |
+    | OFCL | 31.3 | 50.1 | 78.5 | 174.9 |
+    | AVNI | 46.8 | 80.6 | 121.4 | 363.6 |
+    | GFST (the prior alone) | 54.2 | 85.3 | 123.4 | 370.2 |
+    | GNN v12 | 51.6 | 80.9 | 117.1 | 346.0 |
+    | CNN v13 | 55.0 | 89.7 | 133.4 | 388.4 |
+    | Transformer v13 | 51.1 | 78.3 | 100.8 | 332.3 |
+
+    Paired at 48 h, model minus AVNI: GNN C +0.3 [−7.6, 9.6], B −0.1 [−8.1, 7.5]; Transformer C −2.3 [−12.9, 13.9]; CNN C +9.0 [−8.7, 27.5]. Minus GFST, GNN C −4.4 [−12.0, 8.3]. East Pacific C 48 h: models 55–57 nm against AVNI 48.6 and GFST 53.2 (GNN minus AVNI +8.5 [0.6, 19.6]).
+  - **Read it as:** on the held-out season the 2024 gate result does not hold. 2025 was a hard Atlantic year for GFS: AVNI is 80.6 nm at 48 h on sample C and GFST 85.3, so a model that tracks GFS's skill misses the 70 nm gate with it. No model is inside it (Transformer 78.3, GNN 80.9). The 72 h gate is met by GNN and Transformer (6 storms, a description), and 120 h is missed by every member except OFCL. Against AVNI, every Atlantic 48 h interval spans zero: the GFS-track-prior versions forecast at AVNI's level, unlike every earlier Anemoi version (the served fusion v14 is +94 nm behind AVNI on 2024 B). The corrections no longer clearly add error on 2025 (GNN and Transformer are a little better than GFST, intervals spanning zero), but nothing shows they add skill either. Reaching 70 nm needs track information GFS doesn't have (Step 3's reading: ECMWF and the consensus beat it).
+  - **Staging** GNN v12 (and Transformer v13) would replace versions 100+ nm behind AVNI with ones level with it, and needs a fusion retrain on the new Group 1 first. It is the user's decision; the gate is not met by it.
 
 ## Phase 2: Ocean inputs (runs alongside Phase 1)
 
@@ -262,6 +297,19 @@ The cloud session stopped here on 2026-11-13; PR #243 carries a comment with the
 
 Newest first. Each entry names the commit or PR that carries the work.
 
+- **2026-11-17.** The 2025 look (#262, budget 1 of 4): no version inside
+  the 70 nm gate on held-out Atlantic C (GNN v12 80.9 nm, Transformer v13
+  78.3), because GFS itself misses it (AVNI 80.6, GFST 85.3). The versions
+  are level with AVNI, every 48 h interval spanning zero.
+- **2026-11-17.** GNN v12, CNN v13 and Transformer v13 trained on the GFS
+  track prior (#262, `--register-only`). On 2024 Atlantic sample C at 48 h,
+  GNN v12 scores 61.5 nm, inside the 70 nm gate, against the prior alone's
+  53.9: the gate is met by the prior, and the corrections add error.
+- **2026-11-17.** The AVNI-prior versions read the a-decks, against
+  Decision Log 66: marked unservable and refused in code. The prior is
+  rebuilt on Anemoi's own tracker of the t−6 GFS run (`data.gfs_track`).
+  On all 2024 cases it ties AVNI at Atlantic 48 h (C: +1.2 nm [−1.7, 4.4];
+  53.9 nm against the 70 nm gate). Retrain next.
 - **2026-11-17.** Per-lead shrinkage of the AVNI-prior corrections:
   fitted weights 0.25–0.40 to 36 h, 0 from 72 h; on the fitting season,
   under 1 nm better than AVNI (2025 unmeasured). Next lever: a learned consensus of the early

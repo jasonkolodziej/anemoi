@@ -29,8 +29,9 @@ treat ``None`` as "this model can't contribute to this cycle," the same
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -79,58 +80,91 @@ def gdas_likely_unpublished(
 
 
 PriorFetcher = Callable[["Track", "Fix", "Path | str"], "np.ndarray | None"]
-AdeckFetcher = Callable[[str], "object | None"]
+
+#: The tracker's fields for the last valid time fetched, by lead, shared by
+#: every storm in that cycle (each is a global grid), as `_FLOW_MEMO`.
+_TRACK_FIELD_MEMO: dict[tuple[datetime, int], object] = {}
 
 
-def fetch_live_adeck(storm_id: str):
-    """The storm's a-deck as NHC publishes it now (``aid_public`` for the
-    season in progress, then the archive), AVNI rows only, or None when
-    neither has it or it can't be read."""
-    import gzip
-    import io
+def live_gfs_track_path(
+    cache_dir: Path | str, storm_id: str, current: Fix, dlat_6h: float = 0.0, dlon_6h: float = 0.0,
+) -> Path:
+    """Where a live cycle's tracked positions are kept: by storm, time,
+    position and the 6 h motion that seeded the tracker (a corrected
+    previous fix is a different track), under a directory named by this
+    build's tracker settings, as `live_steering_path` keeps the steering
+    features."""
+    from ..data.gfs_track import gfs_track_meta_digest
 
-    from ..data.adeck_source import MAX_ADECK_TEXT_BYTES, _get, adeck_urls
-    from ..data.atcf import parse_adeck
-    from ..data.atcf_archive import NotPublished
-    from .track_prior import TRACK_PRIOR_TECHNIQUE
+    name = (
+        f"{current.valid_time:%Y%m%d%H}_{current.lat:+.2f}_{current.lon:+.2f}"
+        f"_{dlat_6h:+.2f}_{dlon_6h:+.2f}.npz"
+    )
+    return Path(cache_dir) / "live_gfs_track" / gfs_track_meta_digest() / storm_id / name
 
-    archive_url, current_url = adeck_urls(storm_id)
-    for url in (current_url, archive_url):
+
+def fetch_live_gfs_track(
+    track: Track, current: Fix, cache_dir: Path | str, *, field_fetcher=None,
+) -> np.ndarray | None:
+    """The storm's positions in the t-6 GFS run (`data.gfs_track`), tracked
+    from ``current`` exactly as ``anemoi gfs-track-cache`` tracks them for
+    training, or None when a lead can't be fetched (not published yet):
+    there is no stale fallback, so a model that corrects this track skips
+    the cycle. Cached under ``cache_dir/live_gfs_track``."""
+    from ..data.gdas_cache import GDAS_ARCHIVE_START
+    from ..data.gfs_track import (
+        TRACK_LEADS_H,
+        TrackTask,
+        fetch_lead_field,
+        load_track,
+        save_track,
+        track_many,
+    )
+
+    if current.valid_time < GDAS_ARCHIVE_START:
+        return None
+    window = _current_window(track, current, 2)
+    dlat = dlon = 0.0
+    if window is not None and window[-1].valid_time - window[-2].valid_time == timedelta(hours=6):
+        dlat, dlon = window[-1].lat - window[-2].lat, window[-1].lon - window[-2].lon
+    path = live_gfs_track_path(cache_dir, track.storm_id, current, dlat, dlon)
+    if path.exists():
         try:
-            body = _get(url)
-        except NotPublished:
-            continue
-        except Exception:  # noqa: BLE001 - unreachable now: the model skips this cycle
-            return None
-        try:
-            # Read at most the cap from the stream: decompressing first would
-            # let a small download expand without bound before any check.
-            with gzip.GzipFile(fileobj=io.BytesIO(body)) as fh:
-                text = fh.read(MAX_ADECK_TEXT_BYTES + 1)
-            if len(text) > MAX_ADECK_TEXT_BYTES:
-                return None
-            return parse_adeck(
-                text.decode("ascii", errors="replace"), storm_id, [TRACK_PRIOR_TECHNIQUE],
-            )
-        except Exception:  # noqa: BLE001 - a malformed file is treated as absent
-            return None
-    return None
+            return load_track(path)
+        except Exception:  # noqa: BLE001 - a corrupt or outdated entry is recomputed
+            pass
+    task = TrackTask(track.storm_id, current.valid_time, current.lat, current.lon, dlat, dlon)
+    fetcher = field_fetcher or fetch_lead_field
+
+    def fields():
+        for lead in TRACK_LEADS_H:
+            yield _memoised_lead(_TRACK_FIELD_MEMO, current.valid_time, lead, fetcher)
+
+    try:
+        positions = track_many(fields(), [task])[0]
+    except Exception:  # noqa: BLE001 - not published (yet): skip the model this cycle
+        return None
+    # float32, as stored: the same positions on every later read
+    positions = positions.astype(np.float32).astype(np.float64)
+    try:
+        save_track(path, positions, task)
+    except OSError:
+        pass  # an unwritable cache only costs a recomputation next time
+    return positions
 
 
 def fetch_live_track_prior(
-    track: Track, current: Fix, cache_dir: Path | str,
-    *, adeck_fetcher: AdeckFetcher | None = None,
+    track: Track, current: Fix, cache_dir: Path | str, *, field_fetcher=None,
 ) -> np.ndarray | None:
-    """AVNI's track as the prior a version trained with one corrects
+    """GFS's own track as the prior a version trained with one corrects
     (`training.track_prior`): ``(n_leads, 3)`` displacements from
-    ``current``, built exactly as training builds them, or None when the
-    cycle has no AVNI row yet (NHC writes it after the cycle's own
-    position; the model then skips the cycle, as training never saw a
-    window without one). ``cache_dir`` is unused: the a-deck changes every
-    cycle, so it is read fresh."""
+    ``current``, built exactly as training builds them from the cache, or
+    None when the t-6 run's fields aren't all published yet or GFS has no
+    vortex at the storm (the model then skips the cycle, as training never
+    saw a window without a prior)."""
     from ..data.storm_relative import displacement_nm
     from .real_run import LEAD_STEPS
-    from .track_prior import prior_from_adeck
+    from .track_prior import prior_from_track
 
     window = _current_window(track, current, 2)
     if window is None:
@@ -140,8 +174,8 @@ def fetch_live_track_prior(
     persistence = np.stack(
         [dx * steps, dy * steps, np.full(len(steps), current.max_wind_kt)], axis=1,
     )
-    adeck = (adeck_fetcher or fetch_live_adeck)(track.storm_id)
-    return prior_from_adeck(adeck, current.valid_time, current.lat, current.lon, persistence)
+    positions = fetch_live_gfs_track(track, current, cache_dir, field_fetcher=field_fetcher)
+    return prior_from_track(positions, current.lat, current.lon, persistence)
 
 
 def _current_window(track: Track, current: Fix, length: int) -> tuple[Fix, ...] | None:
@@ -278,6 +312,24 @@ SteeringFetcher = Callable[["Track", "Fix", "Path | str"], "np.ndarray | None"]
 #: The flows of the last valid time fetched, shared by every storm in that
 #: cycle: each lead is a global grid, the same for all of them.
 _FLOW_MEMO: dict[tuple[datetime, int], object] = {}
+#: One lock for the per-cycle field memos (`_FLOW_MEMO`,
+#: `_TRACK_FIELD_MEMO`): the API runs cycles for different storms at once.
+_MEMO_LOCK = threading.Lock()
+
+
+def _memoised_lead(memo: dict, valid_time: datetime, lead: int, fetch):
+    """``memo[(valid_time, lead)]``, fetched once. Entries for any other
+    valid time are dropped first. Held under `_MEMO_LOCK`, fetch included,
+    so concurrent cycles neither fetch a lead twice nor evict an entry
+    between another cycle's check and its read; the caller keeps the
+    returned object, which a later eviction can't take from it."""
+    key = (valid_time, lead)
+    with _MEMO_LOCK:
+        if key not in memo:
+            if any(t != valid_time for t, _ in memo):
+                memo.clear()
+            memo[key] = fetch(valid_time, lead)
+        return memo[key]
 
 
 def live_steering_path(cache_dir: Path | str, storm_id: str, current: Fix) -> Path:
@@ -328,14 +380,10 @@ def fetch_live_steering(
     if feats is None:
         fetcher = flow_fetcher or fetch_lead_flow
         try:
-            flows = []
-            for lead in STEERING_LEADS_H:
-                key = (current.valid_time, lead)
-                if key not in _FLOW_MEMO:
-                    if any(t != current.valid_time for t, _ in _FLOW_MEMO):
-                        _FLOW_MEMO.clear()
-                    _FLOW_MEMO[key] = fetcher(current.valid_time, lead)
-                flows.append(_FLOW_MEMO[key])
+            flows = [
+                _memoised_lead(_FLOW_MEMO, current.valid_time, lead, fetcher)
+                for lead in STEERING_LEADS_H
+            ]
             feats = steering_features(flows, current.lat, current.lon)
         except Exception:  # noqa: BLE001 - not published (yet), or no flow: skip the model
             return None

@@ -1,23 +1,33 @@
 """GFS's own forecast track as a prior the Group 1 models correct.
 
-AVNI (NHC's interpolated GFS track: the previous run, shifted 6 h to the
-cycle's own position) is available at every cycle the models serve, from
-the same t−6 GFS run their steering features come from. Fusion trails it
-by 100+ nm at 48 h (Decision Log 66, 68). So instead of predicting the
-track from scratch, a model trained with a prior predicts its *correction*
-to AVNI's track: its training target is the observed displacement minus
-AVNI's, and its forecast is AVNI's displacement plus what it predicts.
+A cycle reads the GFS run of 6 h before. `data.gfs_track` follows the storm
+through that run's forecast fields, and that track, where GFS has the storm,
+is the prior. It is not shifted to start at the cycle's fix, as NHC's
+interpolator shifts AVNO into AVNI: on the 2024 validation cases the shift
+to the working fix cost 2-3.5 nm at 24-120 h (Atlantic C, 48 h: 56.5 nm
+shifted, 53.9 unshifted, AVNI 52.7), because it carries the fix's own error
+into every lead. A model trained with it predicts its *correction*:
+its training target is the observed displacement minus the prior's, and its
+forecast is the prior's displacement plus what it predicts.
 
-Only the track is a prior. The wind column is left as the model's own
-(the prior's wind entry is 0), so intensity is learnt as before.
+The prior is computed from fields Anemoi fetches itself, the same way in
+training (the ``anemoi gfs-track-cache`` cache) and in serving
+(`real_inference_live.fetch_live_track_prior`). The first version of this
+module read AVNI from NHC's a-decks instead. Those rows are written after
+the cycle and are verification only (Decision Log 66), so a version trained
+that way (``track_prior: "AVNI"``) is refused everywhere a forecast is made
+from it (`unservable_reason`).
 
-A lead AVNI doesn't reach (it stops early for a storm it dissipates)
-falls back to persistence for that lead, so every lead has a prior. A
-window whose cycle has no AVNI row at all, or no AVNI position at the
-first lead, has no prior and is dropped from training, and a live cycle
-without one is skipped, as with the steering input. The prior applies in
-Stage B only: Stage A's ERA5 years predate most a-decks, and Stage B
-re-fits the output standardisation anyway.
+Only the track is a prior. The wind column is left as the model's own (the
+prior's wind entry is 0), so intensity is learnt as before.
+
+A lead GFS has lost the storm by falls back to persistence for that lead,
+so every lead has a prior. A window whose cycle has no tracked position at
+the valid time or at the first lead has no prior and is dropped from
+training, and a live cycle without one skips the model, as with the
+steering input. The prior applies in Stage B only: Stage A's ERA5 years
+have no GFS forecasts, and Stage B re-fits the output standardisation
+anyway.
 """
 
 from __future__ import annotations
@@ -29,12 +39,14 @@ from pathlib import Path
 
 import numpy as np
 
-from ..data.atcf import Adeck
+from ..data.gfs_track import TRACK_LEADS_H, cached_track, gfs_track_meta, require_meta
 from ..geo import bearing_deg, haversine_nm
 from ..models.base import DEFAULT_LEADS
 
-#: The a-deck technique the prior is read from.
-TRACK_PRIOR_TECHNIQUE = "AVNI"
+#: ``arch_params["track_prior"]`` of a version trained on this prior.
+TRACK_PRIOR_NAME = "gfs_track"
+#: ``arch_params`` key holding `data.gfs_track.gfs_track_meta` as trained.
+TRACK_PRIOR_INPUTS = "track_prior_inputs"
 
 PriorFn = Callable[[object], "np.ndarray | None"]
 
@@ -45,51 +57,60 @@ def _offset_nm(lat0: float, lon0: float, lat1: float, lon1: float) -> tuple[floa
     return float(distance * np.sin(theta)), float(distance * np.cos(theta))
 
 
-def prior_from_adeck(
-    adeck: Adeck | None,
-    init_time: datetime,
+def prior_from_track(
+    positions: np.ndarray | None,
     base_lat: float,
     base_lon: float,
     persistence: np.ndarray,
     lead_hours: Sequence[int] = DEFAULT_LEADS,
-    technique: str = TRACK_PRIOR_TECHNIQUE,
 ) -> np.ndarray | None:
-    """``(n_leads, 3)``: ``technique``'s displacement (dx east, dy north,
-    nm) from ``(base_lat, base_lon)`` at each lead, a wind of 0, and
-    ``persistence``'s displacement for a lead it has no position for.
-    None when it has no position at the first lead of ``init_time``."""
-    if adeck is None:
+    """``(n_leads, 3)``: from ``(base_lat, base_lon)``, the displacement
+    (dx east, dy north, nm) to where GFS has the storm at each lead; a wind
+    of 0; and ``persistence``'s displacement for a lead the track doesn't
+    reach.
+
+    ``positions`` is `data.gfs_track`'s ``(len(TRACK_LEADS_H), 2)`` (lat,
+    lon), used as they are (see the module docstring for why not shifted).
+    None when the track has no position at the valid time or at the first
+    lead.
+    """
+    if positions is None:
         return None
-    first = adeck.get(technique, init_time, int(lead_hours[0]))
-    if first is None or not first.has_position:
+    at = {lead: i for i, lead in enumerate(TRACK_LEADS_H)}
+    start = positions[at[0]]
+    first = positions[at[int(lead_hours[0])]]
+    if not (np.isfinite(start).all() and np.isfinite(first).all()):
         return None
     prior = np.zeros((len(lead_hours), 3))
     for i, lead in enumerate(lead_hours):
-        point = adeck.get(technique, init_time, int(lead))
-        if point is not None and point.has_position:
-            prior[i, 0], prior[i, 1] = _offset_nm(base_lat, base_lon, point.lat, point.lon)
+        pos = positions[at[int(lead)]]
+        if np.isfinite(pos).all():
+            prior[i, 0], prior[i, 1] = _offset_nm(base_lat, base_lon, pos[0], pos[1])
         else:
             prior[i, 0], prior[i, 1] = persistence[i, 0], persistence[i, 1]
     return prior
 
 
-def window_prior_fn(adecks: Mapping[str, Adeck]) -> PriorFn:
-    """A `StageWindow` -> prior map over ``adecks`` (storm id -> a-deck)."""
+def window_prior_fn(gfs_track_dir: Path | str) -> PriorFn:
+    """A `StageWindow` -> prior map over the GFS track cache.
+
+    The cache tracks each cycle once, seeded from the best-track fix, and
+    every emulated window of that cycle reads it; serving seeds the tracker
+    from the working fix. The tracker returns the extremum inside its
+    search disc, so a seed's error changes the track only when it changes
+    which vortex the disc holds: on 40 real 2024 cycles, 1% of 400 seeds
+    perturbed like the emulator's fixes (13 nm, and the 6 h motion's 21 nm)
+    gave a different track, none at 48 h and none tracked to a different
+    lead. Tracking per window would refetch every cycle's fields per seed
+    for that."""
 
     def prior(sw) -> np.ndarray | None:
-        return prior_from_adeck(
-            adecks.get(sw.storm_id), sw.current.valid_time,
+        return prior_from_track(
+            cached_track(gfs_track_dir, sw.storm_id, sw.current.valid_time),
             sw.current.lat, sw.current.lon, sw.persistence,
         )
 
     return prior
-
-
-def load_adecks(adeck_dir: Path | str, storm_ids: Iterable[str]) -> dict[str, Adeck]:
-    """The cached a-decks (`anemoi adeck-fetch`) of ``storm_ids``, AVNI only."""
-    from ..data.adeck_source import read_cached_adecks
-
-    return read_cached_adecks(adeck_dir, storm_ids, techniques=[TRACK_PRIOR_TECHNIQUE]).adecks
 
 
 def split_by_prior(
@@ -123,32 +144,55 @@ def add_priors(
 
 
 def prior_name(arch_params: dict | None) -> str | None:
-    """The technique a version's forecasts are corrections to (its
-    ``arch_params``' ``track_prior``), or None for a version without one."""
+    """What a version's forecasts are corrections to (its ``arch_params``'
+    ``track_prior``), or None for a version without a prior."""
     return (arch_params or {}).get("track_prior")
 
 
-def curriculum_adecks(
-    adeck_dir: Path | str | None, tracks: Iterable, *, streaming: bool,
-) -> dict[str, Adeck] | None:
-    """The a-decks a curriculum given ``adeck_dir`` reads its prior from
-    (None without one): every storm in ``tracks`` the cache has."""
-    if adeck_dir is None:
+def prior_arch_params() -> dict:
+    """The ``arch_params`` entries a version trained on the prior records."""
+    return {"track_prior": TRACK_PRIOR_NAME, TRACK_PRIOR_INPUTS: gfs_track_meta()}
+
+
+def unservable_reason(arch_params: dict | None) -> str | None:
+    """Why a version's forecast can't be made, or None when it can: it has
+    no prior, or its prior is this build's GFS track with the settings it
+    was trained on."""
+    name = prior_name(arch_params)
+    if name is None:
+        return None
+    if name != TRACK_PRIOR_NAME:
+        return (
+            f"trained to correct {name!r} read from NHC's a-decks, which are written after "
+            "the cycle and are verification only (Decision Log 66); retrain on the GFS "
+            "track prior (anemoi train --gfs-track-dir)"
+        )
+    if (arch_params or {}).get(TRACK_PRIOR_INPUTS) != gfs_track_meta():
+        return (
+            "trained on a GFS track computed with other settings than this build's "
+            "(data.gfs_track.gfs_track_meta); retrain or serve a matching build"
+        )
+    return None
+
+
+def curriculum_prior(gfs_track_dir: Path | str | None, *, streaming: bool) -> Path | None:
+    """The GFS track cache a curriculum given ``gfs_track_dir`` reads its
+    prior from (None without one). Checks the cache records this build's
+    tracker settings, since the version's ``arch_params`` will record them."""
+    if gfs_track_dir is None:
         return None
     if not streaming:
         raise ValueError("the track prior needs streaming=True")
-    adecks = load_adecks(adeck_dir, [t.storm_id for t in tracks])
-    if not adecks:
-        raise ValueError(f"no a-deck for any storm in {adeck_dir}")
-    return adecks
+    require_meta(gfs_track_dir)
+    return Path(gfs_track_dir)
 
 
-def prior_stage_kwargs(stage, adecks: Mapping[str, Adeck] | None) -> dict:
+def prior_stage_kwargs(stage, gfs_track_dir: Path | str | None) -> dict:
     """The ``prior_fn`` a model's streaming stage takes for one curriculum
-    stage: Stage B's, from ``adecks``; nothing for Stage A (see the module
-    docstring) or without a-decks."""
+    stage: Stage B's, from the cache; nothing for Stage A (see the module
+    docstring) or without a cache."""
     from ..data.sources import Flavor
 
-    if adecks is None or stage.flavor is Flavor.ERA5_PRETRAIN:
+    if gfs_track_dir is None or stage.flavor is Flavor.ERA5_PRETRAIN:
         return {}
-    return {"prior_fn": window_prior_fn(adecks)}
+    return {"prior_fn": window_prior_fn(gfs_track_dir)}

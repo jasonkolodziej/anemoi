@@ -233,9 +233,10 @@ def steering_meta_digest(meta: dict | None = None) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
-def require_meta(cache_dir: Path | str) -> None:
+def require_meta(cache_dir: Path | str, meta: dict | None = None, what: str = "steering") -> None:
     """Raise unless ``cache_dir`` has a ``_meta.json`` equal to this build's
-    :func:`steering_meta`. ``feature_version`` in each file only catches a
+    :func:`steering_meta` (or ``meta``, for another cache kept the same way,
+    named ``what`` in the error). ``feature_version`` in each file only catches a
     definition change someone remembered to version; the meta records every
     setting, so a cache computed with other settings is refused before a
     model trains on it or reads it."""
@@ -243,15 +244,15 @@ def require_meta(cache_dir: Path | str) -> None:
     try:
         old = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"steering cache {cache_dir} has no readable {CACHE_META_NAME}: "
+        raise ValueError(f"{what} cache {cache_dir} has no readable {CACHE_META_NAME}: "
                          f"{exc}") from exc
-    if old != steering_meta():
-        raise ValueError(f"steering cache {cache_dir} was computed with other settings "
+    if old != (steering_meta() if meta is None else meta):
+        raise ValueError(f"{what} cache {cache_dir} was computed with other settings "
                          f"than this build's: {old}")
 
 
-def write_meta(cache_dir: Path | str) -> None:
-    meta = steering_meta()
+def write_meta(cache_dir: Path | str, meta: dict | None = None) -> None:
+    meta = steering_meta() if meta is None else meta
     path = Path(cache_dir) / CACHE_META_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
 

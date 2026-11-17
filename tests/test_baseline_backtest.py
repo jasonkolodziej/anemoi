@@ -962,3 +962,85 @@ def test_test_split_reports_say_so_and_refuse_registered_errors(archive):
             tracks, statuses, {}, split=Split.TEST,
             registered=[RegisteredError.parse("fusion:AL:48=231")],
         )
+
+
+# --- Anemoi's own GFS track as a member -----------------------------------------
+
+
+def _gfs_track_cache(tmp_path, tracks, cases, skip=()):
+    """A cache whose track for each case is the storm's own best track."""
+    from anemoi.data import gfs_track as gt
+
+    gt._write_meta(tmp_path, gt.gfs_track_meta())
+    finals = {t.storm_id: {f.valid_time: f for f in t.fixes} for t in tracks}
+    for storm_id, init in zip(cases.storm_ids, cases.init_times, strict=True):
+        if (storm_id, init) in skip:
+            continue
+        pos = np.full((len(gt.TRACK_LEADS_H), 2), np.nan)
+        for i, lead in enumerate(gt.TRACK_LEADS_H):
+            fix = finals[storm_id].get(init + timedelta(hours=lead))
+            if fix is not None:
+                pos[i] = [fix.lat, fix.lon]
+        gt.save_track(gt.track_path(tmp_path, storm_id, init), pos,
+                      gt.TrackTask(storm_id, init, 0.0, 0.0))
+    return tmp_path
+
+
+def test_the_gfs_track_members_are_the_prior_and_its_two_diagnostics(archive, cases, tmp_path):
+    from anemoi.training.baseline_backtest import (
+        GFS_TRACK_BESTFIX,
+        GFS_TRACK_MEMBER,
+        GFS_TRACK_WORKFIX,
+        gfs_track_members,
+    )
+
+    tracks, _ = archive
+    first = (cases.storm_ids[0], cases.init_times[0])
+    prior, workfix, bestfix = gfs_track_members(
+        cases, _gfs_track_cache(tmp_path, tracks, cases, skip=[first]),
+    )
+
+    assert (prior.name, prior.kind) == (GFS_TRACK_MEMBER, "prior")
+    assert (workfix.name, bestfix.name) == (GFS_TRACK_WORKFIX, GFS_TRACK_BESTFIX)
+    for member in (prior, workfix, bestfix):
+        assert np.isnan(member.pred_abs[0]).all()          # no cached track: no forecast
+        assert np.isnan(member.pred_abs[..., 2]).all()     # track only
+    # The cached track is the truth. As it is (the prior), and shifted to
+    # the best-track fix (where it already starts), it is the truth;
+    # shifted to the working fix it carries that fix's offset to every lead.
+    i = 1
+    ok = cases.mask[i] & cases.time_ok[i]
+    np.testing.assert_allclose(prior.pred_abs[i, ok, :2], cases.obs_abs[i, ok, :2], atol=1e-4)
+    np.testing.assert_allclose(bestfix.pred_abs[i, ok, :2], cases.obs_abs[i, ok, :2], atol=1e-4)
+    shift_lat = cases.base_lat[i] - cases.best_lat[i]
+    assert abs(shift_lat) > 0.01
+    np.testing.assert_allclose(
+        workfix.pred_abs[i, ok, 0], cases.obs_abs[i, ok, 0] + shift_lat, atol=1e-4,
+    )
+
+
+def test_the_backtest_scores_the_gfs_track_beside_the_guidance(archive, adecks, cases, tmp_path):
+    from anemoi.training.baseline_backtest import GFS_TRACK_MEMBER
+
+    tracks, statuses = archive
+    report = run_baseline_backtest(
+        tracks, statuses, adecks, gfs_track_dir=_gfs_track_cache(tmp_path, tracks, cases),
+    )
+    names = [m["name"] for m in report.members]
+    assert {GFS_TRACK_MEMBER, "GFST_workfix", "GFST_bestfix"} <= set(names)
+    row = _row_of(report, "B", "AL", 12)
+    assert row.scores[GFS_TRACK_MEMBER].mean_error < row.scores["XTRP"].mean_error
+
+
+def test_a_gfs_track_cache_with_other_settings_is_refused(archive, adecks, tmp_path):
+    tracks, statuses = archive
+    with pytest.raises(BaselineBacktestError, match="GFS track cache"):
+        run_baseline_backtest(tracks, statuses, adecks, gfs_track_dir=tmp_path)
+
+
+def test_the_gfs_track_alone_still_says_no_model_was_scored(archive, adecks, cases, tmp_path):
+    tracks, statuses = archive
+    report = run_baseline_backtest(
+        tracks, statuses, adecks, gfs_track_dir=_gfs_track_cache(tmp_path, tracks, cases),
+    )
+    assert any(n.startswith("No per-case model forecasts were given") for n in report.notes)

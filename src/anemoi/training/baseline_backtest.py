@@ -474,6 +474,73 @@ def technique_member(
     return Member(spec.name, spec.kind, pred, spec.description), used
 
 
+#: The member name of Anemoi's own GFS track (`gfs_track_members`), and of
+#: its two diagnostics: the same track shifted to start at the working fix,
+#: and at the best-track fix.
+GFS_TRACK_MEMBER = "GFST"
+GFS_TRACK_WORKFIX = "GFST_workfix"
+GFS_TRACK_BESTFIX = "GFST_bestfix"
+
+
+def gfs_track_members(cases: ValidationCases, gfs_track_dir: Path | str) -> list[Member]:
+    """Anemoi's own track of the t-6 GFS run (`data.gfs_track`), three ways.
+
+    `GFS_TRACK_MEMBER` is the prior a model trained with one corrects
+    (`training.track_prior.prior_from_track`): the track where GFS has the
+    storm. Comparable with AVNO-6 (NHC's tracker on the same run). A lead
+    GFS has lost the storm by has no forecast.
+
+    The two diagnostics shift it to start at a fix, as NHC's interpolator
+    shifts AVNO-6 into AVNI: `GFS_TRACK_WORKFIX` at the working fix the
+    models read (the emulated one, 13 nm from the best track against NHC's
+    5), `GFS_TRACK_BESTFIX` at the best-track fix (no error). They measure
+    what a shift would gain or cost. Track only.
+    """
+    from ..data.gfs_track import TRACK_LEADS_H, cached_track, require_meta
+
+    try:
+        require_meta(gfs_track_dir)
+    except ValueError as exc:
+        raise BaselineBacktestError(str(exc)) from exc
+    at = {lead: i for i, lead in enumerate(TRACK_LEADS_H)}
+    shape = cases.obs_abs.shape
+    raw = np.full(shape, np.nan)
+    shifted = {GFS_TRACK_WORKFIX: np.full(shape, np.nan), GFS_TRACK_BESTFIX: np.full(shape, np.nan)}
+    bases = {
+        GFS_TRACK_WORKFIX: (cases.base_lat, cases.base_lon),
+        GFS_TRACK_BESTFIX: (cases.best_lat, cases.best_lon),
+    }
+    for i, (storm_id, init) in enumerate(zip(cases.storm_ids, cases.init_times, strict=True)):
+        positions = cached_track(gfs_track_dir, storm_id, init)
+        if positions is None:
+            continue
+        start, first = positions[at[0]], positions[at[int(cases.lead_hours[0])]]
+        if not (np.isfinite(start).all() and np.isfinite(first).all()):
+            continue  # no prior for this case (track_prior.prior_from_track)
+        for li, lead in enumerate(cases.lead_hours):
+            pos = positions[at[int(lead)]]
+            if not np.isfinite(pos).all():
+                continue
+            raw[i, li, :2] = pos
+            for name, (lat, lon) in bases.items():
+                shifted[name][i, li, :2] = (lat[i] + pos[0] - start[0], lon[i] + pos[1] - start[1])
+    return [
+        Member(
+            GFS_TRACK_MEMBER, "prior", raw,
+            "Anemoi's own track of the t-6 GFS run (data.gfs_track): the prior the gridded "
+            "models correct",
+        ),
+        Member(
+            GFS_TRACK_WORKFIX, "diagnostic", shifted[GFS_TRACK_WORKFIX],
+            "the same track shifted to start at the working fix",
+        ),
+        Member(
+            GFS_TRACK_BESTFIX, "diagnostic", shifted[GFS_TRACK_BESTFIX],
+            "the same track shifted to start at the best-track fix (a fix with no error)",
+        ),
+    ]
+
+
 def persistence_members(cases: ValidationCases) -> list[Member]:
     """The registry's baseline, and the same rule without the input noise."""
     return [
@@ -1234,6 +1301,7 @@ def run_baseline_backtest(
     seed: int = 20260806,
     n_augment: int = 1,
     split: Split = Split.VAL,
+    gfs_track_dir: Path | str | None = None,
 ) -> BaselineReport:
     """Score ``techniques`` (and, given ``model_forecasts``, ``models``) on
     the validation windows of ``tracks`` (``split=Split.TEST``: the held-out
@@ -1278,6 +1346,8 @@ def run_baseline_backtest(
             "n_cases": len(model_forecasts),
             "n_without_model_forecast": n_without,
         }
+    if gfs_track_dir is not None:
+        project = [*gfs_track_members(cases, gfs_track_dir), *project]
     for member in (*always, *project):
         member_rows.append({
             "name": member.name, "kind": member.kind, "description": member.description,
@@ -1321,7 +1391,7 @@ def run_baseline_backtest(
             "working_fix": working_fix_diagnostics(cases, val_tracks, adecks),
             "techniques": technique_diagnostics(cases, adecks),
         },
-        notes=_notes(cases, bool(project)),
+        notes=_notes(cases, model_forecasts is not None),
         references=tuple(present), skill_baseline=skill_baseline,
         reconciliation=(
             reconcile_official_errors(val_tracks, statuses, adecks, official_errors)

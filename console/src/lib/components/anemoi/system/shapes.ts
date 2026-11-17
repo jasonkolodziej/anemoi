@@ -10,6 +10,19 @@ export function formatShape(shape: number[] | null): string {
 	return shape && shape.length ? shape.join(' × ') : '—';
 }
 
+/** One `arch_params` value as text. A list is a shape (`41 × 41`); a
+ * nested group of settings (the tracker settings a version records as
+ * `track_prior_inputs`) is spelled out, not printed as `[object Object]`. */
+export function formatParamValue(v: unknown): string {
+	if (Array.isArray(v)) return v.map((x) => formatParamValue(x)).join(' × ');
+	if (v !== null && typeof v === 'object') {
+		return Object.entries(v as Record<string, unknown>)
+			.map(([k, x]) => `${k}: ${Array.isArray(x) ? x.join(', ') : formatParamValue(x)}`)
+			.join(' · ');
+	}
+	return String(v);
+}
+
 export function formatParams(n: number): string {
 	if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M`;
 	if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}k`;
