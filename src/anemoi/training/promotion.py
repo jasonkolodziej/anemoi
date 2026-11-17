@@ -369,39 +369,86 @@ class TestSetBudget:
 
 
 #: Where the test-set budget's log is kept in the durable store, beside the
-#: registry's mirror: every job that looks at the test split reads and
-#: extends the same log.
-TEST_SET_BUDGET_KEY = "test_set_budget.json"
+#: registry's mirror: one object per spend under this prefix, so jobs that
+#: spend at the same time each add their own entry instead of overwriting a
+#: shared file.
+TEST_SET_BUDGET_PREFIX = "test_set_budget/"
+
+#: The single-file log the first version kept; its entries still count.
+LEGACY_TEST_SET_BUDGET_KEY = "test_set_budget.json"
+
+
+def _budget_entries(checkpoint_store, workdir) -> list[tuple[str, dict]]:
+    """Every logged spend, ``(key, entry)``, in key (spend) order."""
+    import json
+    from pathlib import Path
+
+    bucket = checkpoint_store.config.bucket
+    out = []
+    if checkpoint_store.exists(LEGACY_TEST_SET_BUDGET_KEY):
+        path = Path(workdir) / LEGACY_TEST_SET_BUDGET_KEY
+        checkpoint_store.download(f"s3://{bucket}/{LEGACY_TEST_SET_BUDGET_KEY}", path)
+        out += [(f"{LEGACY_TEST_SET_BUDGET_KEY}#{i}", e)
+                for i, e in enumerate(json.loads(path.read_text()))]
+    for key in sorted(checkpoint_store.list(TEST_SET_BUDGET_PREFIX)):
+        path = Path(workdir) / key.replace("/", "_")
+        checkpoint_store.download(f"s3://{bucket}/{key}", path)
+        out.append((key, json.loads(path.read_text())))
+    return out
 
 
 def spend_test_set_budget(
     checkpoint_store, model_name: str, justification: str, when: date | None = None,
 ) -> dict:
-    """Spend one test-set evaluation from the durable budget (read from and
-    written back to ``checkpoint_store`` under `TEST_SET_BUDGET_KEY`) and
-    return the record of it. Raises `PromotionError` without spending when
-    the justification is blank or the season's budget is used up, and when
-    there is no durable store to keep the log in."""
+    """Spend one test-set evaluation from the durable budget and return the
+    record of it. Raises `PromotionError` when the justification is blank,
+    when there is no durable store to keep the log in, or when the season's
+    budget is used up.
+
+    The log is append-only (`TEST_SET_BUDGET_PREFIX`, plus any entries in
+    the first version's single file): this spend writes its own entry, then
+    recounts the season's entries, and goes ahead only if the total is
+    within the budget. Of any jobs that go ahead, the last to write counted
+    every earlier one, so at most the budget's worth proceed, whatever the
+    order their writes land in. Jobs that race for the last slot may both
+    refuse; a refused attempt keeps its entry, which counts as spent.
+    """
     import json
     import tempfile
+    import uuid
     from pathlib import Path
 
     if checkpoint_store is None:
         raise PromotionError("test-set evaluation needs the durable store to log it in")
+    if not justification.strip():
+        raise PromotionError("test-set evaluation requires a written justification")
+    when = when or datetime.now(UTC).date()
     with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / TEST_SET_BUDGET_KEY
-        entries: list[dict] = []
-        if checkpoint_store.exists(TEST_SET_BUDGET_KEY):
-            bucket = checkpoint_store.config.bucket
-            checkpoint_store.download(f"s3://{bucket}/{TEST_SET_BUDGET_KEY}", path)
-            entries = json.loads(path.read_text())
-        budget = TestSetBudget.from_json(entries)
-        budget.spend(model_name, justification, when)
-        path.write_text(json.dumps(budget.to_json(), indent=2))
-        checkpoint_store.upload(path, TEST_SET_BUDGET_KEY)
-    spent_on, model, why = budget.log[-1]
-    return {
-        "date": spent_on.isoformat(), "model": model, "justification": why,
-        "used_this_season": budget.evaluations_in(spent_on.year),
-        "max_per_season": budget.max_evaluations_per_season,
-    }
+        limit = TestSetBudget().max_evaluations_per_season
+
+        def season_keys() -> list[str]:
+            return [
+                key for key, entry in _budget_entries(checkpoint_store, tmp)
+                if date.fromisoformat(entry["date"]).year == when.year
+            ]
+
+        if len(season_keys()) >= limit:
+            raise PromotionError(
+                f"test-set evaluation budget for {when.year} is exhausted ({limit} used). "
+                "Evaluate on validation, or raise the budget deliberately and record why."
+            )
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        key = f"{TEST_SET_BUDGET_PREFIX}{stamp}-{uuid.uuid4().hex[:8]}.json"
+        entry = {"date": when.isoformat(), "model": model_name,
+                 "justification": justification.strip()}
+        path = Path(tmp) / "entry.json"
+        path.write_text(json.dumps(entry, indent=2))
+        checkpoint_store.upload(path, key)
+        keys = season_keys()
+        if len(keys) > limit:
+            raise PromotionError(
+                f"test-set evaluation budget for {when.year} was used up by another job "
+                f"spending at the same time; this attempt is logged ({key}) and counts"
+            )
+        used = len(keys)
+    return {**entry, "key": key, "used_this_season": used, "max_per_season": limit}
