@@ -296,25 +296,30 @@ def _live_prior_for(
     prior_fetcher,
 ) -> tuple[np.ndarray | None, str | None]:
     """``(prior, reason)`` for one served version: ``(None, None)`` when it
-    wasn't trained with the AVNI track prior; the prior when it was and the
-    cycle has one; ``(None, reason)`` when it was and the cycle doesn't
-    (AVNI not written yet), in which case the model skips the cycle."""
+    wasn't trained with a track prior; the prior when it was and the cycle
+    has one; ``(None, reason)`` when it was and can't have it (trained on
+    the a-decks or with other tracker settings, the t-6 run's fields not all
+    published yet, or no vortex in them), in which case the model skips the
+    cycle."""
     import json
 
     from .real_inference_live import fetch_live_track_prior
-    from .track_prior import prior_name
+    from .track_prior import prior_name, unservable_reason
 
     try:
-        technique = prior_name(json.loads(version.tags.get("arch_params", "{}")))
+        arch_params = json.loads(version.tags.get("arch_params", "{}"))
     except ValueError:
         return None, None  # an unreadable arch_params fails the model load, with its own reason
-    if technique is None:
+    if prior_name(arch_params) is None:
         return None, None
+    reason = unservable_reason(arch_params)
+    if reason is not None:
+        return None, reason
     prior = (prior_fetcher or fetch_live_track_prior)(track, current, cache_dir)
     if prior is None:
         return None, (
-            f"corrects {technique}'s track, which NHC hasn't written for this cycle yet "
-            "(or the a-deck couldn't be read)"
+            "corrects GFS's own track, and the t-6 run's fields aren't all published yet "
+            "(or GFS has no vortex at the storm)"
         )
     return prior, None
 

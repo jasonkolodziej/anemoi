@@ -61,9 +61,10 @@ DEFAULT_LEADS: tuple[int, ...] = (12, 24, 36, 48, 72, 96, 120)
 
 #: ``arch_params`` keys that record how a version was trained or what its
 #: output means, not how its network is built, so they are never passed to
-#: ``build_<model>``. ``track_prior``: the forecast technique the version's
-#: output is a correction to (`training.track_prior`).
-NON_BUILD_ARCH_PARAMS: frozenset[str] = frozenset({"track_prior"})
+#: ``build_<model>``. ``track_prior``: what the version's output is a
+#: correction to, and ``track_prior_inputs``: the settings that prior was
+#: computed with (`training.track_prior`).
+NON_BUILD_ARCH_PARAMS: frozenset[str] = frozenset({"track_prior", "track_prior_inputs"})
 
 
 def build_kwargs(arch_params: dict) -> dict:

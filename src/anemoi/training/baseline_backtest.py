@@ -94,6 +94,7 @@ from .real_run import (
     StageWindow,
     boundaries_for_tracks,
     displacements_to_absolute,
+    displacements_to_latlon,
     persistence_of,
     validation_metrics,
 )
@@ -472,6 +473,48 @@ def technique_member(
             if point.max_wind_kt is not None:
                 pred[i, li, 2] = point.max_wind_kt
     return Member(spec.name, spec.kind, pred, spec.description), used
+
+
+#: The member name of Anemoi's own GFS track (`gfs_track_member`).
+GFS_TRACK_MEMBER = "GFST"
+
+
+def gfs_track_member(cases: ValidationCases, gfs_track_dir: Path | str) -> Member:
+    """Anemoi's own track of the t-6 GFS run (`data.gfs_track`), shifted to
+    each case's working fix: exactly the prior a model trained with one
+    corrects (`training.track_prior.prior_from_track`), with no persistence
+    fallback, so a lead GFS has lost the storm by has no forecast. Track
+    only. Comparable with AVNI (the same run, NHC's tracker, shifted to the
+    as-issued fix) and AVNO-6 (unshifted)."""
+    from ..data.gfs_track import cached_track, require_meta
+    from .track_prior import prior_from_track
+
+    try:
+        require_meta(gfs_track_dir)
+    except ValueError as exc:
+        raise BaselineBacktestError(str(exc)) from exc
+    disp = np.full(cases.obs_abs.shape, np.nan)
+    no_fallback = np.full((len(cases.lead_hours), 3), np.nan)
+    for i, (storm_id, init) in enumerate(zip(cases.storm_ids, cases.init_times, strict=True)):
+        prior = prior_from_track(
+            cached_track(gfs_track_dir, storm_id, init),
+            cases.base_lat[i], cases.base_lon[i], no_fallback, cases.lead_hours,
+        )
+        if prior is not None:
+            disp[i, :, :2] = prior[:, :2]
+    pred = np.full(cases.obs_abs.shape, np.nan)
+    have = np.isfinite(disp[..., 0])
+    lat, lon = displacements_to_latlon(
+        cases.base_lat[:, None], cases.base_lon[:, None],
+        np.where(have, disp[..., 0], 0.0), np.where(have, disp[..., 1], 0.0),
+    )
+    pred[..., 0] = np.where(have, lat, np.nan)
+    pred[..., 1] = np.where(have, lon, np.nan)
+    return Member(
+        GFS_TRACK_MEMBER, "prior", pred,
+        "Anemoi's own track of the t-6 GFS run (data.gfs_track), shifted to the working fix: "
+        "the prior the gridded models correct",
+    )
 
 
 def persistence_members(cases: ValidationCases) -> list[Member]:
@@ -1234,6 +1277,7 @@ def run_baseline_backtest(
     seed: int = 20260806,
     n_augment: int = 1,
     split: Split = Split.VAL,
+    gfs_track_dir: Path | str | None = None,
 ) -> BaselineReport:
     """Score ``techniques`` (and, given ``model_forecasts``, ``models``) on
     the validation windows of ``tracks`` (``split=Split.TEST``: the held-out
@@ -1278,6 +1322,8 @@ def run_baseline_backtest(
             "n_cases": len(model_forecasts),
             "n_without_model_forecast": n_without,
         }
+    if gfs_track_dir is not None:
+        project = [gfs_track_member(cases, gfs_track_dir), *project]
     for member in (*always, *project):
         member_rows.append({
             "name": member.name, "kind": member.kind, "description": member.description,

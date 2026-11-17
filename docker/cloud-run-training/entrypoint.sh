@@ -9,9 +9,9 @@ GDAS_CACHE_DIR="${GDAS_CACHE_DIR:-/cache/gdas}"
 # for a Transformer version that was trained with it, by every job that
 # builds that Transformer's input from the caches (latents, backtests).
 export ANEMOI_STEERING_CACHE_DIR="${ANEMOI_STEERING_CACHE_DIR:-/cache/steering_f006}"
-# The a-decks a version trained with the AVNI track prior reads its prior
-# from (training.track_prior; anemoi adeck-fetch --cache-dir /cache/adeck).
-export ANEMOI_ADECK_DIR="${ANEMOI_ADECK_DIR:-/cache/adeck}"
+# The GFS track cache a version trained with the track prior reads its
+# prior from (training.track_prior; anemoi gfs-track-cache --cache-dir).
+export ANEMOI_GFS_TRACK_DIR="${ANEMOI_GFS_TRACK_DIR:-/cache/gfs_track}"
 REGISTRY_ROOT="${REGISTRY_ROOT:-/cache/registry}"
 SEED="${SEED:-20260806}"
 N_AUGMENT="${N_AUGMENT:-3}"
@@ -73,6 +73,10 @@ if [ "${LOCALIZE_CACHE:-1}" = "1" ]; then
   if [ -d "${ANEMOI_STEERING_CACHE_DIR}" ] \
     && anemoi cache-localize --src "${ANEMOI_STEERING_CACHE_DIR}" --dst "${LOCAL_CACHE_ROOT}/steering"; then
     ANEMOI_STEERING_CACHE_DIR="${LOCAL_CACHE_ROOT}/steering"
+  fi
+  if [ -d "${ANEMOI_GFS_TRACK_DIR}" ] \
+    && anemoi cache-localize --src "${ANEMOI_GFS_TRACK_DIR}" --dst "${LOCAL_CACHE_ROOT}/gfs_track"; then
+    ANEMOI_GFS_TRACK_DIR="${LOCAL_CACHE_ROOT}/gfs_track"
   fi
 fi
 

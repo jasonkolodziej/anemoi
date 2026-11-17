@@ -729,6 +729,39 @@ def test_registry_reconcile_re_stages_the_real_best_existing_version(tmp_path, m
     assert fresh.get("lstm", v3.version).stage is Stage.ARCHIVED
 
 
+def test_registry_reconcile_never_stages_a_version_trained_on_the_adecks(
+    tmp_path, monkeypatch, capsys,
+):
+    """A version that corrects AVNI read from the a-decks scored far better
+    than anything else, and can't be served (Decision Log 66): reconcile,
+    which stages the best-scoring version, must pass over it."""
+    import json
+
+    from anemoi.training.track_prior import prior_arch_params
+
+    monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
+    _fake_checkpoint_store(monkeypatch)
+
+    def register(score, arch):
+        return registry.register(
+            "gnn", run_id=f"r{score}", input_flavor=Flavor.GDAS_FINETUNE,
+            metrics={"track_error_48h_nm": score},
+            tags={"arch_params": json.dumps(arch)}, checkpoint_uri="s3://b/k.pt",
+        )
+
+    registry = ModelRegistry(tmp_path / "registry")
+    staged = register(229.0, {"hidden_dim": 8})
+    register(69.3, {"hidden_dim": 8, "track_prior": "AVNI"})
+    servable = register(75.0, {"hidden_dim": 8, **prior_arch_params()})
+    registry.transition("gnn", staged.version, Stage.STAGING)
+
+    assert cli.cmd_registry_reconcile(_reconcile_args(tmp_path)) == 0
+    assert f"gnn: re-staged v{servable.version}" in capsys.readouterr().out
+    assert ModelRegistry(tmp_path / "registry").in_stage(
+        "gnn", Stage.STAGING,
+    ).version == servable.version
+
+
 def test_registry_reconcile_dry_run_reports_without_transitioning(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("anemoi.tracking.mlflow_client.mlflow_client_from_env", lambda: None)
     _fake_checkpoint_store(monkeypatch)

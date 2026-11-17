@@ -319,6 +319,39 @@ def cmd_steering_cache(args: argparse.Namespace) -> int:
     return 1 if report.n_failed and report.n_written == 0 else 0
 
 
+def cmd_gfs_track_cache(args: argparse.Namespace) -> int:
+    """Cache the storm's track in the t-6 GFS run (`data.gfs_track`) for
+    Stage B's cycles: f006..f126 every 6 h, one fetch per valid time shared
+    by every storm then, sharded by valid time across Cloud Run tasks. The
+    prior the gridded models correct (`training.track_prior`)."""
+    from .data.gfs_track import run_gfs_track_cache, track_tasks
+    from .data.sources import Flavor
+    from .data.splits import Split, assign_splits, filter_tracks
+    from .training.real_run import boundaries_for_tracks
+
+    tracks = _training_tracks(args.hurdat2)
+    boundaries = boundaries_for_tracks(Flavor.GDAS_FINETUNE, tracks)
+    assignment = assign_splits(tracks, boundaries=boundaries)
+    tasks = []
+    for name in args.splits:
+        split_tracks = filter_tracks(tracks, assignment, Split(name))
+        tasks.extend(track_tasks(split_tracks))
+        n_fixes = sum(len(t.fixes) for t in split_tracks)
+        print(f"{name}: {len(split_tracks)} storms, {n_fixes} fixes")
+    report = run_gfs_track_cache(
+        tasks, args.cache_dir,
+        max_workers=args.max_workers, skip_existing=not args.force,
+        shard_index=args.shard_index, shard_count=args.shard_count,
+        progress_every=args.progress_every,
+    )
+    print(f"shard {args.shard_index}/{args.shard_count}: {report.n_times} valid times, "
+          f"{report.n_written} written ({report.n_no_vortex} with no vortex at the cycle), "
+          f"{report.n_skipped} skipped, {report.n_failed} failed, {report.elapsed_s:.0f}s")
+    for what, error in report.failures[:20]:
+        print(f"  FAILED {what}: {error}")
+    return 1 if report.n_failed and report.n_written == 0 else 0
+
+
 def _localize_caches(localize_to: str | None, caches: dict[str, str | None]) -> dict:
     """Copy each named cache into ``localize_to/<name>`` (Decision Log 62)
     and return the paths to read; on a failed copy, or with no
@@ -446,25 +479,26 @@ def cmd_train(args: argparse.Namespace) -> int:
     from .training.promotion import MetricSet, evaluate_promotion
 
     # Absent on a Namespace built by hand (tests, other commands reusing this).
-    for name in ("steering_cache_dir", "localize_to", "adeck_dir"):
+    for name in ("steering_cache_dir", "localize_to", "gfs_track_dir"):
         setattr(args, name, getattr(args, name, None))
     args.register_only = getattr(args, "register_only", False)
     if args.steering_cache_dir and args.model == "lstm":
         print("--steering-cache-dir is a gridded-model input (cnn, transformer, gnn, pinn; "
               "Decision Log 68); the lstm reads the track alone")
         return 1
-    if args.adeck_dir and args.model not in ("cnn", "transformer", "gnn"):
-        print("--adeck-dir (the AVNI track prior, training.track_prior) is for cnn, "
+    if args.gfs_track_dir and args.model not in ("cnn", "transformer", "gnn"):
+        print("--gfs-track-dir (the GFS track prior, training.track_prior) is for cnn, "
               "transformer and gnn; the pinn already corrects its own candidate track")
         return 1
     if args.localize_to:
         os.environ.setdefault("ANEMOI_FIELDS_MEMO", "1")
         caches = _localize_caches(args.localize_to, {
             "era5": args.era5_cache_dir, "gdas": args.gdas_cache_dir,
-            "steering": args.steering_cache_dir,
+            "steering": args.steering_cache_dir, "gfs_track": args.gfs_track_dir,
         })
         args.era5_cache_dir, args.gdas_cache_dir = caches["era5"], caches["gdas"]
         args.steering_cache_dir = caches["steering"]
+        args.gfs_track_dir = caches["gfs_track"]
 
     tracks = _training_tracks(args.hurdat2)
     store = CheckpointStore(S3Config.from_env())
@@ -497,7 +531,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         run, val_metrics, artifacts = run_cnn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment,
-            steering_cache_dir=args.steering_cache_dir, adeck_dir=args.adeck_dir,
+            steering_cache_dir=args.steering_cache_dir, gfs_track_dir=args.gfs_track_dir,
             **streaming_kwargs,
         )
     elif args.model == "transformer":
@@ -509,7 +543,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         run, val_metrics, artifacts = run_transformer_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment,
-            steering_cache_dir=args.steering_cache_dir, adeck_dir=args.adeck_dir,
+            steering_cache_dir=args.steering_cache_dir, gfs_track_dir=args.gfs_track_dir,
             **streaming_kwargs,
         )
     elif args.model == "gnn":
@@ -521,7 +555,7 @@ def cmd_train(args: argparse.Namespace) -> int:
         run, val_metrics, artifacts = run_gnn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
-            steering_cache_dir=args.steering_cache_dir, adeck_dir=args.adeck_dir,
+            steering_cache_dir=args.steering_cache_dir, gfs_track_dir=args.gfs_track_dir,
             **streaming_kwargs,
         )
     elif args.model == "pinn":
@@ -975,6 +1009,7 @@ def cmd_registry_reconcile(args: argparse.Namespace) -> int:
     from .tracking.checkpoint_store import CheckpointStore, S3Config
     from .tracking.mlflow_client import mlflow_client_from_env
     from .tracking.registry import ALL_MODELS, DERIVED_MODELS, ModelRegistry, Stage
+    from .training.track_prior import unservable_reason
 
     store = CheckpointStore(S3Config.from_env())
     registry = ModelRegistry(
@@ -986,7 +1021,14 @@ def cmd_registry_reconcile(args: argparse.Namespace) -> int:
         return value if isinstance(value, int | float) and math.isfinite(value) else None
 
     def _loadable(v) -> bool:
-        return "arch_params" in v.tags and bool(v.checkpoint_uri)
+        if "arch_params" not in v.tags or not v.checkpoint_uri:
+            return False
+        # A version whose track prior can't be served (trained on the
+        # a-decks, Decision Log 66) must never be picked, however it scored.
+        try:
+            return unservable_reason(json.loads(v.tags["arch_params"])) is None
+        except ValueError:
+            return False
 
     changed: list[str] = []
     for model in ALL_MODELS:
@@ -1427,6 +1469,7 @@ def cmd_baseline_backtest(args: argparse.Namespace) -> int:
             official_errors=official,
             registered=[RegisteredError.parse(r) for r in args.registered_error],
             seed=seed, n_augment=n_augment, split=split,
+            gfs_track_dir=getattr(args, "gfs_track_dir", None),
         )
     except (BaselineBacktestError, OfficialErrorsError) as exc:
         print(f"baseline-backtest: {exc}")
@@ -1737,6 +1780,12 @@ def main(argv: list[str] | None = None) -> int:
               "(the held-out season nothing is trained or tuned on); "
               "default: the --model-forecasts file's"),
     )
+    p.add_argument(
+        "--gfs-track-dir", dest="gfs_track_dir", default=None,
+        help=("also score Anemoi's own GFS track (anemoi gfs-track-cache's --cache-dir), "
+              "shifted to each case's working fix, as member GFST: the prior "
+              "the gridded models correct, beside NHC's AVNI and AVNO-6 for the same run"),
+    )
     p.add_argument("--adeck-dir", dest="adeck_dir", required=True,
                    help="directory `adeck-fetch` filled (read only)")
     p.add_argument(
@@ -1972,6 +2021,23 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_steering_cache)
 
     p = sub.add_parser(
+        "gfs-track-cache",
+        help="cache the storm's track in the t-6 GFS run, the prior the gridded models correct",
+    )
+    p.add_argument("--hurdat2", required=True, help="path to a real HURDAT2 archive file")
+    p.add_argument("--cache-dir", dest="cache_dir", required=True)
+    p.add_argument("--splits", nargs="+", default=["train", "val"],
+                   choices=["train", "val", "test"])
+    p.add_argument("--max-workers", dest="max_workers", type=int, default=4)
+    p.add_argument("--force", action="store_true", help="recompute even if cached")
+    p.add_argument("--progress-every", dest="progress_every", type=int, default=25)
+    p.add_argument("--shard-index", dest="shard_index", type=int,
+                   default=int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0")))
+    p.add_argument("--shard-count", dest="shard_count", type=int,
+                   default=int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1")))
+    p.set_defaults(func=cmd_gfs_track_cache)
+
+    p = sub.add_parser(
         "steering-spike",
         help="Stage B with and without forecast-lead steering, no registry (Phase 1 step 2)",
     )
@@ -2011,10 +2077,10 @@ def main(argv: list[str] | None = None) -> int:
               "steering (anemoi steering-cache's --cache-dir; Decision Log 68)"),
     )
     p.add_argument(
-        "--adeck-dir", dest="adeck_dir", default=None,
+        "--gfs-track-dir", dest="gfs_track_dir", default=None,
         help=("cnn/transformer/gnn, with --streaming: train Stage B on corrections to "
-              "AVNI's track (training.track_prior), read from anemoi adeck-fetch's "
-              "--cache-dir"),
+              "GFS's own track (training.track_prior), read from anemoi "
+              "gfs-track-cache's --cache-dir"),
     )
     p.add_argument(
         "--localize-to", dest="localize_to", default=None,

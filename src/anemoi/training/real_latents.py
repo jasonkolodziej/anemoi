@@ -271,20 +271,23 @@ def _steering_source(trained_artifacts, steering_cache_dir):
     return (lambda storm_id, valid_time: steering_vector(cache, storm_id, valid_time)), readers
 
 
-#: Where a version trained with the AVNI track prior (training.track_prior)
-#: finds each storm's a-deck (``anemoi adeck-fetch``'s --cache-dir), set
-#: once in the image's entrypoint like `STEERING_CACHE_ENV`.
-ADECK_DIR_ENV = "ANEMOI_ADECK_DIR"
+#: Where a version trained with the GFS track prior (training.track_prior)
+#: finds each cycle's tracked positions (``anemoi gfs-track-cache``'s
+#: --cache-dir), set once in the image's entrypoint like `STEERING_CACHE_ENV`.
+GFS_TRACK_DIR_ENV = "ANEMOI_GFS_TRACK_DIR"
 
 
 def _prior_source(trained_artifacts):
-    """``(window -> prior | None, readers)``: the AVNI track prior and the
+    """``(window -> prior | None, readers)``: the GFS track prior and the
     models whose forecasts are corrections to it, or ``(None,
-    frozenset())`` when none is. Raises when one is and no a-deck
-    directory is configured."""
+    frozenset())`` when none is. Raises when one is and its forecast can't
+    be made as it was trained: no cache configured, the cache or the
+    version computed with other tracker settings, or a version trained on
+    the a-decks (`track_prior.unservable_reason`)."""
     import os
 
-    from .track_prior import load_adecks, prior_name, window_prior_fn
+    from ..data.gfs_track import require_meta
+    from .track_prior import prior_name, unservable_reason, window_prior_fn
 
     readers = frozenset(
         name for name in ("cnn", "transformer", "gnn")
@@ -293,23 +296,18 @@ def _prior_source(trained_artifacts):
     )
     if not readers:
         return None, readers
-    adeck_dir = os.environ.get(ADECK_DIR_ENV)
-    if not adeck_dir:
+    for name in sorted(readers):
+        reason = unservable_reason(trained_artifacts[name].arch_params)
+        if reason is not None:
+            raise ValueError(f"the {name} version was {reason}")
+    cache = os.environ.get(GFS_TRACK_DIR_ENV)
+    if not cache:
         raise ValueError(
-            f"{', '.join(sorted(readers))} forecast corrections to AVNI's track "
-            f"(arch_params track_prior); set {ADECK_DIR_ENV}"
+            f"{', '.join(sorted(readers))} forecast corrections to GFS's track "
+            f"(arch_params track_prior); set {GFS_TRACK_DIR_ENV}"
         )
-    adecks: dict = {}  # storm id -> a-deck, read on first use; a missing one stays out
-    loaded: set[str] = set()
-    prior_fn = window_prior_fn(adecks)
-
-    def prior_of(sw):
-        if sw.storm_id not in loaded:
-            adecks.update(load_adecks(adeck_dir, [sw.storm_id]))
-            loaded.add(sw.storm_id)
-        return prior_fn(sw)
-
-    return prior_of, readers
+    require_meta(cache)
+    return window_prior_fn(cache), readers
 
 
 def _extract_for_tracks(
