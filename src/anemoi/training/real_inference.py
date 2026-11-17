@@ -124,8 +124,10 @@ def load_trained_model(name: str, version: ModelVersion, checkpoint_store: Check
     """
     torch = require_torch()
     builder = _builder(name)
+    from ..models.base import build_kwargs
+
     arch_params = _decode_arch_params(version, "arch_params")
-    model, spec = builder(**arch_params)
+    model, spec = builder(**build_kwargs(arch_params))
     state_dict = _download_state_dict(
         version.checkpoint_uri, checkpoint_store, torch, label=f"{name} v{version.version}",
     )

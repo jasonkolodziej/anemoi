@@ -446,12 +446,16 @@ def cmd_train(args: argparse.Namespace) -> int:
     from .training.promotion import MetricSet, evaluate_promotion
 
     # Absent on a Namespace built by hand (tests, other commands reusing this).
-    for name in ("steering_cache_dir", "localize_to"):
+    for name in ("steering_cache_dir", "localize_to", "adeck_dir"):
         setattr(args, name, getattr(args, name, None))
     args.register_only = getattr(args, "register_only", False)
     if args.steering_cache_dir and args.model == "lstm":
         print("--steering-cache-dir is a gridded-model input (cnn, transformer, gnn, pinn; "
               "Decision Log 68); the lstm reads the track alone")
+        return 1
+    if args.adeck_dir and args.model not in ("cnn", "transformer", "gnn"):
+        print("--adeck-dir (the AVNI track prior, training.track_prior) is for cnn, "
+              "transformer and gnn; the pinn already corrects its own candidate track")
         return 1
     if args.localize_to:
         os.environ.setdefault("ANEMOI_FIELDS_MEMO", "1")
@@ -493,7 +497,8 @@ def cmd_train(args: argparse.Namespace) -> int:
         run, val_metrics, artifacts = run_cnn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment,
-            steering_cache_dir=args.steering_cache_dir, **streaming_kwargs,
+            steering_cache_dir=args.steering_cache_dir, adeck_dir=args.adeck_dir,
+            **streaming_kwargs,
         )
     elif args.model == "transformer":
         from .training.real_run_transformer import run_transformer_curriculum
@@ -504,7 +509,8 @@ def cmd_train(args: argparse.Namespace) -> int:
         run, val_metrics, artifacts = run_transformer_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment,
-            steering_cache_dir=args.steering_cache_dir, **streaming_kwargs,
+            steering_cache_dir=args.steering_cache_dir, adeck_dir=args.adeck_dir,
+            **streaming_kwargs,
         )
     elif args.model == "gnn":
         from .training.real_run_gnn import run_gnn_curriculum
@@ -515,7 +521,8 @@ def cmd_train(args: argparse.Namespace) -> int:
         run, val_metrics, artifacts = run_gnn_curriculum(
             tracks, store, args.era5_cache_dir, args.gdas_cache_dir,
             seed=args.seed, n_augment=args.n_augment, hidden_dim=args.hidden_dim,
-            steering_cache_dir=args.steering_cache_dir, **streaming_kwargs,
+            steering_cache_dir=args.steering_cache_dir, adeck_dir=args.adeck_dir,
+            **streaming_kwargs,
         )
     elif args.model == "pinn":
         from .training.real_run_pinn import run_pinn_curriculum
@@ -1948,6 +1955,12 @@ def main(argv: list[str] | None = None) -> int:
         "--steering-cache-dir", dest="steering_cache_dir", default=None,
         help=("cnn/transformer/gnn/pinn, with --streaming: also read forecast-lead GFS "
               "steering (anemoi steering-cache's --cache-dir; Decision Log 68)"),
+    )
+    p.add_argument(
+        "--adeck-dir", dest="adeck_dir", default=None,
+        help=("cnn/transformer/gnn, with --streaming: train Stage B on corrections to "
+              "AVNI's track (training.track_prior), read from anemoi adeck-fetch's "
+              "--cache-dir"),
     )
     p.add_argument(
         "--localize-to", dest="localize_to", default=None,

@@ -199,7 +199,12 @@ def describe(name: str, arch_params: dict[str, Any] | None = None) -> Architectu
     empty), run one example input through it, and describe every module."""
     torch = require_torch()
     params = resolved_params(name, arch_params)
-    build_kwargs = {k: tuple(v) if isinstance(v, list) else v for k, v in params.items()}
+    from .base import NON_BUILD_ARCH_PARAMS
+
+    build_kwargs = {
+        k: tuple(v) if isinstance(v, list) else v
+        for k, v in params.items() if k not in NON_BUILD_ARCH_PARAMS
+    }
     model, spec = _builder(name)(**build_kwargs)
     model.eval()
 

@@ -62,6 +62,14 @@ from .steering_input import (  # noqa: F401 (n_steering_of: re-exported)
     unfreeze,
     with_constant_channels,
 )
+from .track_prior import (
+    TRACK_PRIOR_TECHNIQUE,
+    PriorFn,
+    add_priors,
+    curriculum_adecks,
+    prior_stage_kwargs,
+    split_by_prior,
+)
 
 #: Same field order/set as real_run_cnn.CNN_FIELD_NAMES -- kept separate
 #: rather than imported, since the two runners' channel stacks are allowed
@@ -313,6 +321,7 @@ def train_transformer_stage_streaming(
     extra_x: Callable[[StageWindow], np.ndarray | None] | None = None,
     on_validation: Callable[[list[StageWindow], np.ndarray], None] | None = None,
     trainable: Sequence[str] = (),
+    prior_fn: PriorFn | None = None,
 ) -> tuple[object, float, float, MetricSet, tuple]:
     """`train_transformer_stage`'s streaming analog
     (`docs/streaming_dataloader.md`) -- same return contract, real
@@ -374,6 +383,14 @@ def train_transformer_stage_streaming(
             f"{cache_dir} -- has data.era5_cache/data.gdas_cache fetched anything yet, or "
             "were every matched window's fields entirely NaN (storms entirely over land)?"
         )
+    # With a track prior (training.track_prior) the model trains on each
+    # window's correction to it; validation adds the prior back.
+    train_fit, val_fit, priors = train_windows, val_windows, None
+    if prior_fn is not None:
+        train_windows, train_fit, _ = split_by_prior(train_windows, prior_fn)
+        val_windows, val_fit, priors = split_by_prior(val_windows, prior_fn)
+        if not train_windows or not val_windows:
+            raise ValueError(f"stage {stage.name}: no window has a track prior")
 
     def build_x(sw):
         fields = load_cached_fields(cache_path(cache_dir, FetchTask(
@@ -388,7 +405,7 @@ def train_transformer_stage_streaming(
         return with_constant_channels(stack, extras[(sw.storm_id, sw.current.valid_time)])
 
     n_leads = len(LEAD_STEPS)
-    raw_train_ds = WindowDataset(train_windows, build_x)
+    raw_train_ds = WindowDataset(train_fit, build_x)
     x_acc = OnlineMeanStd(reduce_axes=(0, 2, 3), keepdims=True)
     y_acc = OnlineMaskedLeadMeanStd(n_leads=n_leads)
     for i in range(len(raw_train_ds)):
@@ -400,10 +417,10 @@ def train_transformer_stage_streaming(
     item_x_mean, item_x_std = x_mean[0], x_std[0]  # see real_run_cnn's same fix for why
 
     train_ds = WindowDataset(
-        train_windows, build_x, x_mean=item_x_mean, x_std=item_x_std, y_mean=y_mean, y_std=y_std,
+        train_fit, build_x, x_mean=item_x_mean, x_std=item_x_std, y_mean=y_mean, y_std=y_std,
     )
     val_ds = WindowDataset(
-        val_windows, build_x, x_mean=item_x_mean, x_std=item_x_std, y_mean=y_mean, y_std=y_std,
+        val_fit, build_x, x_mean=item_x_mean, x_std=item_x_std, y_mean=y_mean, y_std=y_std,
     )
     train_loader = make_dataloader(
         train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers,
@@ -460,6 +477,8 @@ def train_transformer_stage_streaming(
             pred_val_rows.append(pred.cpu().numpy())
         val_loss = val_diff2 / max(val_mask, 1.0)
         pred_val = np.concatenate(pred_val_rows, axis=0) * y_std + y_mean
+    if priors is not None:
+        pred_val = add_priors(pred_val, val_windows, priors)
 
     if on_validation is not None:
         on_validation(list(val_windows), pred_val)
@@ -483,6 +502,7 @@ def run_transformer_curriculum(
     num_workers: int = 0,
     basins: Sequence[str] | None = None,
     steering_cache_dir: Path | str | None = None,
+    adeck_dir: Path | str | None = None,
 ) -> tuple[CurriculumRun, MetricSet, RunArtifacts]:
     """Run the real Stage A -> Stage B curriculum for the Transformer
     baseline against real cached GriddedFields. See `run_cnn_curriculum`
@@ -525,6 +545,7 @@ def run_transformer_curriculum(
     basins = DEFAULT_BASIN_INPUTS if basins is None else tuple(basins)
     n_variables = len(TRANSFORMER_FIELD_NAMES) + len(basins)
     n_steering = steering_n(steering_cache_dir, streaming=streaming)
+    adecks = curriculum_adecks(adeck_dir, tracks, streaming=streaming)
     rng = np.random.default_rng(seed)
     curriculum = Curriculum.standard("transformer", **(curriculum_kwargs or {}))
     run = CurriculumRun(curriculum=curriculum)
@@ -550,6 +571,7 @@ def run_transformer_curriculum(
         stage_kwargs.update(
             steering_stage_kwargs("transformer", stage, steering_cache_dir, n_steering),
         )
+        stage_kwargs.update(prior_stage_kwargs(stage, adecks))
         model, train_loss, val_loss, val_metrics, stats = stage_fn(
             model, stage, train_tracks, val_tracks, cache_dir, rng,
             n_augment=n_augment, basins=basins, **stage_kwargs,
@@ -582,6 +604,8 @@ def run_transformer_curriculum(
     }
     if n_steering:
         arch_params["n_steering"] = n_steering
+    if adecks is not None:
+        arch_params["track_prior"] = TRACK_PRIOR_TECHNIQUE
     artifacts = RunArtifacts(
         model=model, x_mean=x_mean, x_std=x_std, y_mean=y_mean, y_std=y_std,
         arch_params=arch_params, basins=basins,
