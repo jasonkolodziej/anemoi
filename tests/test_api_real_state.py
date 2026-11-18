@@ -1247,7 +1247,6 @@ def test_a_storm_that_left_the_live_feed_is_listed_from_the_season_archive(
     from anemoi.data.besttrack import Fix, Track, TrackQuality
     from anemoi.time_utils import floor_synoptic
     from anemoi.tracking.checkpoint_store import CheckpointStore, S3Config
-    from tests.test_atcf_archive import _bdeck_line, _MemoryS3
 
     s3 = _MemoryS3()
     store = CheckpointStore(
@@ -1292,6 +1291,31 @@ def test_the_storm_list_works_without_a_durable_store(client):
     r = client.get("/v1/storms")
     assert r.status_code == 200
     assert [s["track_source"] for s in r.json()] == ["hurdat2"]
+
+
+class _MemoryS3:
+    """The S3 client `CheckpointStore` wraps, in memory."""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    def put(self, key, local_path):
+        self.objects[key] = Path(local_path).read_bytes()
+
+    def get(self, key, local_path):
+        Path(local_path).write_bytes(self.objects[key])
+
+    def exists(self, key):
+        return key in self.objects
+
+    def list_keys(self, prefix):
+        return [k for k in self.objects if k.startswith(prefix)]
+
+
+def _bdeck_line(dtg: str, lat: str, lon: str, vmax: int, mslp: int, name: str) -> str:
+    fields = ["AL", "09", dtg, "", "BEST", "0", lat, lon, str(vmax), str(mslp), "TS"]
+    fields += [""] * (27 - len(fields)) + [name]
+    return ", ".join(fields) + ",\n"
 
 
 class _FrozenYear:
