@@ -269,3 +269,18 @@ def test_archived_bdeck_tracks_reads_each_storms_newest_bdeck(store, s3):
     assert [f.max_wind_kt for f in track.fixes] == [45, 55]
     assert {f.quality.value for f in track.fixes} == {"working"}
     assert atcf_archive.archived_bdeck_tracks(store, 2025) == []
+
+
+def test_archived_bdeck_tracks_keep_a_storms_january_fixes(store, s3):
+    """parse_bdeck names a storm by each fix's year; a storm archived under
+    2026 that runs into January keeps those fixes, under its own id."""
+    text = _bdeck_line("2026123118", "150N", "500W", 40, 1002, name="ZETA") + _bdeck_line(
+        "2027010100", "152N", "510W", 45, 1000, name="ZETA",
+    )
+    s3.objects["archive/atcf/2026/AL092026/bdeck/20270101T030000Z_aaaaaaaaaaaa.dat"] = text.encode()
+
+    (track,) = atcf_archive.archived_bdeck_tracks(store, 2026)
+
+    assert track.storm_id == "AL092026"
+    assert [f.valid_time.year for f in track.fixes] == [2026, 2027]
+    assert {f.storm_id for f in track.fixes} == {"AL092026"}

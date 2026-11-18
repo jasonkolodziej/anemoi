@@ -152,7 +152,7 @@ export interface RunInfo {
 
 /** What a cycle actually ran on (#214). */
 export interface ProvenanceOut {
-	fix_source: 'tcvitals' | 'final_best_track' | 'extrapolated' | 'persisted';
+	fix_source: 'tcvitals' | 'archived_bdeck' | 'final_best_track' | 'extrapolated' | 'persisted';
 	fix: FixOut;
 	model_versions: Record<string, number>;
 	fusion: string;

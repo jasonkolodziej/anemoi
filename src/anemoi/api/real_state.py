@@ -164,7 +164,7 @@ def _synthetic_fallback_deterministic(plan, fix) -> DeterministicForecast:
 #: Before, every cycle used the storm's *latest* fix relabelled as the
 #: target time -- for a past label, a position from days later -- and
 #: reported `vitals: observed` whatever happened.
-FIX_SOURCES = ("tcvitals", "final_best_track", "extrapolated", "persisted")
+FIX_SOURCES = ("tcvitals", "archived_bdeck", "final_best_track", "extrapolated", "persisted")
 
 
 def initial_fix(
@@ -175,6 +175,7 @@ def initial_fix(
     lon: float | None = None,
     wind_kt: float | None = None,
     withhold_vitals: bool = False,
+    working_source: str = "tcvitals",
 ) -> tuple[Fix, str]:
     """The cycle's initial fix, and where it came from.
 
@@ -188,7 +189,10 @@ def initial_fix(
 
     ``withhold_vitals`` (the API's ``worst_case``) skips the first, as if
     TC-Vitals hadn't landed. ``lat``/``lon``/``wind_kt`` override the
-    result (recorded on the run as overrides).
+    result (recorded on the run as overrides). ``working_source`` names
+    where a WORKING fix at ``target`` came from: ``tcvitals`` for a live
+    storm, ``archived_bdeck`` for a season-archive storm, whose working
+    b-deck may carry NHC's later corrections.
     """
     prior = tuple(f for f in track.fixes if f.valid_time <= target)
     if not prior:
@@ -196,7 +200,7 @@ def initial_fix(
     at = prior[-1] if prior[-1].valid_time == target and not withhold_vitals else None
     if at is not None:
         base, quality = at, TrackQuality.WORKING
-        source = "final_best_track" if at.quality is TrackQuality.FINAL else "tcvitals"
+        source = "final_best_track" if at.quality is TrackQuality.FINAL else working_source
     else:
         history = tuple(f for f in prior if f.valid_time < target)
         if len(history) >= 2:
@@ -429,9 +433,13 @@ class RealState:
             except Exception:  # noqa: BLE001 - no store configured, or unreachable
                 tracks = None
             if tracks is not None:
+                # A storm leaving the live feed keeps the cycle history it had
+                # there, restored and newly run cycles alike.
                 self._season_storms = {
                     t.storm_id: self._new_storm_state(
-                        t, self._season_storms.get(t.storm_id), source="season_archive",
+                        t,
+                        self._season_storms.get(t.storm_id) or self._live_storms.get(t.storm_id),
+                        source="season_archive",
                     )
                     for t in tracks
                     if t.storm_id not in self._hurdat2_ids
@@ -724,6 +732,7 @@ class RealState:
         oracle = LatencyOracle(use_max_latency=worst_case)
         fix, fix_source = initial_fix(
             storm.track, target, lat=lat, lon=lon, wind_kt=wind_kt, withhold_vitals=worst_case,
+            working_source="archived_bdeck" if storm.source == "season_archive" else "tcvitals",
         )
         # The plan's `vitals_estimated` comes from a latency model; whether
         # this cycle's vitals were really estimated is known here (#214).

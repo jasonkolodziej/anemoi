@@ -215,11 +215,15 @@ class ProvenanceOut(BaseModel):
     result, so a later comparison or a retrain can slice by any of it."""
 
     #: Where the initial fix came from: ``tcvitals`` (the storm's own
-    #: working fix at the cycle time), ``final_best_track`` (an archive
+    #: working fix at the cycle time), ``archived_bdeck`` (an ended storm's
+    #: archived working b-deck, which may carry NHC's later corrections),
+    #: ``final_best_track`` (an archive
     #: storm's label standing in for vitals), ``extrapolated`` (last motion
     #: vector, vitals late or withheld) or ``persisted`` (too little history
     #: to extrapolate). Overrides are on ``run``.
-    fix_source: Literal["tcvitals", "final_best_track", "extrapolated", "persisted"]
+    fix_source: Literal[
+        "tcvitals", "archived_bdeck", "final_best_track", "extrapolated", "persisted"
+    ]
     fix: FixOut
     #: Registered version of each contributing model (``fusion`` included
     #: when learned fusion ran).

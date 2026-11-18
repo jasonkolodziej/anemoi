@@ -945,6 +945,8 @@ Phase 1 of docs/multi_basin.md after its first training run (decision 57), track
 - `data.atcf_archive.archived_bdeck_tracks(store, season)` reads each storm's newest archived b-deck: WORKING quality, name from the b-deck's STORMNAME, invests (90–99) left out, an unreadable snapshot skipped.
 - `RealState` lists these for every season after the HURDAT2 file's last, up to the current year, re-read hourly, best-effort (no store: none listed, no error). They are `active: false` whatever their last fix's age, since the cycle Workflow runs every active storm. A live storm wins over its archived copy; a storm in HURDAT2 is never read from the archive. Their stored cycles show as before.
 - `StormSummary.track_source` (`live`, `season_archive`, `hurdat2`; `null` from the demo state) says which source a storm came from.
+- A cycle run on such a storm records `provenance.fix_source: archived_bdeck`, not `tcvitals`: the archived b-deck may carry NHC's later corrections.
+- A storm leaving the live feed keeps the cycle history it had there, and a December storm keeps its January fixes under its own id (`parse_bdeck` names tracks by each fix's year).
 - Console: active storms under **Active storms**, with "No active storms right now." when there are none; ended storms below under **Recent storms**, newest first. An archived storm's badge reads "working (archived)". The back links read "← Storms".
 
 **Left as is.** When `fetch_live_tracks` returns nothing, `RealState` keeps the live storms it had, since an empty answer and a failed fetch look the same; an ended storm can stay `active` until the 14-day window or a restart. It no longer disappears afterwards, which was the reported problem.

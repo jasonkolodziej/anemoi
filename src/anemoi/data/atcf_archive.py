@@ -56,7 +56,7 @@ import json
 import tempfile
 import urllib.request
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -324,9 +324,21 @@ def archived_bdeck_tracks(store: CheckpointStore, season: int) -> list[Track]:
     for storm_id, key in sorted(newest.items()):
         try:
             text = _get_text(store, key)
-            parsed = [t for t in parse_bdeck(text) if t.storm_id == storm_id]
+            # parse_bdeck names a storm by each fix's calendar year, so a
+            # December storm's January fixes come back under the next year:
+            # keep every track of this basin and number in this season and
+            # beyond, under the archived identity.
+            fixes = sorted(
+                (
+                    replace(f, storm_id=storm_id)
+                    for t in parse_bdeck(text)
+                    if t.storm_id[:4] == storm_id[:4] and int(t.storm_id[4:]) >= season
+                    for f in t.fixes
+                ),
+                key=lambda f: f.valid_time,
+            )
         except Exception:  # noqa: BLE001 - one unreadable object, not the season
             continue
-        if parsed:
-            tracks.append(Track(storm_id, parsed[0].fixes, name=_bdeck_name(text)))
+        if fixes:
+            tracks.append(Track(storm_id, tuple(fixes), name=_bdeck_name(text)))
     return tracks

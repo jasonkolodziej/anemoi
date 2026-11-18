@@ -1293,6 +1293,54 @@ def test_the_storm_list_works_without_a_durable_store(client):
     assert [s["track_source"] for s in r.json()] == ["hurdat2"]
 
 
+def test_a_storm_leaving_the_live_feed_keeps_its_cycle_history(
+    tmp_path, hurdat2_file, monkeypatch,
+):
+    """Live and archived on one read, then dropped from the live feed: the
+    archived copy carries the live copy's cycle history, not a fresh one."""
+    from anemoi.api import real_state
+    from anemoi.data.besttrack import Fix, Track, TrackQuality
+    from anemoi.time_utils import floor_synoptic
+    from anemoi.tracking.checkpoint_store import CheckpointStore, S3Config
+
+    s3 = _MemoryS3()
+    store = CheckpointStore(
+        S3Config(endpoint_url="https://example.r2.cloudflarestorage.com", bucket="t",
+                 access_key_id="k", secret_access_key="s"),
+        client=s3,
+    )
+    year = datetime.now(UTC).year + 1
+    monkeypatch.setattr(real_state, "datetime", _FrozenYear(year))
+    recent = floor_synoptic(datetime.now(UTC)).replace(year=year) - timedelta(days=1)
+    dtg = f"{recent:%Y%m%d%H}"
+    sid = f"AL09{year}"
+    key = f"archive/atcf/{year}/{sid}/bdeck/{dtg}0000Z_aaaaaaaaaaaa.dat"
+    s3.objects[key] = _bdeck_line(dtg, "200N", "690W", 45, 1000, name="ISAIAS").encode()
+    live = Track(storm_id=sid, fixes=(Fix(storm_id=sid, valid_time=recent, lat=20.0, lon=-69.0,
+                 max_wind_kt=45.0, min_pressure_mb=1000.0, quality=TrackQuality.WORKING),))
+    feed = [[live]]
+    monkeypatch.setattr("anemoi.data.live_atcf.fetch_live_tracks", lambda: feed[0])
+    state = real_state.RealState(
+        hurdat2_path=hurdat2_file, registry_root=tmp_path / "registry", checkpoint_store=store,
+    )
+    state.list_storms()
+    history = state._live_storms[sid].cycles
+    assert state._season_storms[sid].cycles is history
+
+    other = Track(storm_id=f"AL10{year}", fixes=(replace_storm(live.fixes[0], f"AL10{year}"),))
+    feed[0] = [other]
+    state._live_storms_fetched_at = None  # the next read re-fetches the feed
+    storm = {s.storm_id: s for s in state.list_storms()}[sid]
+    assert storm.source == "season_archive"
+    assert storm.cycles is history
+
+
+def replace_storm(fix, storm_id):
+    from dataclasses import replace
+
+    return replace(fix, storm_id=storm_id)
+
+
 class _MemoryS3:
     """The S3 client `CheckpointStore` wraps, in memory."""
 
