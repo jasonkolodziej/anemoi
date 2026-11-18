@@ -239,3 +239,33 @@ def test_real_state_reports_rather_than_raises(monkeypatch, tmp_path, store, s3)
 
     monkeypatch.setattr(atcf_archive, "archive_atcf", down)
     assert "NHC down" in state.archive_atcf()["error"]
+
+
+def _bdeck_line(dtg: str, lat: str, lon: str, vmax: int, mslp: int, name: str = "ISAIAS") -> str:
+    # 28 fields up to STORMNAME (index 27), as NHC writes them.
+    fields = ["AL", "09", dtg, "", "BEST", "0", lat, lon, str(vmax), str(mslp), "TS"]
+    fields += [""] * (27 - len(fields)) + [name]
+    return ", ".join(fields) + ",\n"
+
+
+def test_archived_bdeck_tracks_reads_each_storms_newest_bdeck(store, s3):
+    older = _bdeck_line("2026092100", "200N", "690W", 45, 1000, name="NINE")
+    newer = older + _bdeck_line("2026092106", "205N", "700W", 55, 995)
+    base = "archive/atcf/2026/AL092026"
+    s3.objects[f"{base}/bdeck/20260921T030000Z_aaaaaaaaaaaa.dat"] = older.encode()
+    s3.objects[f"{base}/bdeck/20260921T090000Z_bbbbbbbbbbbb.dat"] = newer.encode()
+    s3.objects[f"{base}/tcvitals/20260921T090000Z_cccccccccccc.dat"] = VITALS_2.encode()
+    # An invest and an unreadable b-deck are left out; neither fails the season.
+    s3.objects["archive/atcf/2026/AL912026/bdeck/20260921T090000Z_dddddddddddd.dat"] = (
+        newer.replace("AL, 09", "AL, 91").encode()
+    )
+    s3.objects["archive/atcf/2026/EP142026/bdeck/20260921T090000Z_eeeeeeeeeeee.dat"] = b"junk\n"
+
+    tracks = atcf_archive.archived_bdeck_tracks(store, 2026)
+
+    assert [t.storm_id for t in tracks] == ["AL092026"]
+    track = tracks[0]
+    assert track.name == "ISAIAS"
+    assert [f.max_wind_kt for f in track.fixes] == [45, 55]
+    assert {f.quality.value for f in track.fixes} == {"working"}
+    assert atcf_archive.archived_bdeck_tracks(store, 2025) == []

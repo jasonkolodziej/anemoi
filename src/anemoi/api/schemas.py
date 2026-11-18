@@ -274,6 +274,11 @@ class StormSummary(BaseModel):
     #: data, but out of distribution for at least one model the forecast
     #: may combine.
     trained_basin: bool
+    #: Where the track comes from: ``live`` (NHC's current feed),
+    #: ``season_archive`` (an ended storm of a season HURDAT2 doesn't cover
+    #: yet, from its newest archived working b-deck) or ``hurdat2`` (the
+    #: final best track). None from the demo state.
+    track_source: Literal["live", "season_archive", "hurdat2"] | None = None
 
 
 class StormDetail(StormSummary):

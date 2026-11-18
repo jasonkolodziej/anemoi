@@ -1234,3 +1234,76 @@ def test_a_stale_refresh_in_flight_serves_known_storms_without_waiting(client, m
     finally:
         release.set()
         refresher.join()
+
+
+def test_a_storm_that_left_the_live_feed_is_listed_from_the_season_archive(
+    tmp_path, hurdat2_file, monkeypatch,
+):
+    """HURDAT2 ends with the last published season; a newer season's storm
+    that NHC has dropped from its current feed is listed from its newest
+    archived b-deck, as ended (so the cycle Workflow doesn't run it), with
+    its stored cycles. A storm still on the live feed wins over its copy."""
+    from anemoi.api import real_state
+    from anemoi.data.besttrack import Fix, Track, TrackQuality
+    from anemoi.time_utils import floor_synoptic
+    from anemoi.tracking.checkpoint_store import CheckpointStore, S3Config
+    from tests.test_atcf_archive import _bdeck_line, _MemoryS3
+
+    s3 = _MemoryS3()
+    store = CheckpointStore(
+        S3Config(endpoint_url="https://example.r2.cloudflarestorage.com", bucket="t",
+                 access_key_id="k", secret_access_key="s"),
+        client=s3,
+    )
+    year = datetime.now(UTC).year + 1  # newer than the fixture's 2026 HURDAT2 season
+    monkeypatch.setattr(real_state, "datetime", _FrozenYear(year))
+    now = floor_synoptic(datetime.now(UTC))
+    recent = (now - timedelta(days=1)).replace(year=year)
+    dtg = f"{recent:%Y%m%d%H}"
+    for cy, name in (("09", "ISAIAS"), ("10", "JOSEPHINE")):
+        line = _bdeck_line(dtg, "200N", "690W", 45, 1000, name=name).replace("AL, 09", f"AL, {cy}")
+        key = f"archive/atcf/{year}/AL{cy}{year}/bdeck/{dtg}0000Z_{cy * 6}.dat"
+        s3.objects[key] = line.encode()
+    s3.objects[f"api/cycles/AL09{year}/{dtg[:8]}_00Z.json"] = b"{}"
+
+    live = Track(
+        storm_id=f"AL10{year}",
+        fixes=(Fix(storm_id=f"AL10{year}", valid_time=recent, lat=21.0, lon=-70.0,
+                   max_wind_kt=60.0, min_pressure_mb=990.0, quality=TrackQuality.WORKING),),
+    )
+    monkeypatch.setattr("anemoi.data.live_atcf.fetch_live_tracks", lambda: [live])
+    state = real_state.RealState(
+        hurdat2_path=hurdat2_file, registry_root=tmp_path / "registry", checkpoint_store=store,
+    )
+
+    by_id = {s.storm_id: s for s in state.list_storms()}
+    assert set(by_id) == {"AL012026", f"AL09{year}", f"AL10{year}"}
+    ended = by_id[f"AL09{year}"]
+    assert (ended.source, ended.active, ended.name) == ("season_archive", False, "ISAIAS")
+    assert by_id[f"AL10{year}"].source == "live"
+    assert by_id[f"AL10{year}"].latest_fix.max_wind_kt == 60.0
+    assert by_id["AL012026"].source == "hurdat2"
+    assert set(ended.cycles) == {f"{dtg[:8]}_00Z"}
+    assert state.get_storm(f"AL09{year}") is ended
+
+
+def test_the_storm_list_works_without_a_durable_store(client):
+    """No store configured: no season-archive storms, and no error."""
+    r = client.get("/v1/storms")
+    assert r.status_code == 200
+    assert [s["track_source"] for s in r.json()] == ["hurdat2"]
+
+
+class _FrozenYear:
+    """`datetime` with `now()` moved into ``year``, so the fixture's 2026
+    HURDAT2 season is older than the season the archive is read for."""
+
+    def __init__(self, year: int) -> None:
+        self._year = year
+
+    def now(self, tz=None):
+        real = datetime.now(tz)
+        return real.replace(year=self._year, month=min(real.month, 11), day=min(real.day, 28))
+
+    def __getattr__(self, name):
+        return getattr(datetime, name)

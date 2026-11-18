@@ -18,7 +18,7 @@ src/anemoi/
 │   ├── main.py           app factory, CORS, error handlers; builds RealState at startup
 │   ├── deps.py           DemoState vs RealState selection; optional API-key gate
 │   ├── demo_state.py     synthetic storms + seeded registry/drift/skew
-│   ├── real_state.py     real HURDAT2 archive + live NHC storms, real cycles, monitoring
+│   ├── real_state.py     live NHC storms + this season's archived storms + HURDAT2, real cycles, monitoring
 │   ├── cycle_store.py    served CycleResults + drift window persisted to R2 (#175); per-run input records (#214)
 │   ├── cycle_policy.py   who may run which cycle: scheduled vs manual, 409 codes, one run per label (#212)
 │   ├── schemas.py        Pydantic request/response models; CyclePayload is a persisted shape
@@ -36,7 +36,7 @@ src/anemoi/
 │   ├── nhc_verification.py  NHC's per-forecast official errors, to check the a-deck join against
 │   ├── hurdat2_source.py newest Atlantic HURDAT2 from NHC's listing, with a manifest (#216)
 │   ├── noise_calibration.py working-track noise from archived as-issued fixes vs HURDAT2 (#216)
-│   ├── atcf_archive.py   NHC's as-issued TC-Vitals/b-deck/a-deck archived verbatim to R2 (#213)
+│   ├── atcf_archive.py   NHC's as-issued TC-Vitals/b-deck/a-deck archived verbatim to R2 (#213); read back for the storm list (decision 69)
 │   ├── live_atcf.py      live NHC feed: CurrentStorms.json + per-storm TC-Vitals (fetched concurrently; latest revision per time)
 │   ├── availability.py   what has actually published at cycle time t
 │   ├── ingestion.py      fetch -> QC gate -> lake write; Fetcher/LakeWriter protocols

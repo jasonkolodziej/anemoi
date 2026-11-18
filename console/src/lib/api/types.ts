@@ -199,6 +199,11 @@ export interface StormSummary {
 	/** False for any basin outside the Atlantic -- real storm data, but
 	 * out-of-distribution for every currently trained model (see wiki). */
 	trained_basin: boolean;
+	/** Where the track comes from: `live` (NHC's current feed),
+	 * `season_archive` (an ended storm of a season HURDAT2 doesn't cover yet,
+	 * from its newest archived working b-deck) or `hurdat2` (final best
+	 * track). Absent from the demo API and from an API older than this field. */
+	track_source?: 'live' | 'season_archive' | 'hurdat2' | null;
 }
 
 export interface StormDetail extends StormSummary {

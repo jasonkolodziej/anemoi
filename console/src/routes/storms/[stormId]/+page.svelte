@@ -359,7 +359,7 @@
 
 <div class="mx-auto max-w-6xl px-6 py-8">
   <a href="/" class="text-xs text-text-muted hover:text-text"
-    >&larr; Active storms</a
+    >&larr; Storms</a
   >
 
   {#if storm}

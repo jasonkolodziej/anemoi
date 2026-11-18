@@ -47,4 +47,6 @@ test('the storm list filters by basin, kept in the URL', async ({ page }) => {
 	await filters.getByRole('button', { name: /^All/ }).click();
 	await expect(page).not.toHaveURL(/basin=/);
 	await expect(cards).toHaveCount(total);
+	// A background poll can still be inside the route handler as the test ends.
+	await page.unrouteAll({ behavior: 'ignoreErrors' });
 });

@@ -46,6 +46,13 @@
   const shown = $derived(
     basinFilter ? (storms ?? []).filter((s) => s.basin === basinFilter) : (storms ?? []),
   );
+  // Active storms first; ended ones (this season's from the ATCF archive,
+  // earlier seasons' from HURDAT2) below under their own heading, newest
+  // first, so an empty season never reads as "active".
+  const byNewest = (a: StormSummary, b: StormSummary) =>
+    b.latest_fix.valid_time.localeCompare(a.latest_fix.valid_time);
+  const active = $derived(shown.filter((s) => s.active).sort(byNewest));
+  const ended = $derived(shown.filter((s) => !s.active).sort(byNewest));
   function setBasin(basin: string | null) {
     const url = new URL(page.url);
     if (basin) url.searchParams.set("basin", basin);
@@ -127,7 +134,7 @@
     </h1>
     {#if stateMode === "real"}
       <p class="mt-1 text-sm text-text-muted">
-        Real HURDAT2 archive + live NHC feed — anemoi.api.real_state.
+        Live NHC feed, this season's archived storms and the HURDAT2 archive — anemoi.api.real_state.
       </p>
     {:else}
       <p class="mt-1 text-sm text-text-muted">
@@ -143,7 +150,7 @@
   {:else if storms.length === 0}
     <p class="text-sm text-text-faint">
       {stateMode === "real"
-        ? "No storms in the real HURDAT2 archive window."
+        ? "No active storms, and none archived."
         : "No storms in the current demo season."}
     </p>
   {:else}
@@ -167,17 +174,37 @@
         {/each}
       </div>
     {/if}
-    {#if shown.length === 0}
-      <p class="text-sm text-text-faint">
-        No active storms in the {BASIN_NAMES[basinFilter ?? ""] ?? basinFilter} basin.
-        <button class="text-action hover:text-action-strong" onclick={() => setBasin(null)}>Show all</button>
+    {#if active.length === 0}
+      <p class="text-sm text-text-faint" data-testid="no-active-storms">
+        {#if basinFilter}
+          No active storms in the {BASIN_NAMES[basinFilter] ?? basinFilter} basin.
+          <button class="text-action hover:text-action-strong" onclick={() => setBasin(null)}>Show all</button>
+        {:else}
+          No active storms right now.
+        {/if}
       </p>
+    {:else}
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {#each active as storm (storm.storm_id)}
+          <StormCard {storm} />
+        {/each}
+      </div>
     {/if}
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {#each shown as storm (storm.storm_id)}
-        <StormCard {storm} />
-      {/each}
-    </div>
+    {#if ended.length > 0}
+      <section class="mt-10" aria-labelledby="recent-storms">
+        <h2 id="recent-storms" class="font-display text-lg font-semibold text-text">Recent storms</h2>
+        <p class="mt-1 text-sm text-text-muted">
+          {stateMode === "real"
+            ? "Ended storms, newest first. This season's come from NHC's working best track, archived as each storm ran; NHC publishes a season's final best track (HURDAT2) the following spring."
+            : "Ended storms, newest first."}
+        </p>
+        <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {#each ended as storm (storm.storm_id)}
+            <StormCard {storm} />
+          {/each}
+        </div>
+      </section>
+    {/if}
   {/if}
 
   <section class="mt-10">

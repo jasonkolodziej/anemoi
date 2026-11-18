@@ -20,6 +20,13 @@
     emulated: "emulated",
     estimated: "extrapolated",
   };
+  // An ended storm of a season HURDAT2 doesn't cover yet: NHC's working
+  // best track, kept from the archive, not a live fix.
+  const label = $derived(
+    storm.track_source === "season_archive"
+      ? "working (archived)"
+      : (qualityLabel[storm.latest_fix.quality] ?? storm.latest_fix.quality),
+  );
 </script>
 
 <a href={`/storms/${storm.storm_id}`} class="hover-lift block">
@@ -48,10 +55,7 @@
         {formatLatLon(storm.latest_fix.lat, storm.latest_fix.lon)}
       </div>
       <div class="flex items-center justify-between pt-1">
-        <Badge variant="outline"
-          >{qualityLabel[storm.latest_fix.quality] ??
-            storm.latest_fix.quality}</Badge
-        >
+        <Badge variant="outline">{label}</Badge>
         <span class="font-data text-[11px] text-text-faint"
           >{formatUtc(storm.latest_fix.valid_time)}</span
         >

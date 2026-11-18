@@ -116,7 +116,7 @@ The list names these uses, not every reader: fusion also reads `besttrack_workin
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/storms` | Every storm the demo state knows about |
+| GET | `/storms` | Every storm the state knows about. With the real state: storms on NHC's live feed, ended storms of seasons HURDAT2 doesn't cover yet (from the ATCF archive), and the newest HURDAT2 storms. Each carries `track_source` (`live`, `season_archive`, `hurdat2`; `null` from the demo state) and `active`, which is never true for `season_archive` |
 | GET | `/storms/{id}` | Storm detail: latest fix, full history, cycles already run |
 | POST | `/storms/{id}/cycles` | Runs one forecast cycle — the only mutating route in v1; see **Who may run a cycle** below |
 | GET | `/storms/{id}/cycles/{cycle}` | Retrieves a previously run cycle; `404` if it hasn't been run |
