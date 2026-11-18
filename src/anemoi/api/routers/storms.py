@@ -44,6 +44,7 @@ def _storm_summary(storm, verified_basins: frozenset[str]) -> schemas.StormSumma
         last_cycle=last,
         basin=basin,
         trained_basin=basin in verified_basins,
+        track_source=getattr(storm, "source", None),
     )
 
 

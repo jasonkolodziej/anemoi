@@ -215,11 +215,15 @@ class ProvenanceOut(BaseModel):
     result, so a later comparison or a retrain can slice by any of it."""
 
     #: Where the initial fix came from: ``tcvitals`` (the storm's own
-    #: working fix at the cycle time), ``final_best_track`` (an archive
+    #: working fix at the cycle time), ``archived_bdeck`` (an ended storm's
+    #: archived working b-deck, which may carry NHC's later corrections),
+    #: ``final_best_track`` (an archive
     #: storm's label standing in for vitals), ``extrapolated`` (last motion
     #: vector, vitals late or withheld) or ``persisted`` (too little history
     #: to extrapolate). Overrides are on ``run``.
-    fix_source: Literal["tcvitals", "final_best_track", "extrapolated", "persisted"]
+    fix_source: Literal[
+        "tcvitals", "archived_bdeck", "final_best_track", "extrapolated", "persisted"
+    ]
     fix: FixOut
     #: Registered version of each contributing model (``fusion`` included
     #: when learned fusion ran).
@@ -274,6 +278,11 @@ class StormSummary(BaseModel):
     #: data, but out of distribution for at least one model the forecast
     #: may combine.
     trained_basin: bool
+    #: Where the track comes from: ``live`` (NHC's current feed),
+    #: ``season_archive`` (an ended storm of a season HURDAT2 doesn't cover
+    #: yet, from its newest archived working b-deck) or ``hurdat2`` (the
+    #: final best track). None from the demo state.
+    track_source: Literal["live", "season_archive", "hurdat2"] | None = None
 
 
 class StormDetail(StormSummary):

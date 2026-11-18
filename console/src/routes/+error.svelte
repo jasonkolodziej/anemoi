@@ -17,6 +17,6 @@
 		href="/"
 		class="mt-2 rounded-md bg-action px-4 py-2 text-sm font-medium text-bg hover:bg-action-strong"
 	>
-		&larr; Active storms
+		&larr; Storms
 	</a>
 </div>

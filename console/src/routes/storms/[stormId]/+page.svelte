@@ -146,6 +146,7 @@
   // #214: what the cycle actually ran on, in words.
   const FIX_SOURCE_TEXT: Record<string, string> = {
     tcvitals: "the storm's TC-Vitals fix at the cycle time",
+    archived_bdeck: "the archived working best track (an ended storm — NHC may have corrected it since issue)",
     final_best_track: "the final best-track fix (an archive storm — not an as-issued forecast)",
     extrapolated: "a fix extrapolated from earlier ones (vitals hadn't landed)",
     persisted: "the last earlier fix, held in place (too little history to extrapolate)",
@@ -359,7 +360,7 @@
 
 <div class="mx-auto max-w-6xl px-6 py-8">
   <a href="/" class="text-xs text-text-muted hover:text-text"
-    >&larr; Active storms</a
+    >&larr; Storms</a
   >
 
   {#if storm}

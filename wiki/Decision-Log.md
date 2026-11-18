@@ -935,6 +935,24 @@ Phase 1 of docs/multi_basin.md after its first training run (decision 57), track
 
 **Enforced by** `tests/test_steering_input.py` (old checkpoints keep their layout, for all four models; a zero conv computes the plain model; Stage A leaves the conv at zero and Stage B trains it; the registry tag rebuilds the trained model; the live features equal the training ones and are shared across storms; the serving gate's skips; latents refuse a steering Transformer with no cache or other settings; a cache without meta or with other settings is refused), `tests/test_steering.py` (features against hand values; the advected track; the cache and its meta under concurrent writers), `tests/test_steering_spike.py` (both arms start as the same function; Stage B trains the steering conv and keeps the rest frozen; with zero steering the two arms are the same run, which fails without the reseed; arms validated on different windows are refused).
 
+### 69. Ended storms of the current season are listed from the ATCF archive — *api, console, data*
+
+**Reported from production** (2026-11-18): with no storm active, the home page was headed **Active storms** and showed five 2025 storms marked "final (archive)", and none of 2026's, though the deployment had run cycles on 2026 storms all season.
+
+**Why.** The storm list had two sources. The HURDAT2 file supplied its newest five storms, and it ends with 2025, because NHC publishes a season's final best track the next spring. NHC's `CurrentStorms.json` supplied storms active right now. A storm left the second when it ended and couldn't be in the first until spring. The ATCF archive (decision on #213) had kept every 2026 storm's working b-deck in R2 the whole time, but only for noise calibration: nothing served read it.
+
+**Decided.**
+- `data.atcf_archive.archived_bdeck_tracks(store, season)` reads each storm's newest archived b-deck: WORKING quality, name from the b-deck's STORMNAME, invests (90–99) left out, an unreadable snapshot skipped.
+- `RealState` lists these for every season after the HURDAT2 file's last, up to the current year, re-read hourly, best-effort (no store: none listed, no error). They are `active: false` whatever their last fix's age, since the cycle Workflow runs every active storm. A live storm wins over its archived copy; a storm in HURDAT2 is never read from the archive. Their stored cycles show as before.
+- `StormSummary.track_source` (`live`, `season_archive`, `hurdat2`; `null` from the demo state) says which source a storm came from.
+- A cycle run on such a storm records `provenance.fix_source: archived_bdeck`, not `tcvitals`: the archived b-deck may carry NHC's later corrections.
+- A storm leaving the live feed keeps the cycle history it had there, and a December storm keeps its January fixes under its own id (`parse_bdeck` names tracks by each fix's year).
+- Console: active storms under **Active storms**, with "No active storms right now." when there are none; ended storms below under **Recent storms**, newest first. An archived storm's badge reads "working (archived)". The back links read "← Storms".
+
+**Left as is.** When `fetch_live_tracks` returns nothing, `RealState` keeps the live storms it had, since an empty answer and a failed fetch look the same; an ended storm can stay `active` until the 14-day window or a restart. It no longer disappears afterwards, which was the reported problem.
+
+**Enforced by** `tests/test_atcf_archive.py` (newest b-deck per storm, name, invests and unreadable files skipped), `tests/test_api_real_state.py` (a dropped storm is listed from the archive as ended with its cycles, a live storm wins, HURDAT2 storms keep their source, no store means no error), `console/e2e/storm-list-sections.spec.ts` (the two sections, the archived badge, the empty state).
+
 ---
 
 ## Implementation → rebrand

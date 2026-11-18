@@ -72,6 +72,19 @@ _ACTIVE_WINDOW = timedelta(days=14)
 #: often than that just re-requests the same bulletin.
 _LIVE_STORMS_TTL = timedelta(minutes=30)
 
+#: How long the current season's archived storms (`data.atcf_archive`) stay
+#: valid before the next storm-list request re-reads them from durable
+#: storage. A storm only joins that list once it has left the live feed, and
+#: the archive is written once per synoptic cycle, so hourly is plenty.
+_SEASON_STORMS_TTL = timedelta(hours=1)
+
+#: Where a storm's track comes from, served as `StormSummary.track_source`.
+#: ``live``: NHC's current feed. ``season_archive``: a storm of a season
+#: HURDAT2 doesn't cover yet, from its newest archived b-deck
+#: (`data.atcf_archive.archived_bdeck_tracks`). ``hurdat2``: the final best
+#: track.
+TRACK_SOURCES = ("live", "season_archive", "hurdat2")
+
 #: How long the registered-model registry stays valid before a real cycle
 #: re-pulls it -- real promotions/registrations only ever happen once per
 #: training run (hours apart) or a rare manual promotion, so this is
@@ -108,6 +121,8 @@ class RealStormState:
     #: overlap in practice today).
     track: Track
     cycles: CycleHistory = field(default_factory=CycleHistory)
+    #: One of `TRACK_SOURCES`.
+    source: str = "hurdat2"
 
     @property
     def season(self) -> int:
@@ -123,6 +138,11 @@ class RealStormState:
 
     @property
     def active(self) -> bool:
+        # A season-archive storm is listed only because it has left NHC's
+        # current feed, so it has ended however recent its last fix is. The
+        # cycle Workflow runs every active storm, so this must not say yes.
+        if self.source == "season_archive":
+            return False
         return (datetime.now(UTC) - self.latest_fix.valid_time) < _ACTIVE_WINDOW
 
 
@@ -144,7 +164,7 @@ def _synthetic_fallback_deterministic(plan, fix) -> DeterministicForecast:
 #: Before, every cycle used the storm's *latest* fix relabelled as the
 #: target time -- for a past label, a position from days later -- and
 #: reported `vitals: observed` whatever happened.
-FIX_SOURCES = ("tcvitals", "final_best_track", "extrapolated", "persisted")
+FIX_SOURCES = ("tcvitals", "archived_bdeck", "final_best_track", "extrapolated", "persisted")
 
 
 def initial_fix(
@@ -155,6 +175,7 @@ def initial_fix(
     lon: float | None = None,
     wind_kt: float | None = None,
     withhold_vitals: bool = False,
+    working_source: str = "tcvitals",
 ) -> tuple[Fix, str]:
     """The cycle's initial fix, and where it came from.
 
@@ -168,7 +189,10 @@ def initial_fix(
 
     ``withhold_vitals`` (the API's ``worst_case``) skips the first, as if
     TC-Vitals hadn't landed. ``lat``/``lon``/``wind_kt`` override the
-    result (recorded on the run as overrides).
+    result (recorded on the run as overrides). ``working_source`` names
+    where a WORKING fix at ``target`` came from: ``tcvitals`` for a live
+    storm, ``archived_bdeck`` for a season-archive storm, whose working
+    b-deck may carry NHC's later corrections.
     """
     prior = tuple(f for f in track.fixes if f.valid_time <= target)
     if not prior:
@@ -176,7 +200,7 @@ def initial_fix(
     at = prior[-1] if prior[-1].valid_time == target and not withhold_vitals else None
     if at is not None:
         base, quality = at, TrackQuality.WORKING
-        source = "final_best_track" if at.quality is TrackQuality.FINAL else "tcvitals"
+        source = "final_best_track" if at.quality is TrackQuality.FINAL else working_source
     else:
         history = tuple(f for f in prior if f.valid_time < target)
         if len(history) >= 2:
@@ -226,6 +250,11 @@ class RealState:
         # (`data.hurdat2_source`), and the last rows of the file are then
         # one basin's storms, not the newest.
         recent = sorted(tracks, key=lambda t: (t.season, t.fixes[-1].valid_time))[-n_recent:]
+        #: The newest season the archive covers. NHC publishes a season's
+        #: final best track the next spring, so later seasons are listed from
+        #: the ATCF archive instead (`_refresh_season_storms`).
+        self._hurdat2_last_season = max((t.season for t in tracks), default=0)
+        self._hurdat2_ids = frozenset(t.storm_id for t in tracks)
         #: Stored cycle labels by storm (#175), listed from durable storage
         #: once per process (`_ensure_cycle_index`); None until that works.
         self._cycle_index: dict[str, set[str]] | None = None
@@ -246,6 +275,13 @@ class RealState:
         #: several requests at once, and without this each one that arrived
         #: while the first fetch was in flight re-fetched NHC too.
         self._live_refresh_lock = threading.Lock()
+        #: Storms of seasons newer than the archive that have left the live
+        #: feed, from `data.atcf_archive` in durable storage. Without these a
+        #: storm vanished from the site the moment NHC dropped it, until its
+        #: season reached HURDAT2 the next spring.
+        self._season_storms: dict[str, RealStormState] = {}
+        self._season_storms_fetched_at: datetime | None = None
+        self._season_refresh_lock = threading.Lock()
 
         registry_root = registry_root or os.environ.get(
             "REGISTRY_ROOT", str(Path.home() / ".anemoi" / "registry"),
@@ -364,12 +400,59 @@ class RealState:
                 # Carry each storm's cycle history over: rebuilding it empty
                 # dropped every cycle run on a live storm on each refresh (#175).
                 self._live_storms = {
-                    t.storm_id: self._new_storm_state(t, self._live_storms.get(t.storm_id))
+                    t.storm_id: self._new_storm_state(
+                        t, self._live_storms.get(t.storm_id), source="live",
+                    )
                     for t in tracks
                 }
             self._live_storms_fetched_at = datetime.now(UTC)
         finally:
             self._live_refresh_lock.release()
+
+    def _refresh_season_storms(self) -> None:
+        """Re-read the archived storms of every season newer than the
+        HURDAT2 archive, up to this year, if the last read is stale.
+        Best-effort like `_refresh_live_storms`: with no durable store, or
+        one that can't be reached, the list just has no such storms, and the
+        next read is tried after `_SEASON_STORMS_TTL`. Only the first read of
+        a process makes concurrent callers wait."""
+        if not self._season_storms_stale():
+            return
+        first = self._season_storms_fetched_at is None
+        if not self._season_refresh_lock.acquire(blocking=first):
+            return
+        try:
+            if not self._season_storms_stale():
+                return
+            from ..data.atcf_archive import archived_bdeck_tracks
+
+            seasons = range(self._hurdat2_last_season + 1, datetime.now(UTC).year + 1)
+            try:
+                store = self._checkpoint_store
+                tracks = [t for season in seasons for t in archived_bdeck_tracks(store, season)]
+            except Exception:  # noqa: BLE001 - no store configured, or unreachable
+                tracks = None
+            if tracks is not None:
+                # A storm leaving the live feed keeps the cycle history it had
+                # there, restored and newly run cycles alike.
+                self._season_storms = {
+                    t.storm_id: self._new_storm_state(
+                        t,
+                        self._season_storms.get(t.storm_id) or self._live_storms.get(t.storm_id),
+                        source="season_archive",
+                    )
+                    for t in tracks
+                    if t.storm_id not in self._hurdat2_ids
+                }
+            self._season_storms_fetched_at = datetime.now(UTC)
+        finally:
+            self._season_refresh_lock.release()
+
+    def _season_storms_stale(self) -> bool:
+        return (
+            self._season_storms_fetched_at is None
+            or datetime.now(UTC) - self._season_storms_fetched_at >= _SEASON_STORMS_TTL
+        )
 
     def _live_storms_stale(self) -> bool:
         return (
@@ -464,13 +547,13 @@ class RealState:
         return added
 
     def _new_storm_state(
-        self, track: Track, previous: RealStormState | None = None,
+        self, track: Track, previous: RealStormState | None = None, *, source: str = "hurdat2",
     ) -> RealStormState:
         cycles = previous.cycles if previous is not None else CycleHistory(
             track.storm_id, self._load_stored_cycle,
         )
         cycles.add_stored(self._stored_labels(track.storm_id))
-        return RealStormState(track.storm_id, track, cycles)
+        return RealStormState(track.storm_id, track, cycles, source)
 
     def _stored_labels(self, storm_id: str) -> tuple[str, ...]:
         """A copy, taken under the lock: `_persist_cycle` adds to these sets
@@ -500,25 +583,28 @@ class RealState:
             return
         with self._lock:
             self._cycle_index = index
-            known = {**self.storms, **self._live_storms}
+            known = {**self.storms, **self._season_storms, **self._live_storms}
             labels = {storm_id: tuple(index.get(storm_id, ())) for storm_id in known}
         for storm_id, storm in known.items():
             storm.cycles.add_stored(labels[storm_id])
 
     def list_storms(self) -> list[RealStormState]:
         self._refresh_live_storms()
+        self._refresh_season_storms()
         self._ensure_cycle_index()
-        # Live storms first -- they're what "active storms" genuinely
-        # means; archive storms fall outside `_ACTIVE_WINDOW` in every
-        # real case today anyway (HURDAT2 tops out at the 2023 season).
-        merged = {**self.storms, **self._live_storms}
+        # A storm on the live feed wins over its archived copy; the archive
+        # only stands in once NHC has dropped it.
+        merged = {**self.storms, **self._season_storms, **self._live_storms}
         return list(merged.values())
 
     def get_storm(self, storm_id: str) -> RealStormState:
         self._refresh_live_storms()
+        self._refresh_season_storms()
         self._ensure_cycle_index()
         if storm_id in self._live_storms:
             return self._live_storms[storm_id]
+        if storm_id in self._season_storms:
+            return self._season_storms[storm_id]
         try:
             return self.storms[storm_id]
         except KeyError as exc:
@@ -646,6 +732,7 @@ class RealState:
         oracle = LatencyOracle(use_max_latency=worst_case)
         fix, fix_source = initial_fix(
             storm.track, target, lat=lat, lon=lon, wind_kt=wind_kt, withhold_vitals=worst_case,
+            working_source="archived_bdeck" if storm.source == "season_archive" else "tcvitals",
         )
         # The plan's `vitals_estimated` comes from a latency model; whether
         # this cycle's vitals were really estimated is known here (#214).

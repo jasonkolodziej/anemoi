@@ -262,3 +262,15 @@ def test_late_vitals_on_a_live_storm_read_as_estimated(client, monkeypatch):
     assert body["provenance"]["fix"]["lon"] == pytest.approx(-100.0)  # -102, -101, then -100
     assert "basin_untrained:EP" in body["payload"]["flags"]
     assert body["provenance"]["trained_basin"] is False
+
+
+def test_an_archived_storms_fix_is_labelled_as_its_bdeck():
+    """A season-archive storm's working fix came from its archived b-deck,
+    which may carry NHC's later corrections: not a TC-Vitals bulletin."""
+    _, source = initial_fix(_track(), T0 + timedelta(hours=6), working_source="archived_bdeck")
+    assert source == "archived_bdeck"
+    # A final fix stays final whatever the caller says.
+    _, source = initial_fix(
+        _track(TrackQuality.FINAL), T0 + timedelta(hours=6), working_source="archived_bdeck",
+    )
+    assert source == "final_best_track"

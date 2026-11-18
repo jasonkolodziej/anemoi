@@ -44,6 +44,9 @@ post-storm b-deck are caught too.
 
 Reading back: `archived_tcvitals` returns every archived TC-Vitals bulletin
 for a season, each revision once, in the order NHC issued them.
+`archived_bdeck_tracks` returns each storm of a season as its newest archived
+b-deck: the API lists these for seasons HURDAT2 doesn't cover yet, so a storm
+that has left ``CurrentStorms.json`` is still shown until the spring release.
 """
 
 from __future__ import annotations
@@ -53,14 +56,14 @@ import json
 import tempfile
 import urllib.request
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.error import HTTPError, URLError
 
-from .atcf import TcVitalsError, parse_tcvitals
-from .besttrack import Fix
+from .atcf import TcVitalsError, parse_bdeck, parse_tcvitals
+from .besttrack import Fix, Track
 from .live_atcf import CURRENT_STORMS_URL, TCVITALS_ARCH_URL
 
 if TYPE_CHECKING:
@@ -278,3 +281,64 @@ def archived_tcvitals(store: CheckpointStore, season: int) -> dict[str, list[Fix
 
             by_storm.setdefault(storm_id, []).extend(fixes)
     return by_storm
+
+
+#: b-deck STORMNAME values that aren't a public name.
+_NOT_A_NAME = frozenset({"", "INVEST", "GENESIS"})
+#: Field 28 (0-based 27) of a b-deck line is STORMNAME.
+_BDECK_NAME_FIELD = 27
+
+
+def _bdeck_name(text: str) -> str | None:
+    """The storm's name on its newest named BEST line, or None. A depression
+    carries its number spelled out ("NINE"), which is what NHC calls it too."""
+    name = None
+    for line in text.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) > _BDECK_NAME_FIELD and parts[4] == "BEST":
+            candidate = parts[_BDECK_NAME_FIELD].upper()
+            if candidate not in _NOT_A_NAME:
+                name = candidate
+    return name
+
+
+def archived_bdeck_tracks(store: CheckpointStore, season: int) -> list[Track]:
+    """Each archived storm of ``season`` as its newest b-deck, WORKING quality.
+
+    The newest snapshot is the whole working best track as NHC last served
+    it, so earlier snapshots add nothing. Invests (numbers 90-99) are left
+    out. A snapshot that can't be read or parsed skips that storm rather than
+    failing the season: the bytes stay in the archive either way."""
+    prefix = f"{ARCHIVE_PREFIX}{season}/"
+    newest: dict[str, str] = {}
+    for key in store.list(prefix):
+        parts = key[len(prefix):].split("/")
+        if len(parts) != 3 or parts[1] != "bdeck":
+            continue
+        storm_id = parts[0].upper()
+        if storm_id.startswith("_") or storm_id[2:4] >= "90":
+            continue
+        if key > newest.get(storm_id, ""):
+            newest[storm_id] = key  # keys sort by fetch time within a storm
+    tracks: list[Track] = []
+    for storm_id, key in sorted(newest.items()):
+        try:
+            text = _get_text(store, key)
+            # parse_bdeck names a storm by each fix's calendar year, so a
+            # December storm's January fixes come back under the next year:
+            # keep every track of this basin and number in this season and
+            # beyond, under the archived identity.
+            fixes = sorted(
+                (
+                    replace(f, storm_id=storm_id)
+                    for t in parse_bdeck(text)
+                    if t.storm_id[:4] == storm_id[:4] and int(t.storm_id[4:]) >= season
+                    for f in t.fixes
+                ),
+                key=lambda f: f.valid_time,
+            )
+        except Exception:  # noqa: BLE001 - one unreadable object, not the season
+            continue
+        if fixes:
+            tracks.append(Track(storm_id, tuple(fixes), name=_bdeck_name(text)))
+    return tracks
