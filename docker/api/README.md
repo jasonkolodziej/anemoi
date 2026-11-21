@@ -153,22 +153,12 @@ it was removed once problems 5/6 were actually diagnosed and fixed, since
 unlike `ANEMOI_API_DEBUG` it hardcoded a container-specific file path and
 had no purpose once the fix worked.
 
-### SSH access
+### No SSH access
 
-`wrangler containers ssh <instance-id>` needs an `authorized_keys` entry
-under the container's `wrangler.jsonc` config (only `ssh-ed25519` keys) --
-not configured until problem 6 above made shell access seem necessary. A
-dedicated keypair now lives at `~/.ssh/anemoi_cf_container` (this
-machine only, not committed) with its public half in `wrangler.jsonc`.
-In practice this was never successfully used *during* diagnosis here --
-the two gotchas above (a live instance is needed to attach to, and a
-redeploy doesn't create one) made the timing genuinely hard to catch, so
-the `/debug/registry-pull-log` route ended up being the thing that
-actually worked. Kept configured for next time regardless; catching a
-live instance is easier if you trigger a request and immediately run
-`wrangler containers instances <app-id>` / `wrangler containers ssh
-<instance-id>` right after, ideally right after a fresh cold start
-rather than hours into a warm/idle cycle.
+The container has no SSH access: `wrangler.jsonc` sets no
+`authorized_keys`, and `tests/test_no_ssh_access.py` fails if one is
+added. For a container's own output use the `/debug/registry-pull-log`
+route or `ANEMOI_API_DEBUG` (above).
 
 ## What's genuinely still needed before this serves real forecasts
 

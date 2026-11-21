@@ -40,19 +40,6 @@
       // real cycle, not just enough disk for the image itself.
       "instance_type": "standard-1",
       "max_instances": 3,
-      // For `wrangler containers ssh <instance-id>` -- real container
-      // stdout/stderr (registry-pull's output, uncaught Python tracebacks)
-      // is otherwise invisible: `wrangler tail` only surfaces the Worker
-      // script's own console.log, not the container process, and the
-      // HTTP response body hides a 500's real cause unless
-      // ANEMOI_API_DEBUG is set (see docker/api/README.md). Key is
-      // dedicated to this container, not reused from anything else.
-      "authorized_keys": [
-        {
-          "name": "claude-code-debug",
-          "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHfzRK8mp9+HLy/gd5t9a6Bx3jrKFs4s+X/HKgfRp90f anemoi-api-real-debug",
-        },
-      ],
     },
   ],
 
